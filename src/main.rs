@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod dialogs;
 mod tray;
 mod menu;
 mod hotkey;

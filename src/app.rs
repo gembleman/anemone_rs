@@ -15,6 +15,7 @@ use windows::{
 
 use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
+use crate::dialogs::SettingsDialog;
 use crate::hotkey::HotkeyManager;
 use crate::menu::{self, ContextMenu};
 use crate::tray::{self, TrayIcon};
@@ -34,12 +35,13 @@ pub struct App {
     width: i32,
     height: i32,
     buffer: Option<DoubleBuffer>,
-    config: Config,
+    config: Rc<RefCell<Config>>,
     tray: TrayIcon,
     menu: ContextMenu,
     hotkey: Option<HotkeyManager>,
     clipboard: ClipboardWatcher,
     taskbar_created_msg: u32,
+    settings_hwnd: Option<HWND>,
 }
 
 // 전역 앱 인스턴스 (WndProc에서 접근용)
@@ -92,18 +94,20 @@ impl App {
             let taskbar_created_msg = tray::register_taskbar_created_message();
 
             // App 인스턴스 생성
+            let config = Rc::new(RefCell::new(Config::default()));
             let app = Rc::new(RefCell::new(App {
                 hwnd,
                 hwnd_parent,
                 width: 400,
                 height: 200,
                 buffer: None,
-                config: Config::default(),
+                config,
                 tray: TrayIcon::new(),
                 menu: ContextMenu::new()?,
                 hotkey: None,
                 clipboard: ClipboardWatcher::new(hwnd),
                 taskbar_created_msg,
+                settings_hwnd: None,
             }));
 
             // 전역 인스턴스 설정
@@ -131,7 +135,7 @@ impl App {
                 app_ref.hotkey = Some(hotkey);
 
                 // 클립보드 감시 시작
-                if app_ref.config.clipboard_watch {
+                if app_ref.config.borrow().clipboard_watch {
                     app_ref.clipboard.start();
                 }
 
@@ -190,9 +194,11 @@ impl App {
             None => return Ok(()),
         };
 
+        let cfg = self.config.borrow();
+
         // 배경 클리어
-        if self.config.background_visible {
-            let bg = self.config.background_color;
+        if cfg.background_visible {
+            let bg = cfg.background_color;
             let a = ((bg >> 24) & 0xFF) as u8;
             let r = ((bg >> 16) & 0xFF) as u8;
             let g = ((bg >> 8) & 0xFF) as u8;
@@ -203,9 +209,11 @@ impl App {
         }
 
         // 테두리 그리기
-        if self.config.border_visible {
-            buffer.draw_border(self.config.border_width, self.config.border_color);
+        if cfg.border_visible {
+            buffer.draw_border(cfg.border_width, cfg.border_color);
         }
+
+        drop(cfg);
 
         // 레이어드 윈도우 업데이트
         window::update_layered_window(self.hwnd, buffer)?;
@@ -231,42 +239,45 @@ impl App {
     }
 
     fn show_context_menu(&mut self, x: i32, y: i32) -> Result<()> {
-        self.menu.build(&self.config)?;
+        self.menu.build(&self.config.borrow())?;
         self.menu.show(self.hwnd, x, y)
     }
 
     fn handle_menu_command(&mut self, cmd: u16) -> Result<()> {
         match cmd {
             menu::id::WINDOW_SHOW => {
-                self.config.toggle_window_visible();
-                window::set_window_visible(self.hwnd, self.config.window_visible);
+                self.config.borrow_mut().toggle_window_visible();
+                let visible = self.config.borrow().window_visible;
+                window::set_window_visible(self.hwnd, visible);
             }
             menu::id::CLICK_THROUGH => {
-                self.config.toggle_click_through();
-                window::set_click_through(self.hwnd, self.config.click_through);
+                self.config.borrow_mut().toggle_click_through();
+                let click_through = self.config.borrow().click_through;
+                window::set_click_through(self.hwnd, click_through);
             }
             menu::id::CLIPBOARD_WATCH => {
-                self.config.toggle_clipboard_watch();
-                if self.config.clipboard_watch {
+                self.config.borrow_mut().toggle_clipboard_watch();
+                let watch = self.config.borrow().clipboard_watch;
+                if watch {
                     self.clipboard.start();
                 } else {
                     self.clipboard.stop();
                 }
             }
             menu::id::BACKGROUND_TOGGLE => {
-                self.config.toggle_background_visible();
+                self.config.borrow_mut().toggle_background_visible();
                 self.paint()?;
             }
             menu::id::BORDER_TOGGLE => {
-                self.config.toggle_border_visible();
+                self.config.borrow_mut().toggle_border_visible();
                 self.paint()?;
             }
             menu::id::MAGNETIC_MODE => {
-                self.config.toggle_magnetic_mode();
+                self.config.borrow_mut().toggle_magnetic_mode();
                 // TODO: 자석 모드 구현
             }
             menu::id::SETTINGS => {
-                // TODO: 설정 대화상자
+                self.open_settings_dialog();
             }
             menu::id::BACKLOG => {
                 // TODO: 백로그 윈도우
@@ -277,6 +288,29 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    /// 설정 대화상자 열기
+    fn open_settings_dialog(&mut self) {
+        // 이미 열려있으면 포커스
+        if let Some(hwnd) = self.settings_hwnd {
+            unsafe {
+                if IsWindow(Some(hwnd)).as_bool() {
+                    let _ = SetForegroundWindow(hwnd);
+                    return;
+                }
+            }
+        }
+
+        // 새 설정 대화상자 열기
+        match SettingsDialog::show(self.hwnd, self.config.clone(), None) {
+            Ok(hwnd) => {
+                self.settings_hwnd = Some(hwnd);
+            }
+            Err(e) => {
+                eprintln!("Failed to open settings dialog: {e}");
+            }
+        }
     }
 
     fn handle_hotkey(&mut self, id: i32) -> Result<()> {
@@ -391,7 +425,7 @@ impl App {
                             WM_LBUTTONUP => {
                                 // 좌클릭: 윈도우 표시 토글
                                 let mut app_ref = app.borrow_mut();
-                                app_ref.config.window_visible = true;
+                                app_ref.config.borrow_mut().window_visible = true;
                                 window::set_window_visible(app_ref.hwnd, true);
                             }
                             WM_RBUTTONUP => {
@@ -401,6 +435,14 @@ impl App {
                                 let _ = app.borrow_mut().show_context_menu(pt.x, pt.y);
                             }
                             _ => {}
+                        }
+                        return LRESULT(0);
+                    }
+
+                    // WM_PAINT - 설정 대화상자에서 변경 시 다시 그리기
+                    WM_PAINT => {
+                        if lparam.0 == 1 {
+                            let _ = app.borrow_mut().paint();
                         }
                         return LRESULT(0);
                     }
