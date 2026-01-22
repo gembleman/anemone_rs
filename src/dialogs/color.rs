@@ -121,7 +121,7 @@ impl ColorDialog {
         )
     }
 
-    unsafe fn show_impl(hwnd: HWND, config: ColorDialogConfig) -> Option<ColorResult> {
+    unsafe fn show_impl(hwnd: HWND, config: ColorDialogConfig) -> Option<ColorResult> { unsafe {
         let alpha = ((config.initial_color >> 24) & 0xFF) as i32;
         let r = ((config.initial_color >> 16) & 0xFF) as u8;
         let g = ((config.initial_color >> 8) & 0xFF) as u8;
@@ -173,7 +173,7 @@ impl ColorDialog {
         } else {
             None
         }
-    }
+    }}
 
     /// DPI 스케일링 적용 (기본 96 DPI 사용)
     fn scale_for_dpi(value: i32, _hwnd: HWND) -> i32 {
@@ -216,7 +216,7 @@ impl ColorDialog {
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
-    ) -> usize {
+    ) -> usize { unsafe {
         match msg {
             WM_INITDIALOG => {
                 // 다이얼로그 크기 확장 (알파 컨트롤 공간)
@@ -441,7 +441,7 @@ impl ColorDialog {
         }
 
         0 // FALSE
-    }
+    }}
 }
 
 #[cfg(test)]

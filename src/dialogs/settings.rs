@@ -149,7 +149,7 @@ impl SettingsDialog {
         main_hwnd: HWND,
         config: Rc<RefCell<Config>>,
         on_change: Option<SettingsChangeCallback>,
-    ) -> Result<HWND> {
+    ) -> Result<HWND> { unsafe {
         let instance = GetModuleHandleW(None)?;
 
         // 윈도우 클래스 등록
@@ -219,13 +219,13 @@ impl SettingsDialog {
         let _ = UpdateWindow(hwnd);
 
         Ok(hwnd)
-    }
+    }}
 
     /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
         unsafe {
-            let hinst = GetModuleHandleW(None)?;
-            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _hinst = GetModuleHandleW(None)?;
+            let _hfont = GetStockObject(DEFAULT_GUI_FONT);
 
             // ====== 배경 설정 그룹 ======
             self.create_group_box(10, 10, 230, 80, "배경 설정")?;
@@ -463,7 +463,7 @@ impl SettingsDialog {
     }
 
     // 헬퍼 함수들
-    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
+    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> { unsafe {
         let hinst = GetModuleHandleW(None)?;
         let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -483,9 +483,9 @@ impl SettingsDialog {
         let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
 
         Ok(hwnd)
-    }
+    }}
 
-    unsafe fn create_label(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
+    unsafe fn create_label(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> { unsafe {
         let hinst = GetModuleHandleW(None)?;
         let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -505,9 +505,9 @@ impl SettingsDialog {
         let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
 
         Ok(hwnd)
-    }
+    }}
 
-    unsafe fn create_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+    unsafe fn create_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> { unsafe {
         let hinst = GetModuleHandleW(None)?;
         let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -527,9 +527,9 @@ impl SettingsDialog {
         let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
 
         Ok(hwnd)
-    }
+    }}
 
-    unsafe fn create_color_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+    unsafe fn create_color_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> { unsafe {
         let hinst = GetModuleHandleW(None)?;
         let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -550,9 +550,9 @@ impl SettingsDialog {
         let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
 
         Ok(hwnd)
-    }
+    }}
 
-    unsafe fn create_checkbox(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str, checked: bool) -> Result<HWND> {
+    unsafe fn create_checkbox(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str, checked: bool) -> Result<HWND> { unsafe {
         let hinst = GetModuleHandleW(None)?;
         let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -576,9 +576,9 @@ impl SettingsDialog {
         }
 
         Ok(hwnd)
-    }
+    }}
 
-    unsafe fn create_radio(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str, checked: bool) -> Result<HWND> {
+    unsafe fn create_radio(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str, checked: bool) -> Result<HWND> { unsafe {
         let hinst = GetModuleHandleW(None)?;
         let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -602,9 +602,9 @@ impl SettingsDialog {
         }
 
         Ok(hwnd)
-    }
+    }}
 
-    unsafe fn create_trackbar(&self, x: i32, y: i32, w: i32, h: i32, id: u16, min: i32, max: i32) -> Result<HWND> {
+    unsafe fn create_trackbar(&self, x: i32, y: i32, w: i32, h: i32, id: u16, min: i32, max: i32) -> Result<HWND> { unsafe {
         let hinst = GetModuleHandleW(None)?;
 
         let hwnd = CreateWindowExW(
@@ -623,7 +623,7 @@ impl SettingsDialog {
         let _ = SendMessageW(hwnd, TBM_SETRANGE, Some(WPARAM(1)), Some(LPARAM(((max << 16) | min) as isize)));
 
         Ok(hwnd)
-    }
+    }}
 
     /// 명령 처리
     fn handle_command(&mut self, cmd: u16) {
@@ -926,7 +926,7 @@ impl SettingsDialog {
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
-    ) -> LRESULT {
+    ) -> LRESULT { unsafe {
         let instance = SETTINGS_INSTANCE.with(|cell| cell.borrow().clone());
 
         if let Some(dialog) = instance {
@@ -979,5 +979,5 @@ impl SettingsDialog {
         }
 
         DefWindowProcW(hwnd, msg, wparam, lparam)
-    }
+    }}
 }

@@ -125,7 +125,7 @@ impl FontDialog {
         Self::show(hwnd, FontDialogConfig::default())
     }
 
-    unsafe fn show_impl(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> {
+    unsafe fn show_impl(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> { unsafe {
         let mut lf: LOGFONTW = zeroed();
 
         // 초기 폰트 이름 설정
@@ -171,7 +171,7 @@ impl FontDialog {
         } else {
             None
         }
-    }
+    }}
 
     /// WS_EX_NOACTIVATE 훅 프로시저
     unsafe extern "system" fn hook_proc_noactivate(
@@ -179,7 +179,7 @@ impl FontDialog {
         msg: u32,
         _wparam: WPARAM,
         lparam: LPARAM,
-    ) -> usize {
+    ) -> usize { unsafe {
         match msg {
             WM_INITDIALOG => {
                 // WS_EX_NOACTIVATE 스타일 추가
@@ -209,7 +209,7 @@ impl FontDialog {
         }
 
         0 // FALSE
-    }
+    }}
 }
 
 #[cfg(test)]

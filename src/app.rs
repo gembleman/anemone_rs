@@ -15,8 +15,9 @@ use windows::{
 
 use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
-use crate::dialogs::SettingsDialog;
+use crate::dialogs::{SettingsDialog, TranslateDialog, BacklogDialog, LogEntry, add_to_backlog};
 use crate::hotkey::HotkeyManager;
+use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
 use crate::tray::{self, TrayIcon};
 use crate::window::{self, DoubleBuffer};
@@ -42,6 +43,9 @@ pub struct App {
     clipboard: ClipboardWatcher,
     taskbar_created_msg: u32,
     settings_hwnd: Option<HWND>,
+    translate_hwnd: Option<HWND>,
+    backlog_hwnd: Option<HWND>,
+    magnetic: Option<MagneticManager>,
 }
 
 // 전역 앱 인스턴스 (WndProc에서 접근용)
@@ -108,6 +112,9 @@ impl App {
                 clipboard: ClipboardWatcher::new(hwnd),
                 taskbar_created_msg,
                 settings_hwnd: None,
+                translate_hwnd: None,
+                backlog_hwnd: None,
+                magnetic: None,
             }));
 
             // 전역 인스턴스 설정
@@ -273,14 +280,16 @@ impl App {
                 self.paint()?;
             }
             menu::id::MAGNETIC_MODE => {
-                self.config.borrow_mut().toggle_magnetic_mode();
-                // TODO: 자석 모드 구현
+                self.toggle_magnetic_mode();
             }
             menu::id::SETTINGS => {
                 self.open_settings_dialog();
             }
+            menu::id::TRANSLATE => {
+                self.open_translate_dialog();
+            }
             menu::id::BACKLOG => {
-                // TODO: 백로그 윈도우
+                self.open_backlog_dialog();
             }
             menu::id::EXIT => unsafe {
                 DestroyWindow(self.hwnd).ok();
@@ -313,6 +322,76 @@ impl App {
         }
     }
 
+    /// 번역 대화상자 열기
+    fn open_translate_dialog(&mut self) {
+        // 이미 열려있으면 포커스
+        if let Some(hwnd) = self.translate_hwnd {
+            unsafe {
+                if IsWindow(Some(hwnd)).as_bool() {
+                    let _ = SetForegroundWindow(hwnd);
+                    return;
+                }
+            }
+        }
+
+        // 새 번역 대화상자 열기
+        match TranslateDialog::show(self.hwnd, self.config.clone()) {
+            Ok(hwnd) => {
+                self.translate_hwnd = Some(hwnd);
+            }
+            Err(e) => {
+                eprintln!("Failed to open translate dialog: {e}");
+            }
+        }
+    }
+
+    /// 백로그 대화상자 열기
+    fn open_backlog_dialog(&mut self) {
+        // 이미 열려있으면 포커스
+        if let Some(hwnd) = self.backlog_hwnd {
+            unsafe {
+                if IsWindow(Some(hwnd)).as_bool() {
+                    let _ = SetForegroundWindow(hwnd);
+                    return;
+                }
+            }
+        }
+
+        // 새 백로그 대화상자 열기
+        match BacklogDialog::show(self.hwnd, self.config.clone()) {
+            Ok(hwnd) => {
+                self.backlog_hwnd = Some(hwnd);
+            }
+            Err(e) => {
+                eprintln!("Failed to open backlog dialog: {e}");
+            }
+        }
+    }
+
+    /// 자석 모드 토글
+    fn toggle_magnetic_mode(&mut self) {
+        let was_enabled = self.config.borrow().magnetic_mode;
+        self.config.borrow_mut().toggle_magnetic_mode();
+        let is_enabled = self.config.borrow().magnetic_mode;
+
+        if is_enabled && !was_enabled {
+            // 자석 모드 시작
+            let mut magnetic = MagneticManager::new(self.hwnd, self.config.clone());
+            if let Err(e) = magnetic.start() {
+                eprintln!("Failed to start magnetic mode: {e}");
+                self.config.borrow_mut().toggle_magnetic_mode(); // 롤백
+                return;
+            }
+            self.magnetic = Some(magnetic);
+        } else if !is_enabled && was_enabled {
+            // 자석 모드 중지
+            if let Some(ref mut magnetic) = self.magnetic {
+                magnetic.stop();
+            }
+            self.magnetic = None;
+        }
+    }
+
     fn handle_hotkey(&mut self, id: i32) -> Result<()> {
         if let Some(cmd) = HotkeyManager::to_menu_command(id) {
             self.handle_menu_command(cmd)?;
@@ -323,8 +402,11 @@ impl App {
     fn handle_clipboard_change(&mut self) {
         if let Some(text) = self.clipboard.on_draw_clipboard() {
             // 클립보드 텍스트 처리
-            // TODO: 번역 처리 등
             println!("Clipboard: {}", text);
+
+            // 백로그에 추가
+            let entry = LogEntry::new(text.clone());
+            add_to_backlog(entry);
         }
     }
 
@@ -424,7 +506,7 @@ impl App {
                         match lparam.0 as u32 {
                             WM_LBUTTONUP => {
                                 // 좌클릭: 윈도우 표시 토글
-                                let mut app_ref = app.borrow_mut();
+                                let app_ref = app.borrow_mut();
                                 app_ref.config.borrow_mut().window_visible = true;
                                 window::set_window_visible(app_ref.hwnd, true);
                             }

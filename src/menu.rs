@@ -20,6 +20,7 @@ pub mod id {
     pub const MAGNETIC_MODE: u16 = 107;
     pub const SETTINGS: u16 = 108;
     pub const BACKLOG: u16 = 109;
+    pub const TRANSLATE: u16 = 111;
     pub const EXIT: u16 = 110;
 
     // 텍스트 크기 조절
@@ -129,6 +130,14 @@ impl ContextMenu {
             )?;
 
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
+
+            // 번역
+            AppendMenuW(
+                self.hmenu,
+                MF_STRING,
+                id::TRANSLATE as usize,
+                w!("번역"),
+            )?;
 
             // 백로그
             AppendMenuW(

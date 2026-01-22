@@ -8,6 +8,7 @@ mod menu;
 mod hotkey;
 mod clipboard;
 mod window;
+mod magnetic;
 
 use app::App;
 
