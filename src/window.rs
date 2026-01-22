@@ -6,30 +6,18 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
-        System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
 };
 
-const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
-const WINDOW_TITLE: PCWSTR = w!("아네모네");
-
-pub struct App {
-    hwnd: HWND,
-    #[allow(dead_code)]
-    hwnd_parent: HWND,
-    width: i32,
-    height: i32,
-    buffer: Option<DoubleBuffer>,
-}
-
-struct DoubleBuffer {
+/// 더블 버퍼링용 DIB 섹션
+pub struct DoubleBuffer {
     hdc_mem: HDC,
     hbitmap: HBITMAP,
     hbitmap_old: HGDIOBJ,
     bits: *mut u8,
-    width: i32,
-    height: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 impl Drop for DoubleBuffer {
@@ -43,7 +31,7 @@ impl Drop for DoubleBuffer {
 }
 
 impl DoubleBuffer {
-    fn new(hdc: HDC, width: i32, height: i32) -> Result<Self> {
+    pub fn new(hdc: HDC, width: i32, height: i32) -> Result<Self> {
         unsafe {
             let hdc_mem = CreateCompatibleDC(Some(hdc));
             if hdc_mem.is_invalid() {
@@ -74,238 +62,178 @@ impl DoubleBuffer {
         }
     }
 
-    fn clear(&mut self, r: u8, g: u8, b: u8, a: u8) {
+    pub fn clear(&mut self, r: u8, g: u8, b: u8, a: u8) {
         unsafe {
             let pixel_count = (self.width * self.height) as usize;
             let pixels = std::slice::from_raw_parts_mut(self.bits as *mut u32, pixel_count);
+            // BGRA 순서 (DIB는 BGRA)
             let color = ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
             pixels.fill(color);
         }
     }
 
-    fn hdc(&self) -> HDC {
+    pub fn hdc(&self) -> HDC {
         self.hdc_mem
+    }
+
+    /// 사각형 채우기 (ARGB)
+    pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
+        let a = ((color >> 24) & 0xFF) as u8;
+        let r = ((color >> 16) & 0xFF) as u8;
+        let g = ((color >> 8) & 0xFF) as u8;
+        let b = (color & 0xFF) as u8;
+        let bgra = ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+
+        let width = self.width;
+        let height = self.height;
+
+        unsafe {
+            let pixel_count = (width * height) as usize;
+            let pixels = std::slice::from_raw_parts_mut(self.bits as *mut u32, pixel_count);
+
+            for py in y.max(0)..(y + h).min(height) {
+                for px in x.max(0)..(x + w).min(width) {
+                    let idx = (py * width + px) as usize;
+                    if idx < pixels.len() {
+                        pixels[idx] = bgra;
+                    }
+                }
+            }
+        }
+    }
+
+    /// 테두리 그리기 (ARGB)
+    pub fn draw_border(&mut self, thickness: i32, color: u32) {
+        let w = self.width;
+        let h = self.height;
+
+        // 상단
+        self.fill_rect(0, 0, w, thickness, color);
+        // 하단
+        self.fill_rect(0, h - thickness, w, thickness, color);
+        // 좌측
+        self.fill_rect(0, 0, thickness, h, color);
+        // 우측
+        self.fill_rect(w - thickness, 0, thickness, h, color);
     }
 }
 
-static mut APP_INSTANCE: Option<*mut App> = None;
+/// 레이어드 윈도우 업데이트
+pub fn update_layered_window(hwnd: HWND, buffer: &DoubleBuffer) -> Result<()> {
+    unsafe {
+        let hdc_screen = GetDC(None);
+        let size = SIZE {
+            cx: buffer.width,
+            cy: buffer.height,
+        };
+        let pt_src = POINT { x: 0, y: 0 };
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
 
-impl App {
-    pub fn run() -> Result<()> {
-        unsafe {
-            let instance = GetModuleHandleW(None)?;
+        UpdateLayeredWindow(
+            hwnd,
+            Some(hdc_screen),
+            None,
+            Some(&size),
+            Some(buffer.hdc()),
+            Some(&pt_src),
+            COLORREF(0),
+            Some(&blend),
+            ULW_ALPHA,
+        )?;
 
-            // Register parent window class (hidden)
-            Self::register_class(instance, w!("AnemoneParentClass"), Some(Self::parent_wndproc))?;
+        ReleaseDC(None, hdc_screen);
+        Ok(())
+    }
+}
 
-            // Register main window class
-            Self::register_class(instance, CLASS_NAME, Some(Self::wndproc))?;
+/// 윈도우 표시/숨김
+pub fn set_window_visible(hwnd: HWND, visible: bool) {
+    unsafe {
+        let _ = ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
+    }
+}
 
-            // Create parent window (for layered window support)
-            let hwnd_parent = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-                w!("AnemoneParentClass"),
-                WINDOW_TITLE,
-                WS_POPUP,
-                0, 0, 0, 0,
-                None,
-                None,
-                Some(instance.into()),
-                None,
-            )?;
+/// 최상위 설정
+#[allow(dead_code)]
+pub fn set_topmost(hwnd: HWND, topmost: bool) {
+    unsafe {
+        let hwnd_insert = if topmost { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        let _ = SetWindowPos(
+            hwnd,
+            Some(hwnd_insert),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
 
-            // Create main layered window
-            let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-                CLASS_NAME,
-                WINDOW_TITLE,
-                WS_POPUP,
-                100, 100, 400, 200,
-                Some(hwnd_parent),
-                None,
-                Some(instance.into()),
-                None,
-            )?;
+/// 클릭 통과 설정
+pub fn set_click_through(hwnd: HWND, click_through: bool) {
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        let new_style = if click_through {
+            style | WS_EX_TRANSPARENT.0 as i32
+        } else {
+            style & !(WS_EX_TRANSPARENT.0 as i32)
+        };
+        SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
+    }
+}
 
-            let mut app = Box::new(App {
-                hwnd,
-                hwnd_parent,
-                width: 400,
-                height: 200,
-                buffer: None,
-            });
+/// WM_NCHITTEST 처리 - 테두리 크기 조절 영역 판정
+pub fn hit_test_resize_border(hwnd: HWND, x: i32, y: i32, border_width: i32) -> Option<i32> {
+    unsafe {
+        let mut rc: RECT = zeroed();
+        GetClientRect(hwnd, &mut rc).ok()?;
 
-            APP_INSTANCE = Some(app.as_mut() as *mut App);
+        let mut pt = POINT { x, y };
+        let _ = ScreenToClient(hwnd, &mut pt);
 
-            // Initialize double buffer
-            let hdc = GetDC(Some(hwnd));
-            app.buffer = Some(DoubleBuffer::new(hdc, 400, 200)?);
-            ReleaseDC(Some(hwnd), hdc);
+        let w = rc.right;
+        let h = rc.bottom;
 
-            // Initial paint
-            app.paint()?;
-
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = UpdateWindow(hwnd);
-
-            // Message loop
-            let mut msg: MSG = zeroed();
-            while GetMessageW(&mut msg, None, 0, 0).into() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+        // 상단
+        if pt.y < border_width {
+            if pt.x < border_width {
+                return Some(HTTOPLEFT as i32);
+            } else if pt.x > w - border_width {
+                return Some(HTTOPRIGHT as i32);
             }
-
-            APP_INSTANCE = None;
-            drop(app);
-
-            Ok(())
+            return Some(HTTOP as i32);
         }
-    }
 
-    fn register_class(
-        instance: HMODULE,
-        class_name: PCWSTR,
-        wndproc: WNDPROC,
-    ) -> Result<()> {
-        unsafe {
-            let wc = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: wndproc,
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: instance.into(),
-                hIcon: LoadIconW(None, IDI_APPLICATION)?,
-                hCursor: LoadCursorW(None, IDC_ARROW)?,
-                hbrBackground: HBRUSH(null_mut()),
-                lpszMenuName: PCWSTR::null(),
-                lpszClassName: class_name,
-                hIconSm: HICON::default(),
-            };
-
-            let atom = RegisterClassExW(&wc);
-            if atom == 0 {
-                return Err(Error::from_hresult(HRESULT::from_win32(GetLastError().0)));
+        // 하단
+        if pt.y > h - border_width {
+            if pt.x < border_width {
+                return Some(HTBOTTOMLEFT as i32);
+            } else if pt.x > w - border_width {
+                return Some(HTBOTTOMRIGHT as i32);
             }
-            Ok(())
-        }
-    }
-
-    fn paint(&mut self) -> Result<()> {
-        unsafe {
-            let buffer = match &mut self.buffer {
-                Some(b) => b,
-                None => return Ok(()),
-            };
-
-            // Clear with semi-transparent dark background
-            buffer.clear(40, 40, 40, 200);
-
-            // Draw a simple border using GDI
-            let pen = CreatePen(PS_SOLID, 2, COLORREF(0x00AAAAAA));
-            let old_pen = SelectObject(buffer.hdc(), pen.into());
-            let old_brush = SelectObject(buffer.hdc(), GetStockObject(NULL_BRUSH));
-
-            let _ = Rectangle(buffer.hdc(), 0, 0, self.width, self.height);
-
-            SelectObject(buffer.hdc(), old_pen);
-            SelectObject(buffer.hdc(), old_brush);
-            let _ = DeleteObject(pen.into());
-
-            // Update layered window
-            let hdc_screen = GetDC(None);
-            let size = SIZE {
-                cx: self.width,
-                cy: self.height,
-            };
-            let pt_src = POINT { x: 0, y: 0 };
-            let blend = BLENDFUNCTION {
-                BlendOp: AC_SRC_OVER as u8,
-                BlendFlags: 0,
-                SourceConstantAlpha: 255,
-                AlphaFormat: AC_SRC_ALPHA as u8,
-            };
-
-            UpdateLayeredWindow(
-                self.hwnd,
-                Some(hdc_screen),
-                None,
-                Some(&size),
-                Some(buffer.hdc()),
-                Some(&pt_src),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            )?;
-
-            ReleaseDC(None, hdc_screen);
-            Ok(())
-        }
-    }
-
-    fn resize(&mut self, width: i32, height: i32) -> Result<()> {
-        if width <= 0 || height <= 0 {
-            return Ok(());
+            return Some(HTBOTTOM as i32);
         }
 
-        self.width = width;
-        self.height = height;
-
-        unsafe {
-            let hdc = GetDC(Some(self.hwnd));
-            self.buffer = Some(DoubleBuffer::new(hdc, width, height)?);
-            ReleaseDC(Some(self.hwnd), hdc);
+        // 좌우
+        if pt.x < border_width {
+            return Some(HTLEFT as i32);
+        }
+        if pt.x > w - border_width {
+            return Some(HTRIGHT as i32);
         }
 
-        self.paint()
+        None // 클라이언트 영역
     }
+}
 
-    unsafe extern "system" fn parent_wndproc(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
-        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
-    }
-
-    unsafe extern "system" fn wndproc(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
-        unsafe {
-            match msg {
-                WM_DESTROY => {
-                    PostQuitMessage(0);
-                    LRESULT(0)
-                }
-                WM_NCHITTEST => {
-                    // Allow dragging anywhere on window
-                    let result = DefWindowProcW(hwnd, msg, wparam, lparam);
-                    if result == LRESULT(HTCLIENT as isize) {
-                        return LRESULT(HTCAPTION as isize);
-                    }
-                    result
-                }
-                WM_RBUTTONUP => {
-                    // Right-click to close
-                    if let Some(app) = APP_INSTANCE.and_then(|p| p.as_ref()) {
-                        DestroyWindow(app.hwnd).ok();
-                    }
-                    LRESULT(0)
-                }
-                WM_SIZE => {
-                    let width = (lparam.0 & 0xFFFF) as i32;
-                    let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
-                    if let Some(app) = APP_INSTANCE.and_then(|p| p.as_mut()) {
-                        let _ = app.resize(width, height);
-                    }
-                    LRESULT(0)
-                }
-                _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-            }
-        }
-    }
+/// 윈도우 최소 크기 설정
+pub fn set_min_track_size(mm: &mut MINMAXINFO, min_width: i32, min_height: i32) {
+    mm.ptMinTrackSize.x = min_width;
+    mm.ptMinTrackSize.y = min_height;
 }

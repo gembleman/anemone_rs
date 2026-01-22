@@ -1,8 +1,14 @@
 #![windows_subsystem = "windows"]
 
+mod app;
+mod config;
+mod tray;
+mod menu;
+mod hotkey;
+mod clipboard;
 mod window;
 
-use window::App;
+use app::App;
 
 fn main() {
     if let Err(e) = App::run() {
