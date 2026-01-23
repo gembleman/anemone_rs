@@ -10,6 +10,23 @@ use windows::{
     },
 };
 
+/// 텍스트 렌더링 스타일
+#[derive(Clone, Debug)]
+pub struct TextRenderStyle {
+    pub font_size: i32,
+    pub font_face: String,
+    pub font_style: u8,  // 0: normal, 1: bold, 2: italic, 3: bold+italic
+    pub color: u32,      // ARGB
+    pub outline1_size: i32,
+    pub outline1_color: u32,
+    pub outline2_size: i32,
+    pub outline2_color: u32,
+    pub shadow_enabled: bool,
+    pub shadow_color: u32,
+    pub shadow_offset_x: i32,
+    pub shadow_offset_y: i32,
+}
+
 /// 더블 버퍼링용 DIB 섹션
 pub struct DoubleBuffer {
     hdc_mem: HDC,
@@ -117,17 +134,28 @@ impl DoubleBuffer {
         self.fill_rect(w - thickness, 0, thickness, h, color);
     }
 
-    /// 텍스트 그리기 (GDI 사용)
-    pub fn draw_text(&mut self, text: &str, x: i32, y: i32, color: u32) {
+    /// 텍스트 그리기 (GDI 사용) - 외곽선, 그림자 지원
+    /// 원본 아네모네의 GDI+ 로직을 GDI로 시뮬레이션:
+    /// - 외곽선2(OutlineOut): outline1 + outline2 두께
+    /// - 외곽선1(OutlineIn): outline1 두께
+    /// - 그림자: 오프셋 위치에 외곽선 총 두께로 그림
+    pub fn draw_text(&mut self, text: &str, x: i32, y: i32, style: &TextRenderStyle) {
         unsafe {
+            // 폰트 스타일 파싱
+            let weight = if style.font_style & 1 != 0 { FW_BOLD.0 as i32 } else { FW_NORMAL.0 as i32 };
+            let italic = if style.font_style & 2 != 0 { 1u32 } else { 0u32 };
+
+            // 폰트 이름을 wide string으로 변환
+            let font_face_wide: Vec<u16> = style.font_face.encode_utf16().chain(std::iter::once(0)).collect();
+
             // 폰트 생성
             let font = CreateFontW(
-                20,                    // 높이
+                style.font_size,       // 높이
                 0,                     // 너비 (0 = 자동)
                 0,                     // escapement
                 0,                     // orientation
-                FW_NORMAL.0 as i32,    // weight
-                0,                     // italic
+                weight,                // weight
+                italic,                // italic
                 0,                     // underline
                 0,                     // strikeout
                 DEFAULT_CHARSET,
@@ -135,58 +163,108 @@ impl DoubleBuffer {
                 CLIP_DEFAULT_PRECIS,
                 DEFAULT_QUALITY,
                 (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-                w!("맑은 고딕"),
+                PCWSTR(font_face_wide.as_ptr()),
             );
 
             let old_font = SelectObject(self.hdc_mem, font.into());
-
-            // 텍스트 색상 설정 (ARGB -> RGB)
-            let r = ((color >> 16) & 0xFF) as u8;
-            let g = ((color >> 8) & 0xFF) as u8;
-            let b = (color & 0xFF) as u8;
-            SetTextColor(self.hdc_mem, COLORREF(((b as u32) << 16) | ((g as u32) << 8) | (r as u32)));
             SetBkMode(self.hdc_mem, TRANSPARENT);
 
-            // 텍스트 그리기
             let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-            TextOutW(self.hdc_mem, x, y, &wide[..wide.len()-1]);
+            let text_slice = &wide[..wide.len()-1];
+
+            // 원본 아네모네 로직: outlineTotalThick = outlineIn + outlineOut
+            let outline_total = style.outline1_size + style.outline2_size;
+
+            // 1. 그림자 그리기 (가장 뒤에)
+            // 원본: 그림자는 오프셋 위치에 외곽선 총 두께로 DrawPath
+            if style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0) {
+                let shadow_x = x + style.shadow_offset_x;
+                let shadow_y = y + style.shadow_offset_y;
+
+                if outline_total > 0 {
+                    // 그림자도 외곽선과 함께 그림
+                    self.draw_outline_at(text_slice, shadow_x, shadow_y, outline_total, style.shadow_color);
+                }
+                // 그림자 텍스트 본체
+                self.set_text_color(style.shadow_color);
+                let _ = TextOutW(self.hdc_mem, shadow_x, shadow_y, text_slice);
+            }
+
+            // 2. 외곽선2 그리기 (OutlineOut) - outline1 + outline2 두께
+            // 원본: outlineTotalThick 두께로 DrawPath
+            if style.outline2_size > 0 && outline_total > 0 {
+                self.draw_outline_at(text_slice, x, y, outline_total, style.outline2_color);
+            }
+
+            // 3. 외곽선1 그리기 (OutlineIn) - outline1 두께만
+            // 원본: outlineInThick 두께로 DrawPath
+            if style.outline1_size > 0 {
+                self.draw_outline_at(text_slice, x, y, style.outline1_size, style.outline1_color);
+            }
+
+            // 4. 주 텍스트 그리기 (가장 앞에)
+            // 원본: FillPath로 텍스트 내부 채움
+            self.set_text_color(style.color);
+            let _ = TextOutW(self.hdc_mem, x, y, text_slice);
 
             // 정리
             SelectObject(self.hdc_mem, old_font);
             let _ = DeleteObject(font.into());
 
             // premultiplied alpha 적용 (레이어드 윈도우용)
-            self.apply_text_alpha(color);
+            self.apply_text_alpha_full();
         }
     }
 
-    /// 텍스트 영역에 알파 적용 (premultiplied alpha)
-    fn apply_text_alpha(&mut self, color: u32) {
-        let alpha = ((color >> 24) & 0xFF) as u8;
-        if alpha == 0 {
-            return;
-        }
+    /// 지정된 위치에 외곽선 그리기 (8방향 + 추가 픽셀)
+    fn draw_outline_at(&self, text: &[u16], x: i32, y: i32, thickness: i32, color: u32) {
+        self.set_text_color(color);
 
+        // 외곽선 두께만큼 모든 방향으로 텍스트 그리기
+        for dy in -thickness..=thickness {
+            for dx in -thickness..=thickness {
+                // 중심 제외, 거리 기반으로 원형에 가깝게
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+                // 맨해튼 거리가 아닌 유클리드 거리로 원형 외곽선 근사
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq <= thickness * thickness {
+                    unsafe {
+                        let _ = TextOutW(self.hdc_mem, x + dx, y + dy, text);
+                    }
+                }
+            }
+        }
+    }
+
+    /// 텍스트 색상 설정 (ARGB -> GDI COLORREF)
+    fn set_text_color(&self, color: u32) {
+        let r = ((color >> 16) & 0xFF) as u8;
+        let g = ((color >> 8) & 0xFF) as u8;
+        let b = (color & 0xFF) as u8;
+        unsafe {
+            SetTextColor(self.hdc_mem, COLORREF(((b as u32) << 16) | ((g as u32) << 8) | (r as u32)));
+        }
+    }
+
+    /// 텍스트 영역에 알파 적용 (premultiplied alpha) - 전체 텍스트용
+    fn apply_text_alpha_full(&mut self) {
         unsafe {
             let pixel_count = (self.width * self.height) as usize;
             let pixels = std::slice::from_raw_parts_mut(self.bits as *mut u32, pixel_count);
 
             for pixel in pixels.iter_mut() {
                 let current_alpha = (*pixel >> 24) & 0xFF;
-                // 텍스트가 그려진 픽셀 (알파가 0이 아닌 곳)
+                // 알파가 이미 설정되지 않은 픽셀에 대해
                 if current_alpha == 0 {
                     let r = (*pixel >> 16) & 0xFF;
                     let g = (*pixel >> 8) & 0xFF;
                     let b = *pixel & 0xFF;
 
-                    // 텍스트 색상이 있는 픽셀에 알파 적용
+                    // 텍스트 색상이 있는 픽셀에 완전 불투명 알파 적용
                     if r > 0 || g > 0 || b > 0 {
-                        // premultiplied alpha 적용
-                        let a = alpha as u32;
-                        let pr = (r * a) / 255;
-                        let pg = (g * a) / 255;
-                        let pb = (b * a) / 255;
-                        *pixel = (a << 24) | (pr << 16) | (pg << 8) | pb;
+                        *pixel = (0xFF << 24) | (r << 16) | (g << 8) | b;
                     }
                 }
             }

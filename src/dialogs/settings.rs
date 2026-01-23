@@ -286,7 +286,7 @@ impl SettingsDialog {
             self.create_button(295, 55, 30, 25, ctrl_id::TEXTSIZE_PLUS, "+")?;
 
             // 크기 텍스트
-            self.create_label(330, 58, 100, 18, &format!("크기: {}", text_size))?;
+            self.create_label_with_id(330, 58, 100, 18, ctrl_id::TEXTSIZE_TEXT, &format!("크기: {}", text_size))?;
 
             // ====== 외곽선 설정 그룹 ======
             self.create_group_box(10, 95, 470, 80, "외곽선 설정")?;
@@ -905,21 +905,31 @@ impl SettingsDialog {
 
             // 텍스트 크기 +/-
             TEXTSIZE_MINUS => {
-                let mut cfg = self.config.borrow_mut();
-                let current = cfg.translation_style.size;
-                if current > 6 {
-                    cfg.set_all_text_size(ColorType::Primary, current - 1);
-                }
-                drop(cfg);
+                let new_size = {
+                    let mut cfg = self.config.borrow_mut();
+                    let current = cfg.translation_style.size;
+                    if current > 6 {
+                        cfg.set_all_text_size(ColorType::Primary, current - 1);
+                        current - 1
+                    } else {
+                        current
+                    }
+                };
+                self.update_textsize_ui(new_size);
                 self.notify_change();
             }
             TEXTSIZE_PLUS => {
-                let mut cfg = self.config.borrow_mut();
-                let current = cfg.translation_style.size;
-                if current < 100 {
-                    cfg.set_all_text_size(ColorType::Primary, current + 1);
-                }
-                drop(cfg);
+                let new_size = {
+                    let mut cfg = self.config.borrow_mut();
+                    let current = cfg.translation_style.size;
+                    if current < 100 {
+                        cfg.set_all_text_size(ColorType::Primary, current + 1);
+                        current + 1
+                    } else {
+                        current
+                    }
+                };
+                self.update_textsize_ui(new_size);
                 self.notify_change();
             }
 
@@ -1031,6 +1041,16 @@ impl SettingsDialog {
             }
             TEXTSIZE_TRACKBAR => {
                 self.config.borrow_mut().set_all_text_size(ColorType::Primary, value);
+                // 크기 레이블 업데이트
+                unsafe {
+                    if let Ok(label) = GetDlgItem(Some(self.hwnd), TEXTSIZE_TEXT as i32) {
+                        if !label.is_invalid() {
+                            let text = format!("크기: {}", value);
+                            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+                            let _ = SetWindowTextW(label, PCWSTR(text_wide.as_ptr()));
+                        }
+                    }
+                }
                 self.notify_change();
             }
             OUTLINE1_TRACKBAR => {
@@ -1164,6 +1184,26 @@ impl SettingsDialog {
             CoUninitialize();
 
             path
+        }
+    }
+
+    /// 텍스트 크기 UI 업데이트 (트랙바 위치 및 레이블)
+    fn update_textsize_ui(&self, size: i32) {
+        unsafe {
+            // 트랙바 위치 업데이트
+            if let Ok(trackbar) = GetDlgItem(Some(self.hwnd), ctrl_id::TEXTSIZE_TRACKBAR as i32) {
+                if !trackbar.is_invalid() {
+                    let _ = SendMessageW(trackbar, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(size as isize)));
+                }
+            }
+            // 레이블 업데이트
+            if let Ok(label) = GetDlgItem(Some(self.hwnd), ctrl_id::TEXTSIZE_TEXT as i32) {
+                if !label.is_invalid() {
+                    let text = format!("크기: {}", size);
+                    let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = SetWindowTextW(label, PCWSTR(text_wide.as_ptr()));
+                }
+            }
         }
     }
 

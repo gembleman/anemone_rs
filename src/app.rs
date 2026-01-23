@@ -20,7 +20,7 @@ use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
 use crate::tray::{self, TrayIcon};
-use crate::window::{self, DoubleBuffer};
+use crate::window::{self, DoubleBuffer, TextRenderStyle};
 
 const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
 const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
@@ -230,11 +230,30 @@ impl App {
             buffer.draw_border(cfg.border_width, cfg.border_color);
         }
 
+        // 텍스트 스타일 정보 가져오기
+        let text_style = &cfg.translation_style;
+        let render_style = TextRenderStyle {
+            font_size: text_style.size,
+            font_face: text_style.font_face.clone(),
+            font_style: text_style.font_style,
+            color: text_style.color_primary,
+            outline1_size: text_style.outline1_size,
+            outline1_color: text_style.color_outline1,
+            outline2_size: text_style.outline2_size,
+            outline2_color: text_style.color_outline2,
+            shadow_enabled: text_style.shadow_enabled,
+            shadow_color: text_style.color_shadow,
+            shadow_offset_x: cfg.shadow_offset_x,
+            shadow_offset_y: cfg.shadow_offset_y,
+        };
+        let margin_x = cfg.text_margin_x;
+        let margin_y = cfg.text_margin_y;
+
         drop(cfg);
 
         // 텍스트 그리기
         if !self.current_text.is_empty() {
-            buffer.draw_text(&self.current_text, 10, 10, 0xFFFFFFFF); // 흰색 텍스트
+            buffer.draw_text(&self.current_text, margin_x, margin_y, &render_style);
         }
 
         // 레이어드 윈도우 업데이트
