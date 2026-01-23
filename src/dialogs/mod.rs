@@ -12,6 +12,9 @@
 //! Phase 3 구현:
 //! - 파일 번역 대화상자 (file_trans.rs)
 //! - 진행률 대화상자 (file_trans_progress.rs)
+//!
+//! 추가 구현:
+//! - 후크 설정 대화상자 (hook_settings.rs)
 
 pub mod color;
 pub mod font;
@@ -21,8 +24,10 @@ pub mod backlog;
 pub mod file_trans;
 pub mod file_trans_progress;
 pub mod file_trans_thread;
+pub mod hook_settings;
 
 pub use settings::SettingsDialog;
 pub use translate::TranslateDialog;
 pub use backlog::{BacklogDialog, LogEntry, add_to_backlog};
 pub use file_trans::FileTransDialog;
+pub use hook_settings::HookSettingsDialog;

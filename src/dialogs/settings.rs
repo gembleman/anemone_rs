@@ -24,6 +24,12 @@ use super::font::{FontDialog, FontDialogConfig, FontStyle};
 // TrackBar 메시지 상수 (windows crate 0.62에서 누락)
 const TBM_GETPOS_VAL: u32 = 1024;
 
+// ComboBox 메시지 상수
+const CB_ADDSTRING: u32 = 0x0143;
+const CB_SETCURSEL: u32 = 0x014E;
+const CB_GETCURSEL: u32 = 0x0147;
+const CBN_SELCHANGE: u32 = 1;
+
 // 설정 대화상자 컨트롤 ID
 mod ctrl_id {
     // 배경 설정
@@ -112,13 +118,21 @@ mod ctrl_id {
     pub const TEXTALIGN_MID: u16 = 1221;
     pub const TEXTALIGN_RIGHT: u16 = 1222;
 
+    // 스크린샷 설정
+    pub const SCREENSHOT_PATH_EDIT: u16 = 1250;
+    pub const SCREENSHOT_PATH_BROWSE: u16 = 1251;
+    pub const SCREENSHOT_FORMAT: u16 = 1252;
+    pub const SCREENSHOT_COMPRESSION: u16 = 1253;
+    pub const SCREENSHOT_QUALITY_TRACKBAR: u16 = 1254;
+    pub const SCREENSHOT_QUALITY_TEXT: u16 = 1255;
+
     // 닫기 버튼
     pub const CLOSE: u16 = 1300;
 }
 
 const SETTINGS_CLASS_NAME: PCWSTR = w!("AnemoneSettingsClass");
 const SETTINGS_WIDTH: i32 = 500;
-const SETTINGS_HEIGHT: i32 = 700;
+const SETTINGS_HEIGHT: i32 = 800;
 
 /// 설정 변경 콜백 타입
 pub type SettingsChangeCallback = Box<dyn Fn(&Config)>;
@@ -309,6 +323,8 @@ impl SettingsDialog {
             let _ = SendMessageW(outline2_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(outline2_size as isize)));
 
             self.create_button(455, 113, 25, 22, ctrl_id::OUTLINE2_MINUS, "-")?;
+            // OUTLINE2_PLUS 버튼은 공간 부족으로 두 번째 줄에 배치
+            self.create_button(455, 140, 25, 22, ctrl_id::OUTLINE2_PLUS, "+")?;
 
             // 그림자 오프셋
             self.create_label(20, 145, 80, 18, "그림자 X:")?;
@@ -419,18 +435,24 @@ impl SettingsDialog {
             let sep_name = self.config.borrow().separate_name;
             self.create_checkbox(120, 420, 100, 20, ctrl_id::SEPERATE_NAME, "이름 분리", sep_name)?;
 
+            // 텍스트 반복 버튼
+            let repeat_mode = self.config.borrow().repeat_text_mode;
+            self.create_button(20, 445, 60, 22, ctrl_id::REPEAT_TEXT, &format!("반복:{}", repeat_mode))?;
+
             // 텍스트 정렬
             let align = self.config.borrow().text_align;
-            self.create_radio(20, 450, 60, 20, ctrl_id::TEXTALIGN_LEFT, "왼쪽", align == TextAlign::Left)?;
-            self.create_radio(85, 450, 60, 20, ctrl_id::TEXTALIGN_MID, "중앙", align == TextAlign::Center)?;
-            self.create_radio(150, 450, 60, 20, ctrl_id::TEXTALIGN_RIGHT, "오른쪽", align == TextAlign::Right)?;
+            self.create_radio(90, 448, 50, 20, ctrl_id::TEXTALIGN_LEFT, "왼쪽", align == TextAlign::Left)?;
+            self.create_radio(145, 448, 50, 20, ctrl_id::TEXTALIGN_MID, "중앙", align == TextAlign::Center)?;
+            self.create_radio(200, 448, 40, 20, ctrl_id::TEXTALIGN_RIGHT, "오른쪽", align == TextAlign::Right)?;
 
             // ====== 윈도우 옵션 그룹 ======
             self.create_group_box(250, 380, 230, 100, "윈도우 옵션")?;
             let topmost = self.config.borrow().window_topmost;
             self.create_checkbox(260, 400, 100, 20, ctrl_id::TOPMOST, "항상 위", topmost)?;
             let magnetic = self.config.borrow().magnetic_mode;
-            self.create_checkbox(360, 400, 100, 20, ctrl_id::USE_MAGNETIC, "자석 모드", magnetic)?;
+            self.create_checkbox(360, 400, 80, 20, ctrl_id::USE_MAGNETIC, "자석", magnetic)?;
+            let magnetic_min = self.config.borrow().magnetic_minimize;
+            self.create_checkbox(435, 400, 45, 20, ctrl_id::MAGNETIC_MINIMIZE, "최소", magnetic_min)?;
             let clip_watch = self.config.borrow().clipboard_watch;
             self.create_checkbox(260, 420, 100, 20, ctrl_id::CLIPBOARD_WATCH, "클립보드", clip_watch)?;
             let click_through = self.config.borrow().click_through;
@@ -455,8 +477,44 @@ impl SettingsDialog {
             let border_size = self.config.borrow().border_width;
             let _ = SendMessageW(border_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(border_size as isize)));
 
+            // ====== 스크린샷 설정 그룹 ======
+            self.create_group_box(10, 550, 470, 110, "스크린샷 설정")?;
+
+            // 저장 경로
+            self.create_label(20, 572, 50, 18, "경로:")?;
+            let screenshot_path = self.config.borrow().screenshot.path.clone();
+            self.create_edit(70, 570, 330, 22, ctrl_id::SCREENSHOT_PATH_EDIT, &screenshot_path)?;
+            self.create_button(405, 570, 65, 22, ctrl_id::SCREENSHOT_PATH_BROWSE, "찾아보기")?;
+
+            // 포맷 선택
+            self.create_label(20, 600, 40, 18, "포맷:")?;
+            let format_items = vec!["PNG", "JPEG", "WebP"];
+            let format_sel = self.config.borrow().screenshot.format as usize;
+            self.create_combobox(60, 598, 70, 100, ctrl_id::SCREENSHOT_FORMAT, &format_items, format_sel)?;
+
+            // 압축 레벨
+            self.create_label(140, 600, 40, 18, "압축:")?;
+            let compress_items = vec!["빠름", "표준", "최대"];
+            let compress_sel = self.config.borrow().screenshot.compression as usize;
+            self.create_combobox(180, 598, 60, 100, ctrl_id::SCREENSHOT_COMPRESSION, &compress_items, compress_sel)?;
+
+            // JPEG 품질
+            self.create_label(250, 600, 60, 18, "JPEG품질:")?;
+            let quality_tb = self.create_trackbar(
+                310,
+                598,
+                100,
+                22,
+                ctrl_id::SCREENSHOT_QUALITY_TRACKBAR,
+                1,
+                100,
+            )?;
+            let jpeg_quality = self.config.borrow().screenshot.jpeg_quality;
+            let _ = SendMessageW(quality_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(jpeg_quality as isize)));
+            self.create_label_with_id(415, 600, 40, 18, ctrl_id::SCREENSHOT_QUALITY_TEXT, &format!("{}", jpeg_quality))?;
+
             // ====== 닫기 버튼 ======
-            self.create_button(380, 620, 100, 30, ctrl_id::CLOSE, "닫기")?;
+            self.create_button(380, 720, 100, 30, ctrl_id::CLOSE, "닫기")?;
 
             Ok(())
         }
@@ -486,6 +544,10 @@ impl SettingsDialog {
     }}
 
     unsafe fn create_label(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> { unsafe {
+        self.create_label_with_id(x, y, w, h, 0, text)
+    }}
+
+    unsafe fn create_label_with_id(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> { unsafe {
         let hinst = GetModuleHandleW(None)?;
         let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -496,7 +558,7 @@ impl SettingsDialog {
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
             x, y, w, h,
             Some(self.hwnd),
-            None,
+            Some(HMENU(id as isize as *mut _)),
             Some(hinst.into()),
             None,
         )?;
@@ -625,6 +687,58 @@ impl SettingsDialog {
         Ok(hwnd)
     }}
 
+    unsafe fn create_edit(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> { unsafe {
+        let hinst = GetModuleHandleW(None)?;
+        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let hwnd = CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            w!("EDIT"),
+            PCWSTR(text_wide.as_ptr()),
+            WINDOW_STYLE(ES_AUTOHSCROLL as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0),
+            x, y, w, h,
+            Some(self.hwnd),
+            Some(HMENU(id as isize as *mut _)),
+            Some(hinst.into()),
+            None,
+        )?;
+
+        let hfont = GetStockObject(DEFAULT_GUI_FONT);
+        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+
+        Ok(hwnd)
+    }}
+
+    unsafe fn create_combobox(&self, x: i32, y: i32, w: i32, h: i32, id: u16, items: &[&str], selected: usize) -> Result<HWND> { unsafe {
+        let hinst = GetModuleHandleW(None)?;
+
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("COMBOBOX"),
+            w!(""),
+            WINDOW_STYLE(CBS_DROPDOWNLIST as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0),
+            x, y, w, h,
+            Some(self.hwnd),
+            Some(HMENU(id as isize as *mut _)),
+            Some(hinst.into()),
+            None,
+        )?;
+
+        let hfont = GetStockObject(DEFAULT_GUI_FONT);
+        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+
+        // 아이템 추가
+        for item in items {
+            let item_wide: Vec<u16> = item.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = SendMessageW(hwnd, CB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(item_wide.as_ptr() as isize)));
+        }
+
+        // 선택 설정
+        let _ = SendMessageW(hwnd, CB_SETCURSEL, Some(WPARAM(selected)), Some(LPARAM(0)));
+
+        Ok(hwnd)
+    }}
+
     /// 명령 처리
     fn handle_command(&mut self, cmd: u16) {
         use ctrl_id::*;
@@ -722,6 +836,24 @@ impl SettingsDialog {
                 drop(cfg);
                 self.notify_change();
             }
+            REPEAT_TEXT => {
+                // 모드 순환 (0→1→2→3→4→0)
+                let mut cfg = self.config.borrow_mut();
+                cfg.repeat_text_mode = (cfg.repeat_text_mode + 1) % 5;
+                let new_mode = cfg.repeat_text_mode;
+                drop(cfg);
+                // 버튼 텍스트 업데이트
+                unsafe {
+                    if let Ok(btn) = GetDlgItem(Some(self.hwnd), REPEAT_TEXT as i32) {
+                        if !btn.is_invalid() {
+                            let text = format!("반복:{}", new_mode);
+                            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+                            let _ = SetWindowTextW(btn, PCWSTR(text_wide.as_ptr()));
+                        }
+                    }
+                }
+                self.notify_change();
+            }
 
             // 텍스트 정렬
             TEXTALIGN_LEFT => {
@@ -746,6 +878,12 @@ impl SettingsDialog {
             }
             USE_MAGNETIC => {
                 self.config.borrow_mut().toggle_magnetic_mode();
+                self.notify_change();
+            }
+            MAGNETIC_MINIMIZE => {
+                let mut cfg = self.config.borrow_mut();
+                cfg.magnetic_minimize = !cfg.magnetic_minimize;
+                drop(cfg);
                 self.notify_change();
             }
             CLIPBOARD_WATCH => {
@@ -815,6 +953,22 @@ impl SettingsDialog {
                 }
                 drop(cfg);
                 self.notify_change();
+            }
+
+            // 스크린샷 경로 찾아보기
+            SCREENSHOT_PATH_BROWSE => {
+                if let Some(path) = self.browse_folder() {
+                    self.config.borrow_mut().screenshot.path = path.clone();
+                    unsafe {
+                        if let Ok(edit) = GetDlgItem(Some(self.hwnd), SCREENSHOT_PATH_EDIT as i32) {
+                            if !edit.is_invalid() {
+                                let text_wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+                                let _ = SetWindowTextW(edit, PCWSTR(text_wide.as_ptr()));
+                            }
+                        }
+                    }
+                    self.notify_change();
+                }
             }
 
             _ => {}
@@ -903,7 +1057,105 @@ impl SettingsDialog {
                 self.config.borrow_mut().border_width = value;
                 self.notify_change();
             }
+            SCREENSHOT_QUALITY_TRACKBAR => {
+                self.config.borrow_mut().screenshot.jpeg_quality = value as u8;
+                // 품질 텍스트 업데이트
+                unsafe {
+                    if let Ok(label) = GetDlgItem(Some(self.hwnd), SCREENSHOT_QUALITY_TEXT as i32) {
+                        if !label.is_invalid() {
+                            let text = format!("{}", value);
+                            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+                            let _ = SetWindowTextW(label, PCWSTR(text_wide.as_ptr()));
+                        }
+                    }
+                }
+                self.notify_change();
+            }
             _ => {}
+        }
+    }
+
+    /// ComboBox 선택 변경 처리
+    fn handle_combobox(&mut self, id: u16) {
+        use ctrl_id::*;
+
+        unsafe {
+            let combo = match GetDlgItem(Some(self.hwnd), id as i32) {
+                Ok(h) if !h.is_invalid() => h,
+                _ => return,
+            };
+            let sel = SendMessageW(combo, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as usize;
+
+            match id {
+                SCREENSHOT_FORMAT => {
+                    self.config.borrow_mut().screenshot.format = sel as u8;
+                    self.notify_change();
+                }
+                SCREENSHOT_COMPRESSION => {
+                    self.config.borrow_mut().screenshot.compression = sel as u8;
+                    self.notify_change();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 폴더 브라우저 열기
+    fn browse_folder(&self) -> Option<String> {
+        use windows::Win32::UI::Shell::{
+            IFileOpenDialog, FileOpenDialog, FOS_PICKFOLDERS, IShellItem,
+            SIGDN_FILESYSPATH,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
+
+        unsafe {
+            // COM 초기화
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+            let dialog: IFileOpenDialog = match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL) {
+                Ok(d) => d,
+                Err(_) => {
+                    CoUninitialize();
+                    return None;
+                }
+            };
+
+            // 폴더 선택 모드
+            let _ = dialog.SetOptions(FOS_PICKFOLDERS);
+            let _ = dialog.SetTitle(w!("스크린샷 저장 경로 선택"));
+
+            // 대화상자 표시
+            let result = dialog.Show(Some(self.hwnd));
+            if result.is_err() {
+                CoUninitialize();
+                return None;
+            }
+
+            // 결과 가져오기
+            let item: IShellItem = match dialog.GetResult() {
+                Ok(i) => i,
+                Err(_) => {
+                    CoUninitialize();
+                    return None;
+                }
+            };
+
+            let path_ptr = match item.GetDisplayName(SIGDN_FILESYSPATH) {
+                Ok(p) => p,
+                Err(_) => {
+                    CoUninitialize();
+                    return None;
+                }
+            };
+
+            // PWSTR을 String으로 변환
+            let path = path_ptr.to_string().ok();
+
+            // COM 정리
+            windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
+            CoUninitialize();
+
+            path
         }
     }
 
@@ -933,7 +1185,14 @@ impl SettingsDialog {
             match msg {
                 WM_COMMAND => {
                     let id = (wparam.0 & 0xFFFF) as u16;
-                    dialog.borrow_mut().handle_command(id);
+                    let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+
+                    // ComboBox 선택 변경
+                    if notify_code == CBN_SELCHANGE {
+                        dialog.borrow_mut().handle_combobox(id);
+                    } else {
+                        dialog.borrow_mut().handle_command(id);
+                    }
                     return LRESULT(0);
                 }
 
