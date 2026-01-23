@@ -116,6 +116,82 @@ impl DoubleBuffer {
         // 우측
         self.fill_rect(w - thickness, 0, thickness, h, color);
     }
+
+    /// 텍스트 그리기 (GDI 사용)
+    pub fn draw_text(&mut self, text: &str, x: i32, y: i32, color: u32) {
+        unsafe {
+            // 폰트 생성
+            let font = CreateFontW(
+                20,                    // 높이
+                0,                     // 너비 (0 = 자동)
+                0,                     // escapement
+                0,                     // orientation
+                FW_NORMAL.0 as i32,    // weight
+                0,                     // italic
+                0,                     // underline
+                0,                     // strikeout
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                DEFAULT_QUALITY,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                w!("맑은 고딕"),
+            );
+
+            let old_font = SelectObject(self.hdc_mem, font.into());
+
+            // 텍스트 색상 설정 (ARGB -> RGB)
+            let r = ((color >> 16) & 0xFF) as u8;
+            let g = ((color >> 8) & 0xFF) as u8;
+            let b = (color & 0xFF) as u8;
+            SetTextColor(self.hdc_mem, COLORREF(((b as u32) << 16) | ((g as u32) << 8) | (r as u32)));
+            SetBkMode(self.hdc_mem, TRANSPARENT);
+
+            // 텍스트 그리기
+            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            TextOutW(self.hdc_mem, x, y, &wide[..wide.len()-1]);
+
+            // 정리
+            SelectObject(self.hdc_mem, old_font);
+            let _ = DeleteObject(font.into());
+
+            // premultiplied alpha 적용 (레이어드 윈도우용)
+            self.apply_text_alpha(color);
+        }
+    }
+
+    /// 텍스트 영역에 알파 적용 (premultiplied alpha)
+    fn apply_text_alpha(&mut self, color: u32) {
+        let alpha = ((color >> 24) & 0xFF) as u8;
+        if alpha == 0 {
+            return;
+        }
+
+        unsafe {
+            let pixel_count = (self.width * self.height) as usize;
+            let pixels = std::slice::from_raw_parts_mut(self.bits as *mut u32, pixel_count);
+
+            for pixel in pixels.iter_mut() {
+                let current_alpha = (*pixel >> 24) & 0xFF;
+                // 텍스트가 그려진 픽셀 (알파가 0이 아닌 곳)
+                if current_alpha == 0 {
+                    let r = (*pixel >> 16) & 0xFF;
+                    let g = (*pixel >> 8) & 0xFF;
+                    let b = *pixel & 0xFF;
+
+                    // 텍스트 색상이 있는 픽셀에 알파 적용
+                    if r > 0 || g > 0 || b > 0 {
+                        // premultiplied alpha 적용
+                        let a = alpha as u32;
+                        let pr = (r * a) / 255;
+                        let pg = (g * a) / 255;
+                        let pb = (b * a) / 255;
+                        *pixel = (a << 24) | (pr << 16) | (pg << 8) | pb;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// 레이어드 윈도우 업데이트

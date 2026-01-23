@@ -29,6 +29,9 @@ const WINDOW_TITLE: PCWSTR = w!("아네모네");
 const MIN_WINDOW_SIZE: i32 = 100;
 const RESIZE_BORDER_WIDTH: i32 = 8;
 
+// 지연된 클립보드 처리를 위한 사용자 정의 메시지
+const WM_DEFERRED_CLIPBOARD: u32 = WM_USER + 200;
+
 pub struct App {
     hwnd: HWND,
     #[allow(dead_code)]
@@ -46,6 +49,7 @@ pub struct App {
     translate_hwnd: Option<HWND>,
     backlog_hwnd: Option<HWND>,
     magnetic: Option<MagneticManager>,
+    current_text: String,
 }
 
 // 전역 앱 인스턴스 (WndProc에서 접근용)
@@ -115,6 +119,7 @@ impl App {
                 translate_hwnd: None,
                 backlog_hwnd: None,
                 magnetic: None,
+                current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
             }));
 
             // 전역 인스턴스 설정
@@ -226,6 +231,11 @@ impl App {
         }
 
         drop(cfg);
+
+        // 텍스트 그리기
+        if !self.current_text.is_empty() {
+            buffer.draw_text(&self.current_text, 10, 10, 0xFFFFFFFF); // 흰색 텍스트
+        }
 
         // 레이어드 윈도우 업데이트
         window::update_layered_window(self.hwnd, buffer)?;
@@ -409,8 +419,12 @@ impl App {
             // 클립보드 텍스트 처리
             println!("Clipboard: {}", text);
 
+            // 현재 텍스트 업데이트 및 다시 그리기
+            self.current_text = text.clone();
+            let _ = self.paint();
+
             // 백로그에 추가
-            let entry = LogEntry::new(text.clone());
+            let entry = LogEntry::new(text);
             add_to_backlog(entry);
         }
     }
@@ -542,6 +556,17 @@ impl App {
                     // 클립보드 메시지
                     WM_DRAWCLIPBOARD => {
                         // try_borrow_mut 사용: SetClipboardViewer 호출 중에는 이미 borrow 상태일 수 있음
+                        if let Ok(mut app_ref) = app.try_borrow_mut() {
+                            app_ref.handle_clipboard_change();
+                        } else {
+                            // borrow 실패 시 메시지를 지연 처리
+                            let _ = PostMessageW(Some(hwnd), WM_DEFERRED_CLIPBOARD, WPARAM(0), LPARAM(0));
+                        }
+                        return LRESULT(0);
+                    }
+
+                    // 지연된 클립보드 처리
+                    msg if msg == WM_DEFERRED_CLIPBOARD => {
                         if let Ok(mut app_ref) = app.try_borrow_mut() {
                             app_ref.handle_clipboard_change();
                         }
