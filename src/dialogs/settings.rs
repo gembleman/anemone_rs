@@ -453,10 +453,12 @@ impl SettingsDialog {
             self.create_checkbox(360, 400, 80, 20, ctrl_id::USE_MAGNETIC, "자석", magnetic)?;
             let magnetic_min = self.config.borrow().magnetic_minimize;
             self.create_checkbox(435, 400, 45, 20, ctrl_id::MAGNETIC_MINIMIZE, "최소", magnetic_min)?;
+            let hide_win = self.config.borrow().temp_window_hide;
+            self.create_checkbox(260, 420, 60, 20, ctrl_id::HIDEWIN, "숨기기", hide_win)?;
             let clip_watch = self.config.borrow().clipboard_watch;
-            self.create_checkbox(260, 420, 100, 20, ctrl_id::CLIPBOARD_WATCH, "클립보드", clip_watch)?;
+            self.create_checkbox(320, 420, 70, 20, ctrl_id::CLIPBOARD_WATCH, "클립보드", clip_watch)?;
             let click_through = self.config.borrow().click_through;
-            self.create_checkbox(360, 420, 100, 20, ctrl_id::WNDCLICK_THROUGH, "클릭 통과", click_through)?;
+            self.create_checkbox(395, 420, 80, 20, ctrl_id::WNDCLICK_THROUGH, "클릭 통과", click_through)?;
 
             // ====== 테두리 설정 그룹 ======
             self.create_group_box(10, 485, 470, 60, "테두리 설정")?;
@@ -883,6 +885,12 @@ impl SettingsDialog {
             MAGNETIC_MINIMIZE => {
                 let mut cfg = self.config.borrow_mut();
                 cfg.magnetic_minimize = !cfg.magnetic_minimize;
+                drop(cfg);
+                self.notify_change();
+            }
+            HIDEWIN => {
+                let mut cfg = self.config.borrow_mut();
+                cfg.temp_window_hide = !cfg.temp_window_hide;
                 drop(cfg);
                 self.notify_change();
             }
