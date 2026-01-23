@@ -9,6 +9,8 @@ mod hotkey;
 mod clipboard;
 mod window;
 mod magnetic;
+mod screenshot;
+mod file_watch;
 
 use app::App;
 
