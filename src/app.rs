@@ -123,7 +123,7 @@ impl App {
             });
 
             // 초기화
-            {
+            let should_start_clipboard = {
                 let mut app_ref = app.borrow_mut();
 
                 // 더블 버퍼 초기화
@@ -141,13 +141,18 @@ impl App {
                 }
                 app_ref.hotkey = Some(hotkey);
 
-                // 클립보드 감시 시작
-                if app_ref.config.borrow().clipboard_watch {
-                    app_ref.clipboard.start();
-                }
-
                 // 초기 페인트
                 app_ref.paint()?;
+
+                // 클립보드 감시 여부 확인 (borrow_mut 블록 안에서)
+                app_ref.config.borrow().clipboard_watch
+            };
+
+            // 클립보드 감시 시작 (borrow_mut 블록 밖에서)
+            // SetClipboardViewer가 동기적으로 WM_DRAWCLIPBOARD를 보내므로
+            // RefCell이 borrow 상태가 아닐 때 호출해야 함
+            if should_start_clipboard {
+                app.borrow_mut().clipboard.start();
             }
 
             // 윈도우 표시
@@ -429,11 +434,16 @@ impl App {
         let app = APP.with(|cell| cell.borrow().clone());
 
         if let Some(app) = app {
-            // TaskbarCreated 메시지 체크
-            let taskbar_msg = app.borrow().taskbar_created_msg;
-            if msg == taskbar_msg {
-                app.borrow_mut().tray.restore();
-                return LRESULT(0);
+            // TaskbarCreated 메시지 체크 (try_borrow 사용: 재진입 방지)
+            if let Ok(app_ref) = app.try_borrow() {
+                let taskbar_msg = app_ref.taskbar_created_msg;
+                drop(app_ref);  // borrow 해제 후 borrow_mut
+                if msg == taskbar_msg {
+                    if let Ok(mut app_ref) = app.try_borrow_mut() {
+                        app_ref.tray.restore();
+                    }
+                    return LRESULT(0);
+                }
             }
 
             unsafe {
@@ -531,12 +541,18 @@ impl App {
 
                     // 클립보드 메시지
                     WM_DRAWCLIPBOARD => {
-                        app.borrow_mut().handle_clipboard_change();
+                        // try_borrow_mut 사용: SetClipboardViewer 호출 중에는 이미 borrow 상태일 수 있음
+                        if let Ok(mut app_ref) = app.try_borrow_mut() {
+                            app_ref.handle_clipboard_change();
+                        }
                         return LRESULT(0);
                     }
 
                     WM_CHANGECBCHAIN => {
-                        app.borrow_mut().clipboard.on_change_chain(wparam, lparam);
+                        // try_borrow_mut 사용: 재진입 방지
+                        if let Ok(mut app_ref) = app.try_borrow_mut() {
+                            app_ref.clipboard.on_change_chain(wparam, lparam);
+                        }
                         return LRESULT(0);
                     }
 
