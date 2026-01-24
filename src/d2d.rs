@@ -18,6 +18,146 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::window::TextRenderStyle;
 
+/// IDWriteTextRenderer 구현체 - 글리프를 ID2D1GeometrySink로 출력
+#[windows::core::implement(IDWriteTextRenderer, IDWritePixelSnapping)]
+struct OutlineTextRenderer {
+    d2d_factory: ID2D1Factory,
+    sink: ID2D1GeometrySink,
+}
+
+impl OutlineTextRenderer {
+    fn new(d2d_factory: ID2D1Factory, sink: ID2D1GeometrySink) -> Self {
+        Self {
+            d2d_factory,
+            sink,
+        }
+    }
+}
+
+impl IDWritePixelSnapping_Impl for OutlineTextRenderer_Impl {
+    fn IsPixelSnappingDisabled(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+    ) -> windows::core::Result<BOOL> {
+        Ok(FALSE)
+    }
+
+    fn GetCurrentTransform(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        transform: *mut DWRITE_MATRIX,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            *transform = DWRITE_MATRIX {
+                m11: 1.0,
+                m12: 0.0,
+                m21: 0.0,
+                m22: 1.0,
+                dx: 0.0,
+                dy: 0.0,
+            };
+        }
+        Ok(())
+    }
+
+    fn GetPixelsPerDip(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+    ) -> windows::core::Result<f32> {
+        Ok(1.0)
+    }
+}
+
+impl IDWriteTextRenderer_Impl for OutlineTextRenderer_Impl {
+    fn DrawGlyphRun(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        baselineoriginx: f32,
+        baselineoriginy: f32,
+        _measuringmode: DWRITE_MEASURING_MODE,
+        glyphrun: *const DWRITE_GLYPH_RUN,
+        _glyphrundescription: *const DWRITE_GLYPH_RUN_DESCRIPTION,
+        _clientdrawingeffect: windows::core::Ref<'_, windows::core::IUnknown>,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            let glyph_run = &*glyphrun;
+
+            // FontFace에서 글리프 아웃라인을 geometry sink로 출력
+            if let Some(font_face) = &*glyph_run.fontFace {
+                // 임시 PathGeometry를 만들어서 글리프 아웃라인 추출
+                let temp_geometry: ID2D1PathGeometry = self.d2d_factory.CreatePathGeometry()?;
+                let temp_sink = temp_geometry.Open()?;
+
+                font_face.GetGlyphRunOutline(
+                    glyph_run.fontEmSize,
+                    glyph_run.glyphIndices,
+                    Some(glyph_run.glyphAdvances),
+                    Some(glyph_run.glyphOffsets),
+                    glyph_run.glyphCount,
+                    glyph_run.isSideways.into(),
+                    glyph_run.bidiLevel & 1 != 0,
+                    &temp_sink,
+                )?;
+
+                temp_sink.Close()?;
+
+                // baseline 위치를 적용한 TransformedGeometry 생성
+                let transform = Matrix3x2::translation(baselineoriginx, baselineoriginy);
+                let transformed: ID2D1TransformedGeometry = self.d2d_factory
+                    .CreateTransformedGeometry(&temp_geometry, &transform)?;
+
+                // TransformedGeometry를 최종 sink로 출력 (Simplify 사용)
+                let geometry: ID2D1Geometry = transformed.cast()?;
+                geometry.Simplify(
+                    D2D1_GEOMETRY_SIMPLIFICATION_OPTION_CUBICS_AND_LINES,
+                    None,
+                    D2D1_DEFAULT_FLATTENING_TOLERANCE,
+                    &self.sink,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn DrawUnderline(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        _baselineoriginx: f32,
+        _baselineoriginy: f32,
+        _underline: *const DWRITE_UNDERLINE,
+        _clientdrawingeffect: windows::core::Ref<'_, windows::core::IUnknown>,
+    ) -> windows::core::Result<()> {
+        // 외곽선에서는 밑줄 무시
+        Ok(())
+    }
+
+    fn DrawStrikethrough(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        _baselineoriginx: f32,
+        _baselineoriginy: f32,
+        _strikethrough: *const DWRITE_STRIKETHROUGH,
+        _clientdrawingeffect: windows::core::Ref<'_, windows::core::IUnknown>,
+    ) -> windows::core::Result<()> {
+        // 외곽선에서는 취소선 무시
+        Ok(())
+    }
+
+    fn DrawInlineObject(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        _originx: f32,
+        _originy: f32,
+        _inlineobject: windows::core::Ref<'_, IDWriteInlineObject>,
+        _issideways: BOOL,
+        _isrighttoleft: BOOL,
+        _clientdrawingeffect: windows::core::Ref<'_, windows::core::IUnknown>,
+    ) -> windows::core::Result<()> {
+        // 인라인 객체 무시
+        Ok(())
+    }
+}
+
 /// Direct2D 기반 렌더러
 pub struct D2DRenderer {
     d2d_factory: ID2D1Factory,
@@ -387,7 +527,8 @@ impl D2DRenderer {
         Ok(())
     }
 
-    /// 다중 DrawTextLayout으로 외곽선 근사 (8방향 + 추가 픽셀)
+    /// Geometry 기반 텍스트 외곽선 그리기
+    /// IDWriteFontFace::GetGlyphRunOutline을 사용하여 정확한 벡터 외곽선 생성
     fn draw_text_outline(
         &self,
         target: &ID2D1DCRenderTarget,
@@ -398,26 +539,46 @@ impl D2DRenderer {
         color: u32,
     ) -> Result<()> {
         unsafe {
-            let brush = self.create_solid_brush(target, color)?;
+            // 1. PathGeometry 생성
+            let path_geometry: ID2D1PathGeometry = self.d2d_factory.CreatePathGeometry()?;
+            let sink = path_geometry.Open()?;
 
-            // 외곽선 두께만큼 모든 방향으로 텍스트 그리기
-            for dy in -thickness..=thickness {
-                for dx in -thickness..=thickness {
-                    if dx == 0 && dy == 0 {
-                        continue;
-                    }
-                    // 유클리드 거리로 원형 외곽선 근사
-                    let dist_sq = dx * dx + dy * dy;
-                    if dist_sq <= thickness * thickness {
-                        target.DrawTextLayout(
-                            Vector2::new(x + dx as f32, y + dy as f32),
-                            text_layout,
-                            &brush,
-                            D2D1_DRAW_TEXT_OPTIONS_NONE,
-                        );
-                    }
-                }
-            }
+            // 2. 커스텀 텍스트 렌더러로 글리프 아웃라인 추출
+            let renderer: IDWriteTextRenderer = OutlineTextRenderer::new(
+                self.d2d_factory.clone(),
+                sink.clone(),
+            )
+            .into();
+
+            text_layout.Draw(None, &renderer, x, y)?;
+
+            sink.Close()?;
+
+            // 3. 외곽선 스타일 설정 (둥근 조인과 캡)
+            let stroke_style = self.d2d_factory.CreateStrokeStyle(
+                &D2D1_STROKE_STYLE_PROPERTIES {
+                    startCap: D2D1_CAP_STYLE_ROUND,
+                    endCap: D2D1_CAP_STYLE_ROUND,
+                    dashCap: D2D1_CAP_STYLE_ROUND,
+                    lineJoin: D2D1_LINE_JOIN_ROUND,
+                    miterLimit: 1.0,
+                    dashStyle: D2D1_DASH_STYLE_SOLID,
+                    dashOffset: 0.0,
+                },
+                None,
+            )?;
+
+            // 4. 외곽선 그리기
+            let brush = self.create_solid_brush(target, color)?;
+            target.DrawGeometry(
+                &path_geometry,
+                &brush,
+                thickness as f32 * 2.0, // stroke는 양쪽으로 그려지므로 2배
+                Some(&stroke_style),
+            );
+
+            // 5. 내부 채우기 (외곽선 색상으로)
+            target.FillGeometry(&path_geometry, &brush, None);
         }
 
         Ok(())
