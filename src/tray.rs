@@ -1,4 +1,5 @@
 use std::mem::zeroed;
+use std::ptr::{addr_of_mut, write_unaligned};
 
 use windows::{
     Win32::{
@@ -41,8 +42,13 @@ impl TrayIcon {
             // 툴팁 설정
             let tip = "아네모네";
             let tip_wide: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
-            let copy_len = tip_wide.len().min(self.nid.szTip.len());
-            self.nid.szTip[..copy_len].copy_from_slice(&tip_wide[..copy_len]);
+            // packed struct 문제 회피: write_unaligned 사용 (정렬되지 않은 주소 접근)
+            let sz_tip_ptr = addr_of_mut!(self.nid.szTip) as *mut u16;
+            let sz_tip_len = 128; // NOTIFYICONDATAW.szTip의 고정 크기
+            let copy_len = tip_wide.len().min(sz_tip_len);
+            for i in 0..copy_len {
+                write_unaligned(sz_tip_ptr.add(i), tip_wide[i]);
+            }
 
             let _ = Shell_NotifyIconW(NIM_ADD, &self.nid);
             self.registered = true;
@@ -71,9 +77,16 @@ impl TrayIcon {
 
     #[allow(dead_code)]
     pub fn update_tooltip(&mut self, tip: &str) {
-        let tip_wide: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
-        let copy_len = tip_wide.len().min(self.nid.szTip.len());
-        self.nid.szTip[..copy_len].copy_from_slice(&tip_wide[..copy_len]);
+        unsafe {
+            let tip_wide: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
+            // packed struct 문제 회피: write_unaligned 사용 (정렬되지 않은 주소 접근)
+            let sz_tip_ptr = addr_of_mut!(self.nid.szTip) as *mut u16;
+            let sz_tip_len = 128; // NOTIFYICONDATAW.szTip의 고정 크기
+            let copy_len = tip_wide.len().min(sz_tip_len);
+            for i in 0..copy_len {
+                write_unaligned(sz_tip_ptr.add(i), tip_wide[i]);
+            }
+        }
 
         if self.registered {
             unsafe {

@@ -27,10 +27,7 @@ struct OutlineTextRenderer {
 
 impl OutlineTextRenderer {
     fn new(d2d_factory: ID2D1Factory, sink: ID2D1GeometrySink) -> Self {
-        Self {
-            d2d_factory,
-            sink,
-        }
+        Self { d2d_factory, sink }
     }
 }
 
@@ -103,7 +100,8 @@ impl IDWriteTextRenderer_Impl for OutlineTextRenderer_Impl {
 
                 // baseline 위치를 적용한 TransformedGeometry 생성
                 let transform = Matrix3x2::translation(baselineoriginx, baselineoriginy);
-                let transformed: ID2D1TransformedGeometry = self.d2d_factory
+                let transformed: ID2D1TransformedGeometry = self
+                    .d2d_factory
                     .CreateTransformedGeometry(&temp_geometry, &transform)?;
 
                 // TransformedGeometry를 최종 sink로 출력 (Simplify 사용)
@@ -544,11 +542,8 @@ impl D2DRenderer {
             let sink = path_geometry.Open()?;
 
             // 2. 커스텀 텍스트 렌더러로 글리프 아웃라인 추출
-            let renderer: IDWriteTextRenderer = OutlineTextRenderer::new(
-                self.d2d_factory.clone(),
-                sink.clone(),
-            )
-            .into();
+            let renderer: IDWriteTextRenderer =
+                OutlineTextRenderer::new(self.d2d_factory.clone(), sink.clone()).into();
 
             text_layout.Draw(None, &renderer, x, y)?;
 

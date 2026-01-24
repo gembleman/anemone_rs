@@ -2,6 +2,7 @@
 //!
 //! 수동 번역 입력을 위한 대화상자.
 //! Edit 컨트롤 서브클래싱으로 Ctrl+A 전체 선택 지원.
+//! 번역 엔진 선택 (EzTrans, Google, DeepL) 및 언어 선택 지원.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -16,6 +17,9 @@ use windows::{
 };
 
 use crate::config::Config;
+use crate::translation::{
+    get_translation_manager, Language, TranslationEngine, TranslationResult,
+};
 
 const CF_UNICODETEXT: u32 = 13;
 
@@ -31,11 +35,15 @@ mod ctrl_id {
     pub const RADIO_OUTPUT_1: u16 = 2010;
     pub const RADIO_OUTPUT_2: u16 = 2011;
     pub const RADIO_OUTPUT_3: u16 = 2012;
+    // 번역 엔진 선택
+    pub const COMBO_ENGINE: u16 = 2020;
+    pub const COMBO_SOURCE_LANG: u16 = 2021;
+    pub const COMBO_TARGET_LANG: u16 = 2022;
 }
 
 const TRANSLATE_CLASS_NAME: PCWSTR = w!("AnemoneTranslateClass");
 const TRANSLATE_WIDTH: i32 = 500;
-const TRANSLATE_HEIGHT: i32 = 450;
+const TRANSLATE_HEIGHT: i32 = 520;
 
 /// 출력 형식
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -50,15 +58,18 @@ pub enum OutputFormat {
 pub struct TranslateDialog {
     hwnd: HWND,
     main_hwnd: HWND,
-    #[allow(dead_code)]
     config: Rc<RefCell<Config>>,
     source_edit: HWND,
     dest_edit: HWND,
+    engine_combo: HWND,
+    source_lang_combo: HWND,
+    target_lang_combo: HWND,
     one_go: bool,
     no_linefeed: bool,
     output_format: OutputFormat,
     original_source_proc: isize,
     original_dest_proc: isize,
+    engine_initialized: bool,
 }
 
 thread_local! {
@@ -128,11 +139,15 @@ impl TranslateDialog {
                 config,
                 source_edit: HWND::default(),
                 dest_edit: HWND::default(),
+                engine_combo: HWND::default(),
+                source_lang_combo: HWND::default(),
+                target_lang_combo: HWND::default(),
                 one_go: false,
                 no_linefeed: false,
                 output_format: OutputFormat::Normal,
                 original_source_proc: 0,
                 original_dest_proc: 0,
+                engine_initialized: false,
             }));
 
             // 전역 인스턴스 설정
@@ -157,8 +172,61 @@ impl TranslateDialog {
             let hinst = GetModuleHandleW(None)?;
             let hfont = GetStockObject(DEFAULT_GUI_FONT);
 
+            // ====== 번역 엔진 선택 그룹 ======
+            self.create_group_box(10, 5, 475, 55, "번역 설정")?;
+
+            // 엔진 선택
+            self.create_label(20, 28, 40, 18, "엔진:")?;
+            self.engine_combo = self.create_combobox(65, 25, 100, 150, ctrl_id::COMBO_ENGINE)?;
+            self.add_combobox_item(self.engine_combo, "EzTrans");
+            self.add_combobox_item(self.engine_combo, "Google");
+            self.add_combobox_item(self.engine_combo, "DeepL");
+
+            // 소스 언어
+            self.create_label(180, 28, 40, 18, "소스:")?;
+            self.source_lang_combo =
+                self.create_combobox(220, 25, 100, 150, ctrl_id::COMBO_SOURCE_LANG)?;
+            self.add_combobox_item(self.source_lang_combo, "일본어");
+            self.add_combobox_item(self.source_lang_combo, "한국어");
+            self.add_combobox_item(self.source_lang_combo, "영어");
+            self.add_combobox_item(self.source_lang_combo, "중국어(간체)");
+            self.add_combobox_item(self.source_lang_combo, "중국어(번체)");
+
+            // 타겟 언어
+            self.create_label(335, 28, 40, 18, "타겟:")?;
+            self.target_lang_combo =
+                self.create_combobox(375, 25, 100, 150, ctrl_id::COMBO_TARGET_LANG)?;
+            self.add_combobox_item(self.target_lang_combo, "일본어");
+            self.add_combobox_item(self.target_lang_combo, "한국어");
+            self.add_combobox_item(self.target_lang_combo, "영어");
+            self.add_combobox_item(self.target_lang_combo, "중국어(간체)");
+            self.add_combobox_item(self.target_lang_combo, "중국어(번체)");
+
+            // 설정에서 초기값 로드
+            {
+                let config = self.config.borrow();
+                let _ = SendMessageW(
+                    self.engine_combo,
+                    CB_SETCURSEL,
+                    Some(WPARAM(config.translation.engine as usize)),
+                    None,
+                );
+                let _ = SendMessageW(
+                    self.source_lang_combo,
+                    CB_SETCURSEL,
+                    Some(WPARAM(config.translation.source_lang as usize)),
+                    None,
+                );
+                let _ = SendMessageW(
+                    self.target_lang_combo,
+                    CB_SETCURSEL,
+                    Some(WPARAM(config.translation.target_lang as usize)),
+                    None,
+                );
+            }
+
             // ====== 원문 입력 그룹 ======
-            self.create_group_box(10, 5, 475, 150, "원문 입력")?;
+            self.create_group_box(10, 65, 475, 130, "원문 입력")?;
 
             // 원문 Edit (multiline)
             self.source_edit = CreateWindowExW(
@@ -174,9 +242,9 @@ impl TranslateDialog {
                         | ES_WANTRETURN as u32,
                 ),
                 20,
-                25,
+                85,
                 455,
-                120,
+                100,
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::SOURCE_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -196,14 +264,25 @@ impl TranslateDialog {
                 Some(LPARAM(0)),
             );
             // 서브클래싱
-            self.original_source_proc = SetWindowLongPtrW(
-                self.source_edit,
-                GWLP_WNDPROC,
-                Self::edit_subclass_proc as isize,
-            );
+            #[cfg(target_pointer_width = "64")]
+            {
+                self.original_source_proc = SetWindowLongPtrW(
+                    self.source_edit,
+                    GWLP_WNDPROC,
+                    Self::edit_subclass_proc as isize,
+                );
+            }
+            #[cfg(target_pointer_width = "32")]
+            {
+                self.original_source_proc = SetWindowLongW(
+                    self.source_edit,
+                    GWLP_WNDPROC,
+                    Self::edit_subclass_proc as i32,
+                ) as isize;
+            }
 
             // ====== 번역 결과 그룹 ======
-            self.create_group_box(10, 160, 475, 150, "번역 결과")?;
+            self.create_group_box(10, 200, 475, 130, "번역 결과")?;
 
             // 번역 Edit (readonly, multiline)
             self.dest_edit = CreateWindowExW(
@@ -219,9 +298,9 @@ impl TranslateDialog {
                         | ES_READONLY as u32,
                 ),
                 20,
-                180,
+                220,
                 455,
-                120,
+                100,
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::DEST_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -240,19 +319,30 @@ impl TranslateDialog {
                 Some(LPARAM(0)),
             );
             // 서브클래싱
-            self.original_dest_proc = SetWindowLongPtrW(
-                self.dest_edit,
-                GWLP_WNDPROC,
-                Self::edit_subclass_proc as isize,
-            );
+            #[cfg(target_pointer_width = "64")]
+            {
+                self.original_dest_proc = SetWindowLongPtrW(
+                    self.dest_edit,
+                    GWLP_WNDPROC,
+                    Self::edit_subclass_proc as isize,
+                );
+            }
+            #[cfg(target_pointer_width = "32")]
+            {
+                self.original_dest_proc = SetWindowLongW(
+                    self.dest_edit,
+                    GWLP_WNDPROC,
+                    Self::edit_subclass_proc as i32,
+                ) as isize;
+            }
 
             // ====== 옵션 그룹 ======
-            self.create_group_box(10, 315, 230, 90, "옵션")?;
+            self.create_group_box(10, 335, 230, 90, "옵션")?;
 
             // 체크박스들
             self.create_checkbox(
                 20,
-                335,
+                355,
                 100,
                 20,
                 ctrl_id::CHK_ONE_GO,
@@ -261,7 +351,7 @@ impl TranslateDialog {
             )?;
             self.create_checkbox(
                 125,
-                335,
+                355,
                 110,
                 20,
                 ctrl_id::CHK_NO_LINEFEED,
@@ -270,10 +360,10 @@ impl TranslateDialog {
             )?;
 
             // 출력 형식 라디오 버튼
-            self.create_label(20, 360, 70, 18, "출력 형식:")?;
+            self.create_label(20, 380, 70, 18, "출력 형식:")?;
             self.create_radio(
                 95,
-                358,
+                378,
                 50,
                 20,
                 ctrl_id::RADIO_OUTPUT_1,
@@ -282,7 +372,7 @@ impl TranslateDialog {
             )?;
             self.create_radio(
                 150,
-                358,
+                378,
                 50,
                 20,
                 ctrl_id::RADIO_OUTPUT_2,
@@ -291,7 +381,7 @@ impl TranslateDialog {
             )?;
             self.create_radio(
                 205,
-                358,
+                378,
                 50,
                 20,
                 ctrl_id::RADIO_OUTPUT_3,
@@ -300,12 +390,12 @@ impl TranslateDialog {
             )?;
 
             // ====== 버튼 그룹 ======
-            self.create_group_box(250, 315, 235, 90, "동작")?;
+            self.create_group_box(250, 335, 235, 90, "동작")?;
 
             // 버튼들
-            self.create_button(265, 340, 65, 28, ctrl_id::BTN_TRANSLATE, "번역")?;
-            self.create_button(340, 340, 65, 28, ctrl_id::BTN_COPY, "복사")?;
-            self.create_button(415, 340, 60, 28, ctrl_id::BTN_CLEAR, "초기화")?;
+            self.create_button(265, 360, 65, 28, ctrl_id::BTN_TRANSLATE, "번역")?;
+            self.create_button(340, 360, 65, 28, ctrl_id::BTN_COPY, "복사")?;
+            self.create_button(415, 360, 60, 28, ctrl_id::BTN_CLEAR, "초기화")?;
 
             Ok(())
         }
@@ -516,6 +606,55 @@ impl TranslateDialog {
         }
     }
 
+    unsafe fn create_combobox(&self, x: i32, y: i32, w: i32, h: i32, id: u16) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("COMBOBOX"),
+                w!(""),
+                WINDOW_STYLE(
+                    WS_CHILD.0
+                        | WS_VISIBLE.0
+                        | CBS_DROPDOWNLIST as u32
+                        | CBS_HASSTRINGS as u32
+                        | WS_VSCROLL.0,
+                ),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                Some(HMENU(id as isize as *mut _)),
+                Some(hinst.into()),
+                None,
+            )?;
+
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
+
+            Ok(hwnd)
+        }
+    }
+
+    fn add_combobox_item(&self, combo: HWND, text: &str) {
+        unsafe {
+            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = SendMessageW(
+                combo,
+                CB_ADDSTRING,
+                None,
+                Some(LPARAM(wide.as_ptr() as isize)),
+            );
+        }
+    }
+
     /// Edit 서브클래스 프로시저 (Ctrl+A 지원)
     unsafe extern "system" fn edit_subclass_proc(
         hwnd: HWND,
@@ -590,12 +729,78 @@ impl TranslateDialog {
         unsafe { Self::set_edit_text(self.dest_edit, text) }
     }
 
-    /// 번역 수행 (현재는 원문을 그대로 복사 - 추후 번역 엔진 연동)
+    /// 번역 엔진 초기화
+    fn init_translation_engine(&mut self) {
+        if self.engine_initialized {
+            return;
+        }
+
+        let config = self.config.borrow();
+        let manager = get_translation_manager();
+
+        if let Ok(mut mgr) = manager.lock() {
+            // EzTrans 초기화
+            if !config.translation.eztrans_dll_path.is_empty()
+                && !config.translation.eztrans_dat_path.is_empty()
+            {
+                let _ = mgr.init_eztrans(
+                    &config.translation.eztrans_dll_path,
+                    &config.translation.eztrans_dat_path,
+                );
+            }
+
+            // DeepL API 키 설정
+            if !config.translation.deepl_api_key.is_empty() {
+                mgr.set_deepl_api_key(config.translation.deepl_api_key.clone());
+            }
+
+            // 엔진 설정
+            mgr.set_engine(TranslationEngine::from_u8(config.translation.engine));
+            mgr.set_source_language(Language::from_u8(config.translation.source_lang));
+            mgr.set_target_language(Language::from_u8(config.translation.target_lang));
+        }
+
+        self.engine_initialized = true;
+    }
+
+    /// 현재 선택된 엔진/언어를 매니저에 적용
+    fn apply_current_settings(&self) {
+        unsafe {
+            let engine_idx = SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8;
+            let source_idx =
+                SendMessageW(self.source_lang_combo, CB_GETCURSEL, None, None).0 as u8;
+            let target_idx =
+                SendMessageW(self.target_lang_combo, CB_GETCURSEL, None, None).0 as u8;
+
+            let manager = get_translation_manager();
+            if let Ok(mut mgr) = manager.lock() {
+                mgr.set_engine(TranslationEngine::from_u8(engine_idx));
+                mgr.set_source_language(Language::from_u8(source_idx));
+                mgr.set_target_language(Language::from_u8(target_idx));
+            }
+
+            // 설정 저장
+            {
+                let mut config = self.config.borrow_mut();
+                config.translation.engine = engine_idx;
+                config.translation.source_lang = source_idx;
+                config.translation.target_lang = target_idx;
+            }
+        }
+    }
+
+    /// 번역 수행
     fn do_translate(&mut self) {
         let source = self.get_source_text();
         if source.is_empty() {
             return;
         }
+
+        // 엔진 초기화
+        self.init_translation_engine();
+
+        // 현재 설정 적용
+        self.apply_current_settings();
 
         // 줄바꿈 제거 옵션 처리
         let text = if self.no_linefeed {
@@ -604,9 +809,33 @@ impl TranslateDialog {
             source
         };
 
-        // TODO: 실제 번역 엔진 연동
-        // 현재는 원문을 그대로 표시 (플레이스홀더)
-        let result = format!("[번역 결과]\n{}", text);
+        // 번역 수행
+        let manager = get_translation_manager();
+        let result = if let Ok(mgr) = manager.lock() {
+            match mgr.translate(&text) {
+                TranslationResult::Success(translated) => {
+                    // 출력 형식 적용
+                    match self.output_format {
+                        OutputFormat::Normal => translated,
+                        OutputFormat::Brackets => format!("「{}」", translated),
+                        OutputFormat::NameSplit => {
+                            // 이름 분리 처리 (간단 구현)
+                            if let Some((name, rest)) = translated.split_once([':', '：']) {
+                                format!("{}\n{}", name.trim(), rest.trim())
+                            } else {
+                                translated
+                            }
+                        }
+                    }
+                }
+                TranslationResult::Error(err) => {
+                    format!("[오류] {}", err)
+                }
+            }
+        } else {
+            "[오류] 번역 엔진 잠금 실패".to_string()
+        };
+
         self.set_dest_text(&result);
     }
 
@@ -659,7 +888,7 @@ impl TranslateDialog {
     }
 
     /// 명령 처리
-    fn handle_command(&mut self, cmd: u16) {
+    fn handle_command(&mut self, cmd: u16, notify_code: u32) {
         use ctrl_id::*;
 
         match cmd {
@@ -687,6 +916,12 @@ impl TranslateDialog {
             RADIO_OUTPUT_3 => {
                 self.output_format = OutputFormat::NameSplit;
             }
+            COMBO_ENGINE | COMBO_SOURCE_LANG | COMBO_TARGET_LANG => {
+                // CBN_SELCHANGE
+                if notify_code == 1 {
+                    self.apply_current_settings();
+                }
+            }
             _ => {}
         }
     }
@@ -713,7 +948,7 @@ impl TranslateDialog {
                                 dialog.borrow_mut().do_translate();
                             }
                         } else {
-                            dialog.borrow_mut().handle_command(id);
+                            dialog.borrow_mut().handle_command(id, notify_code);
                         }
                         return LRESULT(0);
                     }

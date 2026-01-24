@@ -147,6 +147,36 @@ impl Default for HookConfig {
     }
 }
 
+/// 번역 설정
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TranslationConfig {
+    /// 번역 엔진 (0: EzTrans, 1: Google, 2: DeepL)
+    pub engine: u8,
+    /// 소스 언어 (0: 일본어, 1: 한국어, 2: 영어, 3: 중국어간체, 4: 중국어번체)
+    pub source_lang: u8,
+    /// 타겟 언어
+    pub target_lang: u8,
+    /// EzTrans DLL 경로
+    pub eztrans_dll_path: String,
+    /// EzTrans Dat 경로
+    pub eztrans_dat_path: String,
+    /// DeepL API 키
+    pub deepl_api_key: String,
+}
+
+impl Default for TranslationConfig {
+    fn default() -> Self {
+        Self {
+            engine: 0,                             // EzTrans
+            source_lang: 0,                        // 일본어
+            target_lang: 1,                        // 한국어
+            eztrans_dll_path: String::new(),
+            eztrans_dat_path: String::new(),
+            deepl_api_key: String::new(),
+        }
+    }
+}
+
 /// 애플리케이션 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -208,6 +238,10 @@ pub struct Config {
     // 후크 설정
     #[serde(default)]
     pub hook: HookConfig,
+
+    // 번역 설정
+    #[serde(default)]
+    pub translation: TranslationConfig,
 
     // 외부 단축키 사용
     pub extern_hotkey: bool,
@@ -288,6 +322,9 @@ impl Default for Config {
 
             // 후크
             hook: HookConfig::default(),
+
+            // 번역
+            translation: TranslationConfig::default(),
 
             // 기타 옵션
             extern_hotkey: false,

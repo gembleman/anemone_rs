@@ -157,7 +157,9 @@ impl FontDialog {
             cf.Flags = CF_SCREENFONTS | CF_NOVERTFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOSCRIPTSEL;
 
             if config.no_activate {
-                cf.Flags |= CF_ENABLEHOOK;
+                let mut flags = cf.Flags;
+                flags |= CF_ENABLEHOOK;
+                cf.Flags = flags;
                 cf.lpfnHook = Some(Self::hook_proc_noactivate);
             }
 

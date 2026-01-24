@@ -8,7 +8,6 @@
 
 use std::mem::zeroed;
 use std::path::{Path, PathBuf};
-use std::ptr::null_mut;
 
 use windows::{
     Win32::{
