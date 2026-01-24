@@ -9,12 +9,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::{
+    Win32::{Foundation::*, UI::Accessibility::*, UI::WindowsAndMessaging::*},
     core::*,
-    Win32::{
-        Foundation::*,
-        UI::Accessibility::*,
-        UI::WindowsAndMessaging::*,
-    },
 };
 
 use crate::config::Config;
@@ -106,7 +102,9 @@ impl MagneticManager {
         // 포그라운드 윈도우를 타겟으로 설정
         let target = unsafe { GetForegroundWindow() };
         if target.is_invalid() || target == self.main_hwnd {
-            return Err(Error::from_hresult(HRESULT::from_win32(ERROR_INVALID_WINDOW_HANDLE.0)));
+            return Err(Error::from_hresult(HRESULT::from_win32(
+                ERROR_INVALID_WINDOW_HANDLE.0,
+            )));
         }
 
         // 현재 위치로 오프셋 계산
@@ -152,7 +150,9 @@ impl MagneticManager {
         }
 
         if self.event_hook.0.is_null() {
-            return Err(Error::from_hresult(HRESULT::from_win32(unsafe { GetLastError().0 })));
+            return Err(Error::from_hresult(HRESULT::from_win32(unsafe {
+                GetLastError().0
+            })));
         }
 
         Ok(())

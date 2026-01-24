@@ -6,23 +6,23 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::{
-    core::*,
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
         System::LibraryLoader::GetModuleHandleW,
         UI::Controls::BST_CHECKED,
         UI::Controls::Dialogs::{
-            GetOpenFileNameW, GetSaveFileNameW, OPENFILENAMEW, OFN_ALLOWMULTISELECT,
-            OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST,
+            GetOpenFileNameW, GetSaveFileNameW, OFN_ALLOWMULTISELECT, OFN_EXPLORER,
+            OFN_FILEMUSTEXIST, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
         },
-        UI::WindowsAndMessaging::*,
         UI::Input::KeyboardAndMouse::EnableWindow,
+        UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 
 use crate::config::Config;
@@ -53,7 +53,7 @@ const FILE_TRANS_HEIGHT: i32 = 420;
 pub enum WriteType {
     #[default]
     TranslationOnly = 0, // 번역만
-    OriginalAndTrans = 1, // 원문 + 번역
+    OriginalAndTrans = 1,     // 원문 + 번역
     OriginalTransNewline = 2, // 원문 + 번역 + 개행
 }
 
@@ -198,10 +198,7 @@ impl FileTransDialog {
                 w!("EDIT"),
                 w!(""),
                 WINDOW_STYLE(
-                    WS_CHILD.0
-                        | WS_VISIBLE.0
-                        | ES_AUTOHSCROLL as u32
-                        | ES_READONLY as u32,
+                    WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
                 ),
                 75,
                 27,
@@ -233,10 +230,7 @@ impl FileTransDialog {
                 w!("EDIT"),
                 w!(""),
                 WINDOW_STYLE(
-                    WS_CHILD.0
-                        | WS_VISIBLE.0
-                        | ES_AUTOHSCROLL as u32
-                        | ES_READONLY as u32,
+                    WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
                 ),
                 75,
                 102,
@@ -346,14 +340,7 @@ impl FileTransDialog {
     }
 
     // 헬퍼 함수들
-    unsafe fn create_group_box(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        text: &str,
-    ) -> Result<HWND> {
+    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
         unsafe {
             let hinst = GetModuleHandleW(None)?;
             let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
@@ -749,16 +736,14 @@ impl FileTransDialog {
         self.cancel_token.store(false, Ordering::SeqCst);
 
         // 진행률 대화상자 생성
-        let progress_hwnd = match FileTransProgressDialog::show(
-            self.hwnd,
-            self.cancel_token.clone(),
-        ) {
-            Ok(hwnd) => hwnd,
-            Err(e) => {
-                eprintln!("Failed to create progress dialog: {:?}", e);
-                return;
-            }
-        };
+        let progress_hwnd =
+            match FileTransProgressDialog::show(self.hwnd, self.cancel_token.clone()) {
+                Ok(hwnd) => hwnd,
+                Err(e) => {
+                    eprintln!("Failed to create progress dialog: {:?}", e);
+                    return;
+                }
+            };
 
         // 작업 데이터 생성 (HWND를 isize로 변환)
         let job_data = Arc::new(FileTransJobData {

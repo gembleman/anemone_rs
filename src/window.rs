@@ -2,12 +2,8 @@ use std::mem::zeroed;
 use std::ptr::null_mut;
 
 use windows::{
+    Win32::{Foundation::*, Graphics::Gdi::*, UI::WindowsAndMessaging::*},
     core::*,
-    Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        UI::WindowsAndMessaging::*,
-    },
 };
 
 /// 텍스트 렌더링 스타일
@@ -15,8 +11,8 @@ use windows::{
 pub struct TextRenderStyle {
     pub font_size: i32,
     pub font_face: String,
-    pub font_style: u8,  // 0: normal, 1: bold, 2: italic, 3: bold+italic
-    pub color: u32,      // ARGB
+    pub font_style: u8, // 0: normal, 1: bold, 2: italic, 3: bold+italic
+    pub color: u32,     // ARGB
     pub outline1_size: i32,
     pub outline1_color: u32,
     pub outline2_size: i32,
@@ -133,7 +129,6 @@ impl DoubleBuffer {
         // 우측
         self.fill_rect(w - thickness, 0, thickness, h, color);
     }
-
 }
 
 /// 레이어드 윈도우 업데이트
@@ -180,7 +175,11 @@ pub fn set_window_visible(hwnd: HWND, visible: bool) {
 #[allow(dead_code)]
 pub fn set_topmost(hwnd: HWND, topmost: bool) {
     unsafe {
-        let hwnd_insert = if topmost { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        let hwnd_insert = if topmost {
+            HWND_TOPMOST
+        } else {
+            HWND_NOTOPMOST
+        };
         let _ = SetWindowPos(
             hwnd,
             Some(hwnd_insert),

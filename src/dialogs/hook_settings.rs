@@ -7,13 +7,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use windows::{
-    core::*,
     Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::LibraryLoader::GetModuleHandleW,
+        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 
 use crate::config::Config;
@@ -37,8 +35,8 @@ const LBS_NOINTEGRALHEIGHT: u32 = 0x0100;
 mod ctrl_id {
     pub const ACTIVE_LIST: u16 = 6001;
     pub const INACTIVE_LIST: u16 = 6002;
-    pub const BTN_TO_INACTIVE: u16 = 6010;  // -> (활성 -> 비활성)
-    pub const BTN_TO_ACTIVE: u16 = 6011;    // <- (비활성 -> 활성)
+    pub const BTN_TO_INACTIVE: u16 = 6010; // -> (활성 -> 비활성)
+    pub const BTN_TO_ACTIVE: u16 = 6011; // <- (비활성 -> 활성)
     pub const BTN_UP: u16 = 6020;
     pub const BTN_DOWN: u16 = 6021;
     pub const BTN_APPLY: u16 = 6030;
@@ -122,7 +120,10 @@ impl HookSettingsDialog {
             // Config에서 후크 목록 복사
             let (active, inactive) = {
                 let cfg = config.borrow();
-                (cfg.hook.active_hooks.clone(), cfg.hook.inactive_hooks.clone())
+                (
+                    cfg.hook.active_hooks.clone(),
+                    cfg.hook.inactive_hooks.clone(),
+                )
             };
 
             // 인스턴스 생성
@@ -219,13 +220,26 @@ impl HookSettingsDialog {
             )?;
 
             let hfont = GetStockObject(DEFAULT_GUI_FONT);
-            let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
             Ok(hwnd)
         }
     }
 
-    unsafe fn create_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+    unsafe fn create_button(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+    ) -> Result<HWND> {
         unsafe {
             let hinst = GetModuleHandleW(None)?;
             let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
@@ -246,7 +260,12 @@ impl HookSettingsDialog {
             )?;
 
             let hfont = GetStockObject(DEFAULT_GUI_FONT);
-            let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
             Ok(hwnd)
         }
@@ -279,7 +298,12 @@ impl HookSettingsDialog {
             )?;
 
             let hfont = GetStockObject(DEFAULT_GUI_FONT);
-            let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
             Ok(hwnd)
         }
@@ -314,7 +338,12 @@ impl HookSettingsDialog {
     /// ListBox 아이템 삭제
     unsafe fn listbox_delete_item(&self, hwnd: HWND, index: i32) {
         unsafe {
-            let _ = SendMessageW(hwnd, LB_DELETESTRING, Some(WPARAM(index as usize)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                hwnd,
+                LB_DELETESTRING,
+                Some(WPARAM(index as usize)),
+                Some(LPARAM(0)),
+            );
         }
     }
 
@@ -326,7 +355,12 @@ impl HookSettingsDialog {
     /// ListBox 선택 설정
     unsafe fn listbox_set_sel(&self, hwnd: HWND, index: i32) {
         unsafe {
-            let _ = SendMessageW(hwnd, LB_SETCURSEL, Some(WPARAM(index as usize)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                hwnd,
+                LB_SETCURSEL,
+                Some(WPARAM(index as usize)),
+                Some(LPARAM(0)),
+            );
         }
     }
 
@@ -338,7 +372,13 @@ impl HookSettingsDialog {
     /// ListBox 아이템 텍스트 가져오기
     unsafe fn listbox_get_text(&self, hwnd: HWND, index: i32) -> Option<String> {
         unsafe {
-            let len = SendMessageW(hwnd, LB_GETTEXTLEN, Some(WPARAM(index as usize)), Some(LPARAM(0))).0 as i32;
+            let len = SendMessageW(
+                hwnd,
+                LB_GETTEXTLEN,
+                Some(WPARAM(index as usize)),
+                Some(LPARAM(0)),
+            )
+            .0 as i32;
             if len == LB_ERR || len <= 0 {
                 return None;
             }

@@ -5,8 +5,8 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
@@ -23,7 +23,10 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
 
     // 입출력 파일 수 확인
     if job_data.input_files.len() != job_data.output_files.len() {
-        send_error(progress_hwnd, "입력 파일과 출력 파일 수가 일치하지 않습니다.");
+        send_error(
+            progress_hwnd,
+            "입력 파일과 출력 파일 수가 일치하지 않습니다.",
+        );
         return;
     }
 
@@ -35,8 +38,18 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     }
 
     // 전체 파일 수 및 라인 수 전송
-    send_progress_message(progress_hwnd, WM_PROGRESS_TOTAL_COUNT, 0, job_data.input_files.len() as isize);
-    send_progress_message(progress_hwnd, WM_PROGRESS_TOTAL_SIZE, 0, total_lines as isize);
+    send_progress_message(
+        progress_hwnd,
+        WM_PROGRESS_TOTAL_COUNT,
+        0,
+        job_data.input_files.len() as isize,
+    );
+    send_progress_message(
+        progress_hwnd,
+        WM_PROGRESS_TOTAL_SIZE,
+        0,
+        total_lines as isize,
+    );
 
     let mut global_current_line = 0;
 
@@ -105,23 +118,32 @@ fn process_single_file(
     global_current: &mut i32,
 ) -> Result<(), String> {
     // 입력 파일 열기
-    let input_file = File::open(input_path)
-        .map_err(|e| format!("입력 파일을 열 수 없습니다: {}\n{}", input_path.display(), e))?;
+    let input_file = File::open(input_path).map_err(|e| {
+        format!(
+            "입력 파일을 열 수 없습니다: {}\n{}",
+            input_path.display(),
+            e
+        )
+    })?;
     let reader = BufReader::new(input_file);
 
     // 출력 파일 생성
-    let output_file = File::create(output_path)
-        .map_err(|e| format!("출력 파일을 생성할 수 없습니다: {}\n{}", output_path.display(), e))?;
+    let output_file = File::create(output_path).map_err(|e| {
+        format!(
+            "출력 파일을 생성할 수 없습니다: {}\n{}",
+            output_path.display(),
+            e
+        )
+    })?;
     let mut writer = BufWriter::new(output_file);
 
     // UTF-8 BOM 쓰기
-    writer.write_all(&[0xEF, 0xBB, 0xBF]).map_err(|e| e.to_string())?;
+    writer
+        .write_all(&[0xEF, 0xBB, 0xBF])
+        .map_err(|e| e.to_string())?;
 
     // 라인 읽기
-    let lines: Vec<String> = reader
-        .lines()
-        .filter_map(|l| l.ok())
-        .collect();
+    let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
 
     let line_count = lines.len();
 
@@ -139,12 +161,23 @@ fn process_single_file(
         let translated = translate_line(line, job_data.no_trans_linefeed);
 
         // 출력 형식에 따라 쓰기
-        write_output(&mut writer, line, &translated, job_data.write_type, i == line_count - 1)?;
+        write_output(
+            &mut writer,
+            line,
+            &translated,
+            job_data.write_type,
+            i == line_count - 1,
+        )?;
 
         // 진행률 업데이트
         *global_current += 1;
         send_progress_message(progress_hwnd, WM_PROGRESS_UPDATE, (i + 1) as usize, 0);
-        send_progress_message(progress_hwnd, WM_PROGRESS_CURRENT, 0, *global_current as isize);
+        send_progress_message(
+            progress_hwnd,
+            WM_PROGRESS_CURRENT,
+            0,
+            *global_current as isize,
+        );
     }
 
     // 버퍼 플러시

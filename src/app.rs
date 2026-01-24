@@ -4,19 +4,17 @@ use std::ptr::null_mut;
 use std::rc::Rc;
 
 use windows::{
-    core::*,
     Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::LibraryLoader::GetModuleHandleW,
+        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 
 use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
 use crate::d2d::D2DRenderer;
-use crate::dialogs::{SettingsDialog, TranslateDialog, BacklogDialog, LogEntry, add_to_backlog};
+use crate::dialogs::{BacklogDialog, LogEntry, SettingsDialog, TranslateDialog, add_to_backlog};
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
@@ -509,7 +507,7 @@ impl App {
             // TaskbarCreated 메시지 체크 (try_borrow 사용: 재진입 방지)
             if let Ok(app_ref) = app.try_borrow() {
                 let taskbar_msg = app_ref.taskbar_created_msg;
-                drop(app_ref);  // borrow 해제 후 borrow_mut
+                drop(app_ref); // borrow 해제 후 borrow_mut
                 if msg == taskbar_msg {
                     if let Ok(mut app_ref) = app.try_borrow_mut() {
                         app_ref.tray.restore();
@@ -618,7 +616,12 @@ impl App {
                             app_ref.handle_clipboard_change();
                         } else {
                             // borrow 실패 시 메시지를 지연 처리
-                            let _ = PostMessageW(Some(hwnd), WM_DEFERRED_CLIPBOARD, WPARAM(0), LPARAM(0));
+                            let _ = PostMessageW(
+                                Some(hwnd),
+                                WM_DEFERRED_CLIPBOARD,
+                                WPARAM(0),
+                                LPARAM(0),
+                            );
                         }
                         return LRESULT(0);
                     }

@@ -3,19 +3,15 @@
 //! 번역 진행 상황 표시 및 취소 기능.
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::{
-    core::*,
     Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::LibraryLoader::GetModuleHandleW,
-        UI::Controls::*,
-        UI::WindowsAndMessaging::*,
-        UI::Input::KeyboardAndMouse::EnableWindow,
+        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW, UI::Controls::*,
+        UI::Input::KeyboardAndMouse::EnableWindow, UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 
 // STATIC 컨트롤 스타일
@@ -23,12 +19,12 @@ const SS_LEFT: u32 = 0x00000000;
 
 // 컨트롤 ID
 mod ctrl_id {
-    pub const NAME_TEXT: u16 = 5001;    // 현재 파일명
+    pub const NAME_TEXT: u16 = 5001; // 현재 파일명
     pub const PROGRESS_BAR: u16 = 5002; // 프로그레스바
     pub const PROGRESS_TEXT: u16 = 5003; // 진행 텍스트
-    pub const INDEX_TEXT: u16 = 5004;   // 파일 인덱스
-    pub const TOTAL_TEXT: u16 = 5005;   // 전체 진행
-    pub const BTN_CANCEL: u16 = 5010;   // 취소 버튼
+    pub const INDEX_TEXT: u16 = 5004; // 파일 인덱스
+    pub const TOTAL_TEXT: u16 = 5005; // 전체 진행
+    pub const BTN_CANCEL: u16 = 5010; // 취소 버튼
 }
 
 // 진행률 업데이트 메시지
@@ -308,14 +304,7 @@ impl FileTransProgressDialog {
         }
     }
 
-    unsafe fn create_group_box(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        text: &str,
-    ) -> Result<HWND> {
+    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
         unsafe {
             let hinst = GetModuleHandleW(None)?;
             let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
@@ -431,7 +420,10 @@ impl FileTransProgressDialog {
                 }
                 WM_PROGRESS_CURRENT => {
                     self.state.current_line = lparam.0 as i32;
-                    let text = format!("전체: {}/{}", self.state.current_line, self.state.total_lines);
+                    let text = format!(
+                        "전체: {}/{}",
+                        self.state.current_line, self.state.total_lines
+                    );
                     Self::set_text(self.total_text, &text);
                 }
                 WM_PROGRESS_COMPLETE => {

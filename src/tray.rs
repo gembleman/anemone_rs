@@ -1,13 +1,11 @@
 use std::mem::zeroed;
 
 use windows::{
-    core::*,
     Win32::{
-        Foundation::*,
-        System::LibraryLoader::GetModuleHandleW,
-        UI::Shell::*,
+        Foundation::*, System::LibraryLoader::GetModuleHandleW, UI::Shell::*,
         UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 
 pub const WM_TRAY_ICON: u32 = WM_USER + 1;
@@ -37,9 +35,8 @@ impl TrayIcon {
 
             // 아이콘 로드 (리소스가 없으면 기본 아이콘 사용)
             let icon = LoadIconW(Some(hinstance.into()), PCWSTR(icon_id as *const u16));
-            self.nid.hIcon = icon.unwrap_or_else(|_| {
-                LoadIconW(None, IDI_APPLICATION).unwrap_or_default()
-            });
+            self.nid.hIcon =
+                icon.unwrap_or_else(|_| LoadIconW(None, IDI_APPLICATION).unwrap_or_default());
 
             // 툴팁 설정
             let tip = "아네모네";

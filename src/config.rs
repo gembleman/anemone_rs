@@ -11,10 +11,10 @@ pub enum TextType {
 /// 색상 유형 (주색상, 외곽선1, 외곽선2, 그림자)
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum ColorType {
-    Primary = 0,   // CFG_A
-    Outline1 = 1,  // CFG_B
-    Outline2 = 2,  // CFG_C
-    Shadow = 3,    // CFG_S
+    Primary = 0,  // CFG_A
+    Outline1 = 1, // CFG_B
+    Outline2 = 2, // CFG_C
+    Shadow = 3,   // CFG_S
 }
 
 /// 텍스트 스타일 설정
@@ -51,10 +51,10 @@ impl Default for TextStyle {
             outline1_size: 2,
             outline2_size: 4,
             shadow_enabled: true,
-            color_primary: 0xFFFFFFFF,   // 흰색
-            color_outline1: 0xFF000000,  // 검정
-            color_outline2: 0xFF404040,  // 어두운 회색
-            color_shadow: 0x80000000,    // 반투명 검정
+            color_primary: 0xFFFFFFFF,  // 흰색
+            color_outline1: 0xFF000000, // 검정
+            color_outline2: 0xFF404040, // 어두운 회색
+            color_shadow: 0x80000000,   // 반투명 검정
         }
     }
 }
@@ -118,7 +118,7 @@ impl Default for ScreenshotConfig {
     fn default() -> Self {
         Self {
             path: String::new(),
-            format: 0, // PNG
+            format: 0,      // PNG
             compression: 1, // 표준
             jpeg_quality: 85,
         }
@@ -142,10 +142,7 @@ impl Default for HookConfig {
                 "자동저장".to_string(),
                 "알림".to_string(),
             ],
-            inactive_hooks: vec![
-                "로그".to_string(),
-                "번역기록".to_string(),
-            ],
+            inactive_hooks: vec!["로그".to_string(), "번역기록".to_string()],
         }
     }
 }
@@ -353,7 +350,8 @@ impl Config {
 
     /// 텍스트 색상 설정
     pub fn set_text_color(&mut self, text_type: TextType, color_type: ColorType, color: u32) {
-        self.get_text_style_mut(text_type).set_color(color_type, color);
+        self.get_text_style_mut(text_type)
+            .set_color(color_type, color);
     }
 
     /// 텍스트 크기 가져오기

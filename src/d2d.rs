@@ -4,7 +4,6 @@
 //! Direct2D 렌더링을 제공합니다.
 
 use windows::{
-    core::*,
     Win32::{
         Foundation::*,
         Graphics::{
@@ -13,6 +12,7 @@ use windows::{
             Gdi::HDC,
         },
     },
+    core::*,
 };
 use windows_numerics::{Matrix3x2, Vector2};
 
@@ -32,10 +32,8 @@ impl D2DRenderer {
     pub fn new() -> Result<Self> {
         unsafe {
             // D2D Factory 생성
-            let d2d_factory: ID2D1Factory = D2D1CreateFactory(
-                D2D1_FACTORY_TYPE_SINGLE_THREADED,
-                None,
-            )?;
+            let d2d_factory: ID2D1Factory =
+                D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
 
             // DirectWrite Factory 생성
             let dwrite_factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
@@ -162,22 +160,42 @@ impl D2DRenderer {
 
             // 상단
             target.FillRectangle(
-                &D2D_RECT_F { left: 0.0, top: 0.0, right: w, bottom: t },
+                &D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: w,
+                    bottom: t,
+                },
                 &brush,
             );
             // 하단
             target.FillRectangle(
-                &D2D_RECT_F { left: 0.0, top: h - t, right: w, bottom: h },
+                &D2D_RECT_F {
+                    left: 0.0,
+                    top: h - t,
+                    right: w,
+                    bottom: h,
+                },
                 &brush,
             );
             // 좌측
             target.FillRectangle(
-                &D2D_RECT_F { left: 0.0, top: 0.0, right: t, bottom: h },
+                &D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: t,
+                    bottom: h,
+                },
                 &brush,
             );
             // 우측
             target.FillRectangle(
-                &D2D_RECT_F { left: w - t, top: 0.0, right: w, bottom: h },
+                &D2D_RECT_F {
+                    left: w - t,
+                    top: 0.0,
+                    right: w,
+                    bottom: h,
+                },
                 &brush,
             );
         }
@@ -186,7 +204,15 @@ impl D2DRenderer {
     }
 
     /// 둥근 사각형 채우기
-    pub fn fill_rounded_rect(&self, x: f32, y: f32, w: f32, h: f32, radius: f32, color: u32) -> Result<()> {
+    pub fn fill_rounded_rect(
+        &self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        color: u32,
+    ) -> Result<()> {
         let target = match &self.render_target {
             Some(t) => t,
             None => return Ok(()),
@@ -211,7 +237,16 @@ impl D2DRenderer {
     }
 
     /// 둥근 사각형 테두리 그리기
-    pub fn draw_rounded_rect(&self, x: f32, y: f32, w: f32, h: f32, radius: f32, stroke_width: f32, color: u32) -> Result<()> {
+    pub fn draw_rounded_rect(
+        &self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        stroke_width: f32,
+        color: u32,
+    ) -> Result<()> {
         let target = match &self.render_target {
             Some(t) => t,
             None => return Ok(()),
@@ -253,7 +288,11 @@ impl D2DRenderer {
 
         unsafe {
             // 텍스트 포맷 생성
-            let font_face_wide: Vec<u16> = style.font_face.encode_utf16().chain(std::iter::once(0)).collect();
+            let font_face_wide: Vec<u16> = style
+                .font_face
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             let font_weight = if style.font_style & 1 != 0 {
                 DWRITE_FONT_WEIGHT_BOLD
             } else {
@@ -385,7 +424,11 @@ impl D2DRenderer {
     }
 
     /// ARGB 색상으로 SolidColorBrush 생성
-    fn create_solid_brush(&self, target: &ID2D1DCRenderTarget, color: u32) -> Result<ID2D1SolidColorBrush> {
+    fn create_solid_brush(
+        &self,
+        target: &ID2D1DCRenderTarget,
+        color: u32,
+    ) -> Result<ID2D1SolidColorBrush> {
         let a = ((color >> 24) & 0xFF) as f32 / 255.0;
         let r = ((color >> 16) & 0xFF) as f32 / 255.0;
         let g = ((color >> 8) & 0xFF) as f32 / 255.0;
@@ -411,7 +454,11 @@ impl D2DRenderer {
         max_height: f32,
     ) -> Result<(f32, f32)> {
         unsafe {
-            let font_face_wide: Vec<u16> = style.font_face.encode_utf16().chain(std::iter::once(0)).collect();
+            let font_face_wide: Vec<u16> = style
+                .font_face
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             let font_weight = if style.font_style & 1 != 0 {
                 DWRITE_FONT_WEIGHT_BOLD
             } else {

@@ -1,18 +1,16 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod clipboard;
 mod config;
 mod d2d;
 mod dialogs;
-mod dwrite;
-mod tray;
-mod menu;
 mod hotkey;
-mod clipboard;
-mod window;
 mod magnetic;
+mod menu;
 mod screenshot;
-mod file_watch;
+mod tray;
+mod window;
 
 use app::App;
 

@@ -1,9 +1,6 @@
 use windows::{
+    Win32::{Foundation::*, UI::WindowsAndMessaging::*},
     core::*,
-    Win32::{
-        Foundation::*,
-        UI::WindowsAndMessaging::*,
-    },
 };
 
 use crate::config::Config;
@@ -53,12 +50,7 @@ impl ContextMenu {
             } else {
                 w!("윈도우 표시")
             };
-            AppendMenuW(
-                self.hmenu,
-                MF_STRING,
-                id::WINDOW_SHOW as usize,
-                show_text,
-            )?;
+            AppendMenuW(self.hmenu, MF_STRING, id::WINDOW_SHOW as usize, show_text)?;
 
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
@@ -132,38 +124,18 @@ impl ContextMenu {
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
             // 번역
-            AppendMenuW(
-                self.hmenu,
-                MF_STRING,
-                id::TRANSLATE as usize,
-                w!("번역"),
-            )?;
+            AppendMenuW(self.hmenu, MF_STRING, id::TRANSLATE as usize, w!("번역"))?;
 
             // 백로그
-            AppendMenuW(
-                self.hmenu,
-                MF_STRING,
-                id::BACKLOG as usize,
-                w!("백로그"),
-            )?;
+            AppendMenuW(self.hmenu, MF_STRING, id::BACKLOG as usize, w!("백로그"))?;
 
             // 설정
-            AppendMenuW(
-                self.hmenu,
-                MF_STRING,
-                id::SETTINGS as usize,
-                w!("설정"),
-            )?;
+            AppendMenuW(self.hmenu, MF_STRING, id::SETTINGS as usize, w!("설정"))?;
 
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
             // 종료
-            AppendMenuW(
-                self.hmenu,
-                MF_STRING,
-                id::EXIT as usize,
-                w!("종료"),
-            )?;
+            AppendMenuW(self.hmenu, MF_STRING, id::EXIT as usize, w!("종료"))?;
 
             Ok(())
         }

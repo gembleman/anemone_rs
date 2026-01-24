@@ -1,9 +1,6 @@
 use windows::{
+    Win32::{Foundation::*, UI::Input::KeyboardAndMouse::*},
     core::*,
-    Win32::{
-        Foundation::*,
-        UI::Input::KeyboardAndMouse::*,
-    },
 };
 
 use crate::menu;
@@ -30,18 +27,10 @@ impl HotkeyManager {
 
     pub fn register_defaults(&mut self) -> Result<()> {
         // Ctrl+Shift+A: 윈도우 토글
-        self.register(
-            id::TOGGLE_WINDOW,
-            MOD_CONTROL | MOD_SHIFT,
-            VK_A.0 as u32,
-        )?;
+        self.register(id::TOGGLE_WINDOW, MOD_CONTROL | MOD_SHIFT, VK_A.0 as u32)?;
 
         // Ctrl+Shift+Up: 텍스트 크기 증가
-        self.register(
-            id::TEXT_SIZE_UP,
-            MOD_CONTROL | MOD_SHIFT,
-            VK_UP.0 as u32,
-        )?;
+        self.register(id::TEXT_SIZE_UP, MOD_CONTROL | MOD_SHIFT, VK_UP.0 as u32)?;
 
         // Ctrl+Shift+Down: 텍스트 크기 감소
         self.register(

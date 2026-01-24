@@ -11,14 +11,14 @@ use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 
 use windows::{
-    core::*,
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
         System::LibraryLoader::GetModuleHandleW,
-        UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture, VK_ESCAPE},
+        UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_ESCAPE},
         UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 
 use crate::config::ScreenshotConfig;
@@ -321,7 +321,8 @@ pub fn capture_region_interactive() -> Result<ScreenshotResult> {
             return Err(Error::from_hresult(HRESULT::from_win32(ERROR_CANCELLED.0)));
         }
 
-        let rect = rect.ok_or_else(|| Error::from_hresult(HRESULT::from_win32(ERROR_CANCELLED.0)))?;
+        let rect =
+            rect.ok_or_else(|| Error::from_hresult(HRESULT::from_win32(ERROR_CANCELLED.0)))?;
 
         // 선택된 영역 캡처
         capture_screen_region(
@@ -460,7 +461,8 @@ unsafe extern "system" fn region_select_wndproc(
 
                 // 안내 텍스트
                 let help_text = "드래그하여 영역을 선택하세요. ESC로 취소합니다.";
-                let help_wide: Vec<u16> = help_text.encode_utf16().chain(std::iter::once(0)).collect();
+                let help_wide: Vec<u16> =
+                    help_text.encode_utf16().chain(std::iter::once(0)).collect();
                 SetTextColor(hdc, COLORREF(0xFFFFFF));
                 SetBkMode(hdc, TRANSPARENT);
                 TextOutW(hdc, 20, 20, &help_wide);
@@ -491,9 +493,12 @@ pub fn take_screenshot_and_save(
             capture_screen_region(0, 0, width, height)?
         }
         CaptureMode::Window(hwnd) => capture_window(hwnd, true)?,
-        CaptureMode::Region(rect) => {
-            capture_screen_region(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)?
-        }
+        CaptureMode::Region(rect) => capture_screen_region(
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+        )?,
         CaptureMode::Interactive => capture_region_interactive()?,
     };
 

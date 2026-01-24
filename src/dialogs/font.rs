@@ -5,10 +5,7 @@
 use std::mem::zeroed;
 
 use windows::Win32::{
-    Foundation::*,
-    Graphics::Gdi::*,
-    UI::Controls::Dialogs::*,
-    UI::WindowsAndMessaging::*,
+    Foundation::*, Graphics::Gdi::*, UI::Controls::Dialogs::*, UI::WindowsAndMessaging::*,
 };
 
 /// 폰트 스타일 플래그
@@ -125,53 +122,55 @@ impl FontDialog {
         Self::show(hwnd, FontDialogConfig::default())
     }
 
-    unsafe fn show_impl(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> { unsafe {
-        let mut lf: LOGFONTW = zeroed();
+    unsafe fn show_impl(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> {
+        unsafe {
+            let mut lf: LOGFONTW = zeroed();
 
-        // 초기 폰트 이름 설정
-        if let Some(ref face) = config.initial_face {
-            let face_utf16: Vec<u16> = face.encode_utf16().collect();
-            let copy_len = face_utf16.len().min(lf.lfFaceName.len() - 1);
-            lf.lfFaceName[..copy_len].copy_from_slice(&face_utf16[..copy_len]);
+            // 초기 폰트 이름 설정
+            if let Some(ref face) = config.initial_face {
+                let face_utf16: Vec<u16> = face.encode_utf16().collect();
+                let copy_len = face_utf16.len().min(lf.lfFaceName.len() - 1);
+                lf.lfFaceName[..copy_len].copy_from_slice(&face_utf16[..copy_len]);
+            }
+
+            // 초기 스타일
+            lf.lfWeight = if config.initial_style.bold { 700 } else { 400 };
+            lf.lfItalic = if config.initial_style.italic { 1 } else { 0 };
+
+            // 포인트 크기를 픽셀로 변환
+            let hdc = GetDC(Some(hwnd));
+            if config.initial_point_size > 0 {
+                let dpi = GetDeviceCaps(Some(hdc), LOGPIXELSY);
+                lf.lfHeight = -((config.initial_point_size * dpi) / 72);
+            } else {
+                lf.lfHeight = -16; // 기본 12pt 정도
+            }
+            ReleaseDC(Some(hwnd), hdc);
+
+            let mut cf: CHOOSEFONTW = zeroed();
+            cf.lStructSize = std::mem::size_of::<CHOOSEFONTW>() as u32;
+            cf.hwndOwner = hwnd;
+            cf.lpLogFont = &mut lf;
+            cf.iPointSize = config.initial_point_size.max(10) * 10; // 1/10 pt 단위
+
+            // 플래그: 화면 폰트만, 세로쓰기 제외, 스크립트 선택 제외
+            cf.Flags = CF_SCREENFONTS | CF_NOVERTFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOSCRIPTSEL;
+
+            if config.no_activate {
+                cf.Flags |= CF_ENABLEHOOK;
+                cf.lpfnHook = Some(Self::hook_proc_noactivate);
+            }
+
+            cf.rgbColors = COLORREF(0);
+            cf.nFontType = SCREEN_FONTTYPE;
+
+            if ChooseFontW(&mut cf).as_bool() {
+                Some(FontResult::from_logfont(&lf, cf.iPointSize / 10))
+            } else {
+                None
+            }
         }
-
-        // 초기 스타일
-        lf.lfWeight = if config.initial_style.bold { 700 } else { 400 };
-        lf.lfItalic = if config.initial_style.italic { 1 } else { 0 };
-
-        // 포인트 크기를 픽셀로 변환
-        let hdc = GetDC(Some(hwnd));
-        if config.initial_point_size > 0 {
-            let dpi = GetDeviceCaps(Some(hdc), LOGPIXELSY);
-            lf.lfHeight = -((config.initial_point_size * dpi) / 72);
-        } else {
-            lf.lfHeight = -16; // 기본 12pt 정도
-        }
-        ReleaseDC(Some(hwnd), hdc);
-
-        let mut cf: CHOOSEFONTW = zeroed();
-        cf.lStructSize = std::mem::size_of::<CHOOSEFONTW>() as u32;
-        cf.hwndOwner = hwnd;
-        cf.lpLogFont = &mut lf;
-        cf.iPointSize = config.initial_point_size.max(10) * 10; // 1/10 pt 단위
-
-        // 플래그: 화면 폰트만, 세로쓰기 제외, 스크립트 선택 제외
-        cf.Flags = CF_SCREENFONTS | CF_NOVERTFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOSCRIPTSEL;
-
-        if config.no_activate {
-            cf.Flags |= CF_ENABLEHOOK;
-            cf.lpfnHook = Some(Self::hook_proc_noactivate);
-        }
-
-        cf.rgbColors = COLORREF(0);
-        cf.nFontType = SCREEN_FONTTYPE;
-
-        if ChooseFontW(&mut cf).as_bool() {
-            Some(FontResult::from_logfont(&lf, cf.iPointSize / 10))
-        } else {
-            None
-        }
-    }}
+    }
 
     /// WS_EX_NOACTIVATE 훅 프로시저
     unsafe extern "system" fn hook_proc_noactivate(
@@ -179,37 +178,39 @@ impl FontDialog {
         msg: u32,
         _wparam: WPARAM,
         lparam: LPARAM,
-    ) -> usize { unsafe {
-        match msg {
-            WM_INITDIALOG => {
-                // WS_EX_NOACTIVATE 스타일 추가
-                let ex_style = GetWindowLongW(hdlg, GWL_EXSTYLE);
-                SetWindowLongW(hdlg, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE.0 as i32);
-                return 1; // TRUE
-            }
-
-            WM_MOVING | WM_SIZING => {
-                // WS_EX_NOACTIVATE 상태에서 위치/크기 변경 강제
-                let prc = lparam.0 as *mut RECT;
-                if !prc.is_null() {
-                    let rc = &*prc;
-                    let _ = SetWindowPos(
-                        hdlg,
-                        None,
-                        rc.left,
-                        rc.top,
-                        rc.right - rc.left,
-                        rc.bottom - rc.top,
-                        SWP_NOZORDER,
-                    );
+    ) -> usize {
+        unsafe {
+            match msg {
+                WM_INITDIALOG => {
+                    // WS_EX_NOACTIVATE 스타일 추가
+                    let ex_style = GetWindowLongW(hdlg, GWL_EXSTYLE);
+                    SetWindowLongW(hdlg, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE.0 as i32);
+                    return 1; // TRUE
                 }
+
+                WM_MOVING | WM_SIZING => {
+                    // WS_EX_NOACTIVATE 상태에서 위치/크기 변경 강제
+                    let prc = lparam.0 as *mut RECT;
+                    if !prc.is_null() {
+                        let rc = &*prc;
+                        let _ = SetWindowPos(
+                            hdlg,
+                            None,
+                            rc.left,
+                            rc.top,
+                            rc.right - rc.left,
+                            rc.bottom - rc.top,
+                            SWP_NOZORDER,
+                        );
+                    }
+                }
+
+                _ => {}
             }
 
-            _ => {}
+            0 // FALSE
         }
-
-        0 // FALSE
-    }}
+    }
 }
 
 #[cfg(test)]

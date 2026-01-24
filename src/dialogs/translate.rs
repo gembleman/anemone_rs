@@ -7,17 +7,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use windows::{
-    core::*,
     Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::DataExchange::*,
-        System::LibraryLoader::GetModuleHandleW,
-        System::Memory::*,
-        UI::Controls::*,
-        UI::Input::KeyboardAndMouse::*,
-        UI::WindowsAndMessaging::*,
+        Foundation::*, Graphics::Gdi::*, System::DataExchange::*,
+        System::LibraryLoader::GetModuleHandleW, System::Memory::*, UI::Controls::*,
+        UI::Input::KeyboardAndMouse::*, UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 
 use crate::config::Config;
@@ -46,9 +41,9 @@ const TRANSLATE_HEIGHT: i32 = 450;
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     #[default]
-    Normal = 0,     // 일반
-    Brackets = 1,   // 괄호 포함
-    NameSplit = 2,  // 이름 분리
+    Normal = 0, // 일반
+    Brackets = 1,  // 괄호 포함
+    NameSplit = 2, // 이름 분리
 }
 
 /// 번역 대화상자
@@ -76,83 +71,85 @@ impl TranslateDialog {
         unsafe { Self::show_impl(main_hwnd, config) }
     }
 
-    unsafe fn show_impl(main_hwnd: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> { unsafe {
-        let instance = GetModuleHandleW(None)?;
+    unsafe fn show_impl(main_hwnd: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> {
+        unsafe {
+            let instance = GetModuleHandleW(None)?;
 
-        // 윈도우 클래스 등록
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(Self::wndproc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: instance.into(),
-            hIcon: LoadIconW(None, IDI_APPLICATION)?,
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as *mut _),
-            lpszMenuName: PCWSTR::null(),
-            lpszClassName: TRANSLATE_CLASS_NAME,
-            hIconSm: HICON::default(),
-        };
+            // 윈도우 클래스 등록
+            let wc = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(Self::wndproc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: instance.into(),
+                hIcon: LoadIconW(None, IDI_APPLICATION)?,
+                hCursor: LoadCursorW(None, IDC_ARROW)?,
+                hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as *mut _),
+                lpszMenuName: PCWSTR::null(),
+                lpszClassName: TRANSLATE_CLASS_NAME,
+                hIconSm: HICON::default(),
+            };
 
-        let atom = RegisterClassExW(&wc);
-        if atom == 0 {
-            let err = GetLastError();
-            if err != ERROR_CLASS_ALREADY_EXISTS {
-                return Err(Error::from_hresult(HRESULT::from_win32(err.0)));
+            let atom = RegisterClassExW(&wc);
+            if atom == 0 {
+                let err = GetLastError();
+                if err != ERROR_CLASS_ALREADY_EXISTS {
+                    return Err(Error::from_hresult(HRESULT::from_win32(err.0)));
+                }
             }
+
+            // 화면 중앙에 위치
+            let cx = GetSystemMetrics(SM_CXSCREEN);
+            let cy = GetSystemMetrics(SM_CYSCREEN);
+            let x = (cx - TRANSLATE_WIDTH) / 2;
+            let y = (cy - TRANSLATE_HEIGHT) / 2;
+
+            // 윈도우 생성
+            let hwnd = CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                TRANSLATE_CLASS_NAME,
+                w!("번역"),
+                WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                x,
+                y,
+                TRANSLATE_WIDTH,
+                TRANSLATE_HEIGHT,
+                Some(main_hwnd),
+                None,
+                Some(instance.into()),
+                None,
+            )?;
+
+            // 인스턴스 생성
+            let dialog = Rc::new(RefCell::new(TranslateDialog {
+                hwnd,
+                main_hwnd,
+                config,
+                source_edit: HWND::default(),
+                dest_edit: HWND::default(),
+                one_go: false,
+                no_linefeed: false,
+                output_format: OutputFormat::Normal,
+                original_source_proc: 0,
+                original_dest_proc: 0,
+            }));
+
+            // 전역 인스턴스 설정
+            TRANSLATE_INSTANCE.with(|cell| {
+                *cell.borrow_mut() = Some(dialog.clone());
+            });
+
+            // 컨트롤 생성
+            dialog.borrow_mut().create_controls()?;
+
+            // 윈도우 표시
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = UpdateWindow(hwnd);
+
+            Ok(hwnd)
         }
-
-        // 화면 중앙에 위치
-        let cx = GetSystemMetrics(SM_CXSCREEN);
-        let cy = GetSystemMetrics(SM_CYSCREEN);
-        let x = (cx - TRANSLATE_WIDTH) / 2;
-        let y = (cy - TRANSLATE_HEIGHT) / 2;
-
-        // 윈도우 생성
-        let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW,
-            TRANSLATE_CLASS_NAME,
-            w!("번역"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            x,
-            y,
-            TRANSLATE_WIDTH,
-            TRANSLATE_HEIGHT,
-            Some(main_hwnd),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-
-        // 인스턴스 생성
-        let dialog = Rc::new(RefCell::new(TranslateDialog {
-            hwnd,
-            main_hwnd,
-            config,
-            source_edit: HWND::default(),
-            dest_edit: HWND::default(),
-            one_go: false,
-            no_linefeed: false,
-            output_format: OutputFormat::Normal,
-            original_source_proc: 0,
-            original_dest_proc: 0,
-        }));
-
-        // 전역 인스턴스 설정
-        TRANSLATE_INSTANCE.with(|cell| {
-            *cell.borrow_mut() = Some(dialog.clone());
-        });
-
-        // 컨트롤 생성
-        dialog.borrow_mut().create_controls()?;
-
-        // 윈도우 표시
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = UpdateWindow(hwnd);
-
-        Ok(hwnd)
-    }}
+    }
 
     /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
@@ -185,11 +182,25 @@ impl TranslateDialog {
                 Some(hinst.into()),
                 None,
             )?;
-            let _ = SendMessageW(self.source_edit, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                self.source_edit,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
             // 텍스트 길이 무제한
-            let _ = SendMessageW(self.source_edit, EM_SETLIMITTEXT, Some(WPARAM(0)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                self.source_edit,
+                EM_SETLIMITTEXT,
+                Some(WPARAM(0)),
+                Some(LPARAM(0)),
+            );
             // 서브클래싱
-            self.original_source_proc = SetWindowLongPtrW(self.source_edit, GWLP_WNDPROC, Self::edit_subclass_proc as isize);
+            self.original_source_proc = SetWindowLongPtrW(
+                self.source_edit,
+                GWLP_WNDPROC,
+                Self::edit_subclass_proc as isize,
+            );
 
             // ====== 번역 결과 그룹 ======
             self.create_group_box(10, 160, 475, 150, "번역 결과")?;
@@ -216,23 +227,77 @@ impl TranslateDialog {
                 Some(hinst.into()),
                 None,
             )?;
-            let _ = SendMessageW(self.dest_edit, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
-            let _ = SendMessageW(self.dest_edit, EM_SETLIMITTEXT, Some(WPARAM(0)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                self.dest_edit,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
+            let _ = SendMessageW(
+                self.dest_edit,
+                EM_SETLIMITTEXT,
+                Some(WPARAM(0)),
+                Some(LPARAM(0)),
+            );
             // 서브클래싱
-            self.original_dest_proc = SetWindowLongPtrW(self.dest_edit, GWLP_WNDPROC, Self::edit_subclass_proc as isize);
+            self.original_dest_proc = SetWindowLongPtrW(
+                self.dest_edit,
+                GWLP_WNDPROC,
+                Self::edit_subclass_proc as isize,
+            );
 
             // ====== 옵션 그룹 ======
             self.create_group_box(10, 315, 230, 90, "옵션")?;
 
             // 체크박스들
-            self.create_checkbox(20, 335, 100, 20, ctrl_id::CHK_ONE_GO, "자동 번역", self.one_go)?;
-            self.create_checkbox(125, 335, 110, 20, ctrl_id::CHK_NO_LINEFEED, "줄바꿈 제거", self.no_linefeed)?;
+            self.create_checkbox(
+                20,
+                335,
+                100,
+                20,
+                ctrl_id::CHK_ONE_GO,
+                "자동 번역",
+                self.one_go,
+            )?;
+            self.create_checkbox(
+                125,
+                335,
+                110,
+                20,
+                ctrl_id::CHK_NO_LINEFEED,
+                "줄바꿈 제거",
+                self.no_linefeed,
+            )?;
 
             // 출력 형식 라디오 버튼
             self.create_label(20, 360, 70, 18, "출력 형식:")?;
-            self.create_radio(95, 358, 50, 20, ctrl_id::RADIO_OUTPUT_1, "일반", self.output_format == OutputFormat::Normal)?;
-            self.create_radio(150, 358, 50, 20, ctrl_id::RADIO_OUTPUT_2, "괄호", self.output_format == OutputFormat::Brackets)?;
-            self.create_radio(205, 358, 50, 20, ctrl_id::RADIO_OUTPUT_3, "분리", self.output_format == OutputFormat::NameSplit)?;
+            self.create_radio(
+                95,
+                358,
+                50,
+                20,
+                ctrl_id::RADIO_OUTPUT_1,
+                "일반",
+                self.output_format == OutputFormat::Normal,
+            )?;
+            self.create_radio(
+                150,
+                358,
+                50,
+                20,
+                ctrl_id::RADIO_OUTPUT_2,
+                "괄호",
+                self.output_format == OutputFormat::Brackets,
+            )?;
+            self.create_radio(
+                205,
+                358,
+                50,
+                20,
+                ctrl_id::RADIO_OUTPUT_3,
+                "분리",
+                self.output_format == OutputFormat::NameSplit,
+            )?;
 
             // ====== 버튼 그룹 ======
             self.create_group_box(250, 315, 235, 90, "동작")?;
@@ -247,80 +312,109 @@ impl TranslateDialog {
     }
 
     // 헬퍼 함수들 (settings.rs와 동일한 패턴)
-    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> { unsafe {
-        let hinst = GetModuleHandleW(None)?;
-        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_GROUPBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            x,
-            y,
-            w,
-            h,
-            Some(self.hwnd),
-            None,
-            Some(hinst.into()),
-            None,
-        )?;
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                PCWSTR(text_wide.as_ptr()),
+                WINDOW_STYLE(BS_GROUPBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                None,
+                Some(hinst.into()),
+                None,
+            )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
-        Ok(hwnd)
-    }}
+            Ok(hwnd)
+        }
+    }
 
-    unsafe fn create_label(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> { unsafe {
-        let hinst = GetModuleHandleW(None)?;
-        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe fn create_label(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
-            x,
-            y,
-            w,
-            h,
-            Some(self.hwnd),
-            None,
-            Some(hinst.into()),
-            None,
-        )?;
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                PCWSTR(text_wide.as_ptr()),
+                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                None,
+                Some(hinst.into()),
+                None,
+            )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
-        Ok(hwnd)
-    }}
+            Ok(hwnd)
+        }
+    }
 
-    unsafe fn create_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> { unsafe {
-        let hinst = GetModuleHandleW(None)?;
-        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe fn create_button(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+    ) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_PUSHBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            x,
-            y,
-            w,
-            h,
-            Some(self.hwnd),
-            Some(HMENU(id as isize as *mut _)),
-            Some(hinst.into()),
-            None,
-        )?;
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                PCWSTR(text_wide.as_ptr()),
+                WINDOW_STYLE(BS_PUSHBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                Some(HMENU(id as isize as *mut _)),
+                Some(hinst.into()),
+                None,
+            )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
-        Ok(hwnd)
-    }}
+            Ok(hwnd)
+        }
+    }
 
     unsafe fn create_checkbox(
         &self,
@@ -331,34 +425,46 @@ impl TranslateDialog {
         id: u16,
         text: &str,
         checked: bool,
-    ) -> Result<HWND> { unsafe {
-        let hinst = GetModuleHandleW(None)?;
-        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    ) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_AUTOCHECKBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            x,
-            y,
-            w,
-            h,
-            Some(self.hwnd),
-            Some(HMENU(id as isize as *mut _)),
-            Some(hinst.into()),
-            None,
-        )?;
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                PCWSTR(text_wide.as_ptr()),
+                WINDOW_STYLE(BS_AUTOCHECKBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                Some(HMENU(id as isize as *mut _)),
+                Some(hinst.into()),
+                None,
+            )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
-        if checked {
-            let _ = SendMessageW(hwnd, BM_SETCHECK, Some(WPARAM(BST_CHECKED.0 as usize)), Some(LPARAM(0)));
+            if checked {
+                let _ = SendMessageW(
+                    hwnd,
+                    BM_SETCHECK,
+                    Some(WPARAM(BST_CHECKED.0 as usize)),
+                    Some(LPARAM(0)),
+                );
+            }
+
+            Ok(hwnd)
         }
-
-        Ok(hwnd)
-    }}
+    }
 
     unsafe fn create_radio(
         &self,
@@ -369,34 +475,46 @@ impl TranslateDialog {
         id: u16,
         text: &str,
         checked: bool,
-    ) -> Result<HWND> { unsafe {
-        let hinst = GetModuleHandleW(None)?;
-        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    ) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_AUTORADIOBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            x,
-            y,
-            w,
-            h,
-            Some(self.hwnd),
-            Some(HMENU(id as isize as *mut _)),
-            Some(hinst.into()),
-            None,
-        )?;
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                PCWSTR(text_wide.as_ptr()),
+                WINDOW_STYLE(BS_AUTORADIOBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                Some(HMENU(id as isize as *mut _)),
+                Some(hinst.into()),
+                None,
+            )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
-        if checked {
-            let _ = SendMessageW(hwnd, BM_SETCHECK, Some(WPARAM(BST_CHECKED.0 as usize)), Some(LPARAM(0)));
+            if checked {
+                let _ = SendMessageW(
+                    hwnd,
+                    BM_SETCHECK,
+                    Some(WPARAM(BST_CHECKED.0 as usize)),
+                    Some(LPARAM(0)),
+                );
+            }
+
+            Ok(hwnd)
         }
-
-        Ok(hwnd)
-    }}
+    }
 
     /// Edit 서브클래스 프로시저 (Ctrl+A 지원)
     unsafe extern "system" fn edit_subclass_proc(
@@ -404,39 +522,41 @@ impl TranslateDialog {
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
-    ) -> LRESULT { unsafe {
-        if msg == WM_KEYDOWN {
-            // Ctrl+A 처리
-            if wparam.0 == 'A' as usize {
-                let ctrl_pressed = (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
-                if ctrl_pressed {
-                    // 전체 선택
-                    let _ = SendMessageW(hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
-                    return LRESULT(0);
+    ) -> LRESULT {
+        unsafe {
+            if msg == WM_KEYDOWN {
+                // Ctrl+A 처리
+                if wparam.0 == 'A' as usize {
+                    let ctrl_pressed = (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
+                    if ctrl_pressed {
+                        // 전체 선택
+                        let _ = SendMessageW(hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+                        return LRESULT(0);
+                    }
                 }
             }
-        }
 
-        // 원래 프로시저 호출
-        let instance = TRANSLATE_INSTANCE.with(|cell| cell.borrow().clone());
-        if let Some(dialog) = instance {
-            let dialog_ref = dialog.borrow();
-            let original_proc = if hwnd == dialog_ref.source_edit {
-                dialog_ref.original_source_proc
-            } else if hwnd == dialog_ref.dest_edit {
-                dialog_ref.original_dest_proc
-            } else {
-                0
-            };
+            // 원래 프로시저 호출
+            let instance = TRANSLATE_INSTANCE.with(|cell| cell.borrow().clone());
+            if let Some(dialog) = instance {
+                let dialog_ref = dialog.borrow();
+                let original_proc = if hwnd == dialog_ref.source_edit {
+                    dialog_ref.original_source_proc
+                } else if hwnd == dialog_ref.dest_edit {
+                    dialog_ref.original_dest_proc
+                } else {
+                    0
+                };
 
-            if original_proc != 0 {
-                let proc: WNDPROC = std::mem::transmute(original_proc);
-                return CallWindowProcW(proc, hwnd, msg, wparam, lparam);
+                if original_proc != 0 {
+                    let proc: WNDPROC = std::mem::transmute(original_proc);
+                    return CallWindowProcW(proc, hwnd, msg, wparam, lparam);
+                }
             }
-        }
 
-        DefWindowProcW(hwnd, msg, wparam, lparam)
-    }}
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+    }
 
     /// 원문 텍스트 가져오기
     fn get_source_text(&self) -> String {
@@ -444,22 +564,26 @@ impl TranslateDialog {
     }
 
     /// Edit 컨트롤에서 텍스트 가져오기
-    unsafe fn get_edit_text(hwnd: HWND) -> String { unsafe {
-        let len = GetWindowTextLengthW(hwnd);
-        if len == 0 {
-            return String::new();
-        }
+    unsafe fn get_edit_text(hwnd: HWND) -> String {
+        unsafe {
+            let len = GetWindowTextLengthW(hwnd);
+            if len == 0 {
+                return String::new();
+            }
 
-        let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
-        GetWindowTextW(hwnd, &mut buffer);
-        String::from_utf16_lossy(&buffer[..len as usize])
-    }}
+            let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
+            GetWindowTextW(hwnd, &mut buffer);
+            String::from_utf16_lossy(&buffer[..len as usize])
+        }
+    }
 
     /// Edit 컨트롤에 텍스트 설정
-    unsafe fn set_edit_text(hwnd: HWND, text: &str) { unsafe {
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
-    }}
+    unsafe fn set_edit_text(hwnd: HWND, text: &str) {
+        unsafe {
+            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
+        }
+    }
 
     /// 번역 결과 설정
     fn set_dest_text(&self, text: &str) {
@@ -499,29 +623,31 @@ impl TranslateDialog {
     }
 
     /// 클립보드에 텍스트 설정
-    unsafe fn set_clipboard_text(text: &str, hwnd: HWND) { unsafe {
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let byte_len = wide.len() * 2;
+    unsafe fn set_clipboard_text(text: &str, hwnd: HWND) {
+        unsafe {
+            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let byte_len = wide.len() * 2;
 
-        if OpenClipboard(Some(hwnd)).is_err() {
-            return;
-        }
-
-        let _ = EmptyClipboard();
-
-        let hmem = GlobalAlloc(GMEM_MOVEABLE, byte_len).ok();
-        if let Some(hmem) = hmem {
-            let ptr = GlobalLock(hmem) as *mut u16;
-            if !ptr.is_null() {
-                std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
-                let _ = GlobalUnlock(hmem);
-
-                let _ = SetClipboardData(CF_UNICODETEXT, Some(HANDLE(hmem.0)));
+            if OpenClipboard(Some(hwnd)).is_err() {
+                return;
             }
-        }
 
-        let _ = CloseClipboard();
-    }}
+            let _ = EmptyClipboard();
+
+            let hmem = GlobalAlloc(GMEM_MOVEABLE, byte_len).ok();
+            if let Some(hmem) = hmem {
+                let ptr = GlobalLock(hmem) as *mut u16;
+                if !ptr.is_null() {
+                    std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+                    let _ = GlobalUnlock(hmem);
+
+                    let _ = SetClipboardData(CF_UNICODETEXT, Some(HANDLE(hmem.0)));
+                }
+            }
+
+            let _ = CloseClipboard();
+        }
+    }
 
     /// 텍스트 초기화
     fn clear_text(&self) {
@@ -571,49 +697,56 @@ impl TranslateDialog {
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
-    ) -> LRESULT { unsafe {
-        let instance = TRANSLATE_INSTANCE.with(|cell| cell.borrow().clone());
+    ) -> LRESULT {
+        unsafe {
+            let instance = TRANSLATE_INSTANCE.with(|cell| cell.borrow().clone());
 
-        if let Some(dialog) = instance {
-            match msg {
-                WM_COMMAND => {
-                    let id = (wparam.0 & 0xFFFF) as u16;
-                    let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+            if let Some(dialog) = instance {
+                match msg {
+                    WM_COMMAND => {
+                        let id = (wparam.0 & 0xFFFF) as u16;
+                        let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
 
-                    // Edit 변경 알림 (자동 번역용)
-                    if notify_code == EN_CHANGE as u32 && id == ctrl_id::SOURCE_EDIT {
-                        if dialog.borrow().one_go {
-                            dialog.borrow_mut().do_translate();
+                        // Edit 변경 알림 (자동 번역용)
+                        if notify_code == EN_CHANGE as u32 && id == ctrl_id::SOURCE_EDIT {
+                            if dialog.borrow().one_go {
+                                dialog.borrow_mut().do_translate();
+                            }
+                        } else {
+                            dialog.borrow_mut().handle_command(id);
                         }
-                    } else {
-                        dialog.borrow_mut().handle_command(id);
+                        return LRESULT(0);
                     }
-                    return LRESULT(0);
-                }
 
-                WM_CLOSE => {
-                    let _ = DestroyWindow(hwnd);
-                    return LRESULT(0);
-                }
+                    WM_CLOSE => {
+                        let _ = DestroyWindow(hwnd);
+                        return LRESULT(0);
+                    }
 
-                WM_DESTROY => {
-                    // 인스턴스 정리
-                    TRANSLATE_INSTANCE.with(|cell| {
-                        *cell.borrow_mut() = None;
-                    });
-                    return LRESULT(0);
-                }
+                    WM_DESTROY => {
+                        // 인스턴스 정리
+                        TRANSLATE_INSTANCE.with(|cell| {
+                            *cell.borrow_mut() = None;
+                        });
+                        return LRESULT(0);
+                    }
 
-                WM_LBUTTONDOWN => {
-                    // 창 드래그
-                    let _ = SendMessageW(hwnd, WM_NCLBUTTONDOWN, Some(WPARAM(HTCAPTION as usize)), Some(LPARAM(0)));
-                    return LRESULT(0);
-                }
+                    WM_LBUTTONDOWN => {
+                        // 창 드래그
+                        let _ = SendMessageW(
+                            hwnd,
+                            WM_NCLBUTTONDOWN,
+                            Some(WPARAM(HTCAPTION as usize)),
+                            Some(LPARAM(0)),
+                        );
+                        return LRESULT(0);
+                    }
 
-                _ => {}
+                    _ => {}
+                }
             }
-        }
 
-        DefWindowProcW(hwnd, msg, wparam, lparam)
-    }}
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+    }
 }

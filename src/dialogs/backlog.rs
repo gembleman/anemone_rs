@@ -8,17 +8,17 @@ use std::rc::Rc;
 use std::time::SystemTime;
 
 use windows::{
-    core::*,
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
         System::LibraryLoader::{GetModuleHandleW, LoadLibraryW},
-        UI::Controls::*,
         UI::Controls::Dialogs::{
-            GetSaveFileNameW, OPENFILENAMEW, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST,
+            GetSaveFileNameW, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
         },
+        UI::Controls::*,
         UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 
 use crate::config::Config;
@@ -186,80 +186,82 @@ impl BacklogDialog {
         });
     }
 
-    unsafe fn show_impl(main_hwnd: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> { unsafe {
-        let instance = GetModuleHandleW(None)?;
+    unsafe fn show_impl(main_hwnd: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> {
+        unsafe {
+            let instance = GetModuleHandleW(None)?;
 
-        // 윈도우 클래스 등록
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(Self::wndproc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: instance.into(),
-            hIcon: LoadIconW(None, IDI_APPLICATION)?,
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as *mut _),
-            lpszMenuName: PCWSTR::null(),
-            lpszClassName: BACKLOG_CLASS_NAME,
-            hIconSm: HICON::default(),
-        };
+            // 윈도우 클래스 등록
+            let wc = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(Self::wndproc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: instance.into(),
+                hIcon: LoadIconW(None, IDI_APPLICATION)?,
+                hCursor: LoadCursorW(None, IDC_ARROW)?,
+                hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as *mut _),
+                lpszMenuName: PCWSTR::null(),
+                lpszClassName: BACKLOG_CLASS_NAME,
+                hIconSm: HICON::default(),
+            };
 
-        let atom = RegisterClassExW(&wc);
-        if atom == 0 {
-            let err = GetLastError();
-            if err != ERROR_CLASS_ALREADY_EXISTS {
-                return Err(Error::from_hresult(HRESULT::from_win32(err.0)));
+            let atom = RegisterClassExW(&wc);
+            if atom == 0 {
+                let err = GetLastError();
+                if err != ERROR_CLASS_ALREADY_EXISTS {
+                    return Err(Error::from_hresult(HRESULT::from_win32(err.0)));
+                }
             }
+
+            // 화면 중앙에 위치
+            let cx = GetSystemMetrics(SM_CXSCREEN);
+            let cy = GetSystemMetrics(SM_CYSCREEN);
+            let x = (cx - BACKLOG_WIDTH) / 2;
+            let y = (cy - BACKLOG_HEIGHT) / 2;
+
+            // 윈도우 생성
+            let hwnd = CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                BACKLOG_CLASS_NAME,
+                w!("백로그"),
+                WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX,
+                x,
+                y,
+                BACKLOG_WIDTH,
+                BACKLOG_HEIGHT,
+                Some(main_hwnd),
+                None,
+                Some(instance.into()),
+                None,
+            )?;
+
+            // 인스턴스 생성
+            let dialog = Rc::new(RefCell::new(BacklogDialog {
+                hwnd,
+                main_hwnd,
+                config,
+                richedit: HWND::default(),
+                filter: BacklogFilter::All,
+                add_linefeed: true,
+                entries: Vec::new(),
+            }));
+
+            // 전역 인스턴스 설정
+            BACKLOG_INSTANCE.with(|cell| {
+                *cell.borrow_mut() = Some(dialog.clone());
+            });
+
+            // 컨트롤 생성
+            dialog.borrow_mut().create_controls()?;
+
+            // 윈도우 표시
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = UpdateWindow(hwnd);
+
+            Ok(hwnd)
         }
-
-        // 화면 중앙에 위치
-        let cx = GetSystemMetrics(SM_CXSCREEN);
-        let cy = GetSystemMetrics(SM_CYSCREEN);
-        let x = (cx - BACKLOG_WIDTH) / 2;
-        let y = (cy - BACKLOG_HEIGHT) / 2;
-
-        // 윈도우 생성
-        let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW,
-            BACKLOG_CLASS_NAME,
-            w!("백로그"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX,
-            x,
-            y,
-            BACKLOG_WIDTH,
-            BACKLOG_HEIGHT,
-            Some(main_hwnd),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-
-        // 인스턴스 생성
-        let dialog = Rc::new(RefCell::new(BacklogDialog {
-            hwnd,
-            main_hwnd,
-            config,
-            richedit: HWND::default(),
-            filter: BacklogFilter::All,
-            add_linefeed: true,
-            entries: Vec::new(),
-        }));
-
-        // 전역 인스턴스 설정
-        BACKLOG_INSTANCE.with(|cell| {
-            *cell.borrow_mut() = Some(dialog.clone());
-        });
-
-        // 컨트롤 생성
-        dialog.borrow_mut().create_controls()?;
-
-        // 윈도우 표시
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = UpdateWindow(hwnd);
-
-        Ok(hwnd)
-    }}
+    }
 
     /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
@@ -355,77 +357,85 @@ impl BacklogDialog {
                 ctrl_id::BTN_CLEAR,
                 "초기화",
             )?;
-            self.create_button(
-                445,
-                BACKLOG_HEIGHT - 78,
-                55,
-                28,
-                ctrl_id::BTN_SAVE,
-                "저장",
-            )?;
-            self.create_button(
-                510,
-                BACKLOG_HEIGHT - 78,
-                55,
-                28,
-                ctrl_id::BTN_FONT,
-                "폰트",
-            )?;
+            self.create_button(445, BACKLOG_HEIGHT - 78, 55, 28, ctrl_id::BTN_SAVE, "저장")?;
+            self.create_button(510, BACKLOG_HEIGHT - 78, 55, 28, ctrl_id::BTN_FONT, "폰트")?;
 
             Ok(())
         }
     }
 
     // 헬퍼 함수들
-    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> { unsafe {
-        let hinst = GetModuleHandleW(None)?;
-        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_GROUPBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            x,
-            y,
-            w,
-            h,
-            Some(self.hwnd),
-            None,
-            Some(hinst.into()),
-            None,
-        )?;
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                PCWSTR(text_wide.as_ptr()),
+                WINDOW_STYLE(BS_GROUPBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                None,
+                Some(hinst.into()),
+                None,
+            )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
-        Ok(hwnd)
-    }}
+            Ok(hwnd)
+        }
+    }
 
-    unsafe fn create_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> { unsafe {
-        let hinst = GetModuleHandleW(None)?;
-        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe fn create_button(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+    ) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_PUSHBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            x,
-            y,
-            w,
-            h,
-            Some(self.hwnd),
-            Some(HMENU(id as isize as *mut _)),
-            Some(hinst.into()),
-            None,
-        )?;
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                PCWSTR(text_wide.as_ptr()),
+                WINDOW_STYLE(BS_PUSHBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                Some(HMENU(id as isize as *mut _)),
+                Some(hinst.into()),
+                None,
+            )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
-        Ok(hwnd)
-    }}
+            Ok(hwnd)
+        }
+    }
 
     unsafe fn create_checkbox(
         &self,
@@ -436,34 +446,46 @@ impl BacklogDialog {
         id: u16,
         text: &str,
         checked: bool,
-    ) -> Result<HWND> { unsafe {
-        let hinst = GetModuleHandleW(None)?;
-        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    ) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_AUTOCHECKBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            x,
-            y,
-            w,
-            h,
-            Some(self.hwnd),
-            Some(HMENU(id as isize as *mut _)),
-            Some(hinst.into()),
-            None,
-        )?;
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                PCWSTR(text_wide.as_ptr()),
+                WINDOW_STYLE(BS_AUTOCHECKBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                Some(HMENU(id as isize as *mut _)),
+                Some(hinst.into()),
+                None,
+            )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
-        if checked {
-            let _ = SendMessageW(hwnd, BM_SETCHECK, Some(WPARAM(BST_CHECKED.0 as usize)), Some(LPARAM(0)));
+            if checked {
+                let _ = SendMessageW(
+                    hwnd,
+                    BM_SETCHECK,
+                    Some(WPARAM(BST_CHECKED.0 as usize)),
+                    Some(LPARAM(0)),
+                );
+            }
+
+            Ok(hwnd)
         }
-
-        Ok(hwnd)
-    }}
+    }
 
     unsafe fn create_radio(
         &self,
@@ -474,34 +496,46 @@ impl BacklogDialog {
         id: u16,
         text: &str,
         checked: bool,
-    ) -> Result<HWND> { unsafe {
-        let hinst = GetModuleHandleW(None)?;
-        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    ) -> Result<HWND> {
+        unsafe {
+            let hinst = GetModuleHandleW(None)?;
+            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_AUTORADIOBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            x,
-            y,
-            w,
-            h,
-            Some(self.hwnd),
-            Some(HMENU(id as isize as *mut _)),
-            Some(hinst.into()),
-            None,
-        )?;
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                PCWSTR(text_wide.as_ptr()),
+                WINDOW_STYLE(BS_AUTORADIOBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
+                x,
+                y,
+                w,
+                h,
+                Some(self.hwnd),
+                Some(HMENU(id as isize as *mut _)),
+                Some(hinst.into()),
+                None,
+            )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
-        let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
 
-        if checked {
-            let _ = SendMessageW(hwnd, BM_SETCHECK, Some(WPARAM(BST_CHECKED.0 as usize)), Some(LPARAM(0)));
+            if checked {
+                let _ = SendMessageW(
+                    hwnd,
+                    BM_SETCHECK,
+                    Some(WPARAM(BST_CHECKED.0 as usize)),
+                    Some(LPARAM(0)),
+                );
+            }
+
+            Ok(hwnd)
         }
-
-        Ok(hwnd)
-    }}
+    }
 
     /// 로그 항목 추가
     pub fn add_entry(&mut self, entry: LogEntry) {
@@ -513,7 +547,12 @@ impl BacklogDialog {
     fn append_entry_to_richedit(&self, entry: &LogEntry) {
         unsafe {
             // 끝으로 이동
-            let _ = SendMessageW(self.richedit, EM_SETSEL, Some(WPARAM(usize::MAX)), Some(LPARAM(-1)));
+            let _ = SendMessageW(
+                self.richedit,
+                EM_SETSEL,
+                Some(WPARAM(usize::MAX)),
+                Some(LPARAM(-1)),
+            );
 
             // 이름 출력 (노란색, 굵게)
             if let Some(ref name) = entry.name {
@@ -546,40 +585,47 @@ impl BacklogDialog {
             }
 
             // 자동 스크롤
-            let _ = SendMessageW(self.richedit, EM_SCROLLCARET, Some(WPARAM(0)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                self.richedit,
+                EM_SCROLLCARET,
+                Some(WPARAM(0)),
+                Some(LPARAM(0)),
+            );
         }
     }
 
     /// 스타일 텍스트 추가
-    unsafe fn append_styled_text(&self, text: &str, color: u32, bold: bool) { unsafe {
-        // CHARFORMAT2W 설정
-        let mut cf = CHARFORMAT2W::default();
-        cf.dw_mask = CFM_COLOR | CFM_SIZE;
-        cf.cr_text_color = color;
-        cf.y_height = 200; // 10pt (1pt = 20 트윕)
+    unsafe fn append_styled_text(&self, text: &str, color: u32, bold: bool) {
+        unsafe {
+            // CHARFORMAT2W 설정
+            let mut cf = CHARFORMAT2W::default();
+            cf.dw_mask = CFM_COLOR | CFM_SIZE;
+            cf.cr_text_color = color;
+            cf.y_height = 200; // 10pt (1pt = 20 트윕)
 
-        if bold {
-            cf.dw_mask |= CFM_BOLD;
-            cf.dw_effects |= CFE_BOLD;
+            if bold {
+                cf.dw_mask |= CFM_BOLD;
+                cf.dw_effects |= CFE_BOLD;
+            }
+
+            // 포맷 적용
+            let _ = SendMessageW(
+                self.richedit,
+                EM_SETCHARFORMAT,
+                Some(WPARAM(SCF_SELECTION as usize)),
+                Some(LPARAM(&cf as *const _ as isize)),
+            );
+
+            // 텍스트 삽입
+            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = SendMessageW(
+                self.richedit,
+                EM_REPLACESEL,
+                Some(WPARAM(0)),
+                Some(LPARAM(wide.as_ptr() as isize)),
+            );
         }
-
-        // 포맷 적용
-        let _ = SendMessageW(
-            self.richedit,
-            EM_SETCHARFORMAT,
-            Some(WPARAM(SCF_SELECTION as usize)),
-            Some(LPARAM(&cf as *const _ as isize)),
-        );
-
-        // 텍스트 삽입
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let _ = SendMessageW(
-            self.richedit,
-            EM_REPLACESEL,
-            Some(WPARAM(0)),
-            Some(LPARAM(wide.as_ptr() as isize)),
-        );
-    }}
+    }
 
     /// RichEdit 내용 지우기
     fn clear_richedit(&mut self) {
@@ -626,7 +672,10 @@ impl BacklogDialog {
             }
 
             // 파일명 가져오기
-            let len = filename.iter().position(|&c| c == 0).unwrap_or(filename.len());
+            let len = filename
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(filename.len());
             let path = String::from_utf16_lossy(&filename[..len]);
 
             // 내용 생성
@@ -709,48 +758,55 @@ impl BacklogDialog {
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
-    ) -> LRESULT { unsafe {
-        let instance = BACKLOG_INSTANCE.with(|cell| cell.borrow().clone());
+    ) -> LRESULT {
+        unsafe {
+            let instance = BACKLOG_INSTANCE.with(|cell| cell.borrow().clone());
 
-        if let Some(dialog) = instance {
-            match msg {
-                WM_COMMAND => {
-                    let id = (wparam.0 & 0xFFFF) as u16;
-                    dialog.borrow_mut().handle_command(id);
-                    return LRESULT(0);
+            if let Some(dialog) = instance {
+                match msg {
+                    WM_COMMAND => {
+                        let id = (wparam.0 & 0xFFFF) as u16;
+                        dialog.borrow_mut().handle_command(id);
+                        return LRESULT(0);
+                    }
+
+                    WM_SIZE => {
+                        let width = (lparam.0 & 0xFFFF) as i32;
+                        let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
+                        dialog.borrow().on_size(width, height);
+                        return LRESULT(0);
+                    }
+
+                    WM_CLOSE => {
+                        let _ = DestroyWindow(hwnd);
+                        return LRESULT(0);
+                    }
+
+                    WM_DESTROY => {
+                        BACKLOG_INSTANCE.with(|cell| {
+                            *cell.borrow_mut() = None;
+                        });
+                        return LRESULT(0);
+                    }
+
+                    WM_LBUTTONDOWN => {
+                        // 창 드래그
+                        let _ = SendMessageW(
+                            hwnd,
+                            WM_NCLBUTTONDOWN,
+                            Some(WPARAM(HTCAPTION as usize)),
+                            Some(LPARAM(0)),
+                        );
+                        return LRESULT(0);
+                    }
+
+                    _ => {}
                 }
-
-                WM_SIZE => {
-                    let width = (lparam.0 & 0xFFFF) as i32;
-                    let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
-                    dialog.borrow().on_size(width, height);
-                    return LRESULT(0);
-                }
-
-                WM_CLOSE => {
-                    let _ = DestroyWindow(hwnd);
-                    return LRESULT(0);
-                }
-
-                WM_DESTROY => {
-                    BACKLOG_INSTANCE.with(|cell| {
-                        *cell.borrow_mut() = None;
-                    });
-                    return LRESULT(0);
-                }
-
-                WM_LBUTTONDOWN => {
-                    // 창 드래그
-                    let _ = SendMessageW(hwnd, WM_NCLBUTTONDOWN, Some(WPARAM(HTCAPTION as usize)), Some(LPARAM(0)));
-                    return LRESULT(0);
-                }
-
-                _ => {}
             }
-        }
 
-        DefWindowProcW(hwnd, msg, wparam, lparam)
-    }}
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+    }
 }
 
 /// 공개 인터페이스: 기존 백로그에 항목 추가
