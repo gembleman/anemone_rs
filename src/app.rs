@@ -103,17 +103,9 @@ impl App {
             // TaskbarCreated 메시지 등록
             let taskbar_created_msg = tray::register_taskbar_created_message();
 
-            // DirectWriteRenderer 초기화 (실패 시 None으로 폴백)
-            let dwrite_renderer = match DirectWriteRenderer::new() {
-                Ok(renderer) => {
-                    println!("DirectWrite renderer initialized");
-                    Some(renderer)
-                }
-                Err(e) => {
-                    eprintln!("Failed to initialize DirectWrite renderer: {e}, falling back to GDI");
-                    None
-                }
-            };
+            // DirectWriteRenderer 초기화
+            let dwrite_renderer = DirectWriteRenderer::new()?;
+            println!("DirectWrite renderer initialized");
 
             // App 인스턴스 생성
             let config = Rc::new(RefCell::new(Config::default()));
@@ -134,7 +126,7 @@ impl App {
                 backlog_hwnd: None,
                 magnetic: None,
                 current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
-                dwrite_renderer,
+                dwrite_renderer: Some(dwrite_renderer),
             }));
 
             // 전역 인스턴스 설정
@@ -266,13 +258,11 @@ impl App {
 
         drop(cfg);
 
-        // 텍스트 그리기
+        // 텍스트 그리기 (DirectWrite 사용)
         if !self.current_text.is_empty() {
-            // DirectWrite 렌더러 사용 시도, 실패 시 GDI 폴백
-            let use_dwrite = if let Some(ref mut renderer) = self.dwrite_renderer {
+            if let Some(ref mut renderer) = self.dwrite_renderer {
                 if let Err(e) = renderer.bind_dc(buffer.hdc(), buffer.width, buffer.height) {
                     eprintln!("DirectWrite bind_dc failed: {e}");
-                    false
                 } else {
                     let max_width = (buffer.width - margin_x * 2) as f32;
                     let max_height = (buffer.height - margin_y * 2) as f32;
@@ -285,18 +275,8 @@ impl App {
                         &render_style,
                     ) {
                         eprintln!("DirectWrite draw_text failed: {e}");
-                        false
-                    } else {
-                        true
                     }
                 }
-            } else {
-                false
-            };
-
-            // DirectWrite 실패 시 GDI 폴백
-            if !use_dwrite {
-                buffer.draw_text(&self.current_text, margin_x, margin_y, &render_style);
             }
         }
 
