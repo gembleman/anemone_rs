@@ -675,22 +675,24 @@ impl TranslateDialog {
                 }
             }
 
-            // 원래 프로시저 호출
-            let instance = TRANSLATE_INSTANCE.with(|cell| cell.borrow().clone());
-            if let Some(dialog) = instance {
-                let dialog_ref = dialog.borrow();
-                let original_proc = if hwnd == dialog_ref.source_edit {
-                    dialog_ref.original_source_proc
-                } else if hwnd == dialog_ref.dest_edit {
-                    dialog_ref.original_dest_proc
-                } else {
-                    0
-                };
-
-                if original_proc != 0 {
-                    let proc: WNDPROC = std::mem::transmute(original_proc);
-                    return CallWindowProcW(proc, hwnd, msg, wparam, lparam);
+            // 원래 프로시저를 borrow 범위 밖에서 가져옴 (재귀 호출 시 borrow 충돌 방지)
+            let original_proc = TRANSLATE_INSTANCE.with(|cell| {
+                if let Some(ref dialog) = *cell.borrow() {
+                    // try_borrow를 사용하여 이미 borrow된 경우 0 반환
+                    if let Ok(dialog_ref) = dialog.try_borrow() {
+                        if hwnd == dialog_ref.source_edit {
+                            return dialog_ref.original_source_proc;
+                        } else if hwnd == dialog_ref.dest_edit {
+                            return dialog_ref.original_dest_proc;
+                        }
+                    }
                 }
+                0
+            });
+
+            if original_proc != 0 {
+                let proc: WNDPROC = std::mem::transmute(original_proc);
+                return CallWindowProcW(proc, hwnd, msg, wparam, lparam);
             }
 
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -730,23 +732,32 @@ impl TranslateDialog {
     }
 
     /// 번역 엔진 초기화
-    fn init_translation_engine(&mut self) {
+    fn init_translation_engine(&mut self) -> std::result::Result<(), String> {
         if self.engine_initialized {
-            return;
+            return Ok(());
         }
 
         let config = self.config.borrow();
+        let engine = TranslationEngine::from_u8(config.translation.engine);
         let manager = get_translation_manager();
 
         if let Ok(mut mgr) = manager.lock() {
             // EzTrans 초기화
-            if !config.translation.eztrans_dll_path.is_empty()
-                && !config.translation.eztrans_dat_path.is_empty()
-            {
-                let _ = mgr.init_eztrans(
+            if engine == TranslationEngine::EzTrans {
+                if config.translation.eztrans_dll_path.is_empty()
+                    || config.translation.eztrans_dat_path.is_empty()
+                {
+                    return Err(
+                        "EzTrans 경로가 설정되지 않았습니다. 번역 설정에서 경로를 지정하세요."
+                            .to_string(),
+                    );
+                }
+                if let Err(e) = mgr.init_eztrans(
                     &config.translation.eztrans_dll_path,
                     &config.translation.eztrans_dat_path,
-                );
+                ) {
+                    return Err(format!("EzTrans 초기화 실패: {}", e));
+                }
             }
 
             // DeepL API 키 설정
@@ -755,12 +766,15 @@ impl TranslateDialog {
             }
 
             // 엔진 설정
-            mgr.set_engine(TranslationEngine::from_u8(config.translation.engine));
+            mgr.set_engine(engine);
             mgr.set_source_language(Language::from_u8(config.translation.source_lang));
             mgr.set_target_language(Language::from_u8(config.translation.target_lang));
+        } else {
+            return Err("번역 매니저 잠금 실패".to_string());
         }
 
         self.engine_initialized = true;
+        Ok(())
     }
 
     /// 현재 선택된 엔진/언어를 매니저에 적용
@@ -797,7 +811,10 @@ impl TranslateDialog {
         }
 
         // 엔진 초기화
-        self.init_translation_engine();
+        if let Err(e) = self.init_translation_engine() {
+            self.set_dest_text(&format!("[오류] {}", e));
+            return;
+        }
 
         // 현재 설정 적용
         self.apply_current_settings();

@@ -91,7 +91,7 @@ impl HookSettingsDialog {
             if atom == 0 {
                 let err = GetLastError();
                 if err != ERROR_CLASS_ALREADY_EXISTS {
-                    return Err(Error::from_hresult(HRESULT::from_win32(err.0)));
+                    return Err(Error::from_hresult(HRESULT::from_win32((err.0))));
                 }
             }
 

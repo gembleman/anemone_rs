@@ -128,6 +128,10 @@ mod ctrl_id {
     pub const TRANS_SOURCE_LANG: u16 = 1261;
     pub const TRANS_TARGET_LANG: u16 = 1262;
     pub const TRANS_AUTO_DETECT: u16 = 1263;
+    pub const EZTRANS_DLL_EDIT: u16 = 1264;
+    pub const EZTRANS_DLL_BROWSE: u16 = 1265;
+    pub const EZTRANS_DAT_EDIT: u16 = 1266;
+    pub const EZTRANS_DAT_BROWSE: u16 = 1267;
 
     // 닫기 버튼
     pub const CLOSE: u16 = 1300;
@@ -135,7 +139,7 @@ mod ctrl_id {
 
 const SETTINGS_CLASS_NAME: PCWSTR = w!("AnemoneSettingsClass");
 const SETTINGS_WIDTH: i32 = 500;
-const SETTINGS_HEIGHT: i32 = 870;
+const SETTINGS_HEIGHT: i32 = 940;
 
 /// 설정 변경 콜백 타입
 pub type SettingsChangeCallback = Box<dyn Fn(&Config)>;
@@ -669,7 +673,7 @@ impl SettingsDialog {
             )?;
 
             // ====== 번역 설정 그룹 ======
-            self.create_group_box(10, 665, 470, 50, "번역 설정")?;
+            self.create_group_box(10, 665, 470, 120, "번역 설정")?;
 
             // 엔진 선택
             self.create_label(20, 685, 40, 18, "엔진:")?;
@@ -724,8 +728,20 @@ impl SettingsDialog {
                 auto_detect,
             )?;
 
+            // EzTrans DLL 경로
+            self.create_label(20, 710, 70, 18, "EzTrans DLL:")?;
+            let dll_path = self.config.borrow().translation.eztrans_dll_path.clone();
+            self.create_edit(90, 708, 310, 22, ctrl_id::EZTRANS_DLL_EDIT, &dll_path)?;
+            self.create_button(405, 708, 65, 22, ctrl_id::EZTRANS_DLL_BROWSE, "찾아보기")?;
+
+            // EzTrans Dat 경로
+            self.create_label(20, 735, 70, 18, "EzTrans Dat:")?;
+            let dat_path = self.config.borrow().translation.eztrans_dat_path.clone();
+            self.create_edit(90, 733, 310, 22, ctrl_id::EZTRANS_DAT_EDIT, &dat_path)?;
+            self.create_button(405, 733, 65, 22, ctrl_id::EZTRANS_DAT_BROWSE, "찾아보기")?;
+
             // ====== 닫기 버튼 ======
-            self.create_button(380, 790, 100, 30, ctrl_id::CLOSE, "닫기")?;
+            self.create_button(380, 860, 100, 30, ctrl_id::CLOSE, "닫기")?;
 
             Ok(())
         }
@@ -1383,6 +1399,40 @@ impl SettingsDialog {
                 self.notify_change();
             }
 
+            // EzTrans DLL 찾아보기
+            EZTRANS_DLL_BROWSE => {
+                if let Some(path) = self.browse_dll_file("J2KEngine.dll 선택") {
+                    self.config.borrow_mut().translation.eztrans_dll_path = path.clone();
+                    unsafe {
+                        if let Ok(edit) = GetDlgItem(Some(self.hwnd), EZTRANS_DLL_EDIT as i32) {
+                            if !edit.is_invalid() {
+                                let text_wide: Vec<u16> =
+                                    path.encode_utf16().chain(std::iter::once(0)).collect();
+                                let _ = SetWindowTextW(edit, PCWSTR(text_wide.as_ptr()));
+                            }
+                        }
+                    }
+                    self.notify_change();
+                }
+            }
+
+            // EzTrans Dat 폴더 찾아보기
+            EZTRANS_DAT_BROWSE => {
+                if let Some(path) = self.browse_folder_with_title("EzTrans Dat 폴더 선택") {
+                    self.config.borrow_mut().translation.eztrans_dat_path = path.clone();
+                    unsafe {
+                        if let Ok(edit) = GetDlgItem(Some(self.hwnd), EZTRANS_DAT_EDIT as i32) {
+                            if !edit.is_invalid() {
+                                let text_wide: Vec<u16> =
+                                    path.encode_utf16().chain(std::iter::once(0)).collect();
+                                let _ = SetWindowTextW(edit, PCWSTR(text_wide.as_ptr()));
+                            }
+                        }
+                    }
+                    self.notify_change();
+                }
+            }
+
             _ => {}
         }
     }
@@ -1562,6 +1612,11 @@ impl SettingsDialog {
 
     /// 폴더 브라우저 열기
     fn browse_folder(&self) -> Option<String> {
+        self.browse_folder_with_title("스크린샷 저장 경로 선택")
+    }
+
+    /// 제목 지정 폴더 브라우저 열기
+    fn browse_folder_with_title(&self, title: &str) -> Option<String> {
         use windows::Win32::System::Com::{
             CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
         };
@@ -1584,7 +1639,79 @@ impl SettingsDialog {
 
             // 폴더 선택 모드
             let _ = dialog.SetOptions(FOS_PICKFOLDERS);
-            let _ = dialog.SetTitle(w!("스크린샷 저장 경로 선택"));
+            let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = dialog.SetTitle(PCWSTR(title_wide.as_ptr()));
+
+            // 대화상자 표시
+            let result = dialog.Show(Some(self.hwnd));
+            if result.is_err() {
+                CoUninitialize();
+                return None;
+            }
+
+            // 결과 가져오기
+            let item: IShellItem = match dialog.GetResult() {
+                Ok(i) => i,
+                Err(_) => {
+                    CoUninitialize();
+                    return None;
+                }
+            };
+
+            let path_ptr = match item.GetDisplayName(SIGDN_FILESYSPATH) {
+                Ok(p) => p,
+                Err(_) => {
+                    CoUninitialize();
+                    return None;
+                }
+            };
+
+            // PWSTR을 String으로 변환
+            let path = path_ptr.to_string().ok();
+
+            // COM 정리
+            windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
+            CoUninitialize();
+
+            path
+        }
+    }
+
+    /// DLL 파일 브라우저 열기
+    fn browse_dll_file(&self, title: &str) -> Option<String> {
+        use windows::Win32::System::Com::{
+            CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+        };
+        use windows::Win32::UI::Shell::{
+            FileOpenDialog, IFileOpenDialog, IShellItem, SIGDN_FILESYSPATH,
+        };
+        use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
+
+        unsafe {
+            // COM 초기화
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+            let dialog: IFileOpenDialog = match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)
+            {
+                Ok(d) => d,
+                Err(_) => {
+                    CoUninitialize();
+                    return None;
+                }
+            };
+
+            // 제목 설정
+            let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = dialog.SetTitle(PCWSTR(title_wide.as_ptr()));
+
+            // 파일 필터 설정
+            let filter_name: Vec<u16> = "DLL 파일".encode_utf16().chain(std::iter::once(0)).collect();
+            let filter_spec: Vec<u16> = "*.dll".encode_utf16().chain(std::iter::once(0)).collect();
+            let filters = [COMDLG_FILTERSPEC {
+                pszName: PCWSTR(filter_name.as_ptr()),
+                pszSpec: PCWSTR(filter_spec.as_ptr()),
+            }];
+            let _ = dialog.SetFileTypes(&filters);
 
             // 대화상자 표시
             let result = dialog.Show(Some(self.hwnd));
