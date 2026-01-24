@@ -123,13 +123,19 @@ mod ctrl_id {
     pub const SCREENSHOT_QUALITY_TRACKBAR: u16 = 1254;
     pub const SCREENSHOT_QUALITY_TEXT: u16 = 1255;
 
+    // 번역 설정
+    pub const TRANS_ENGINE: u16 = 1260;
+    pub const TRANS_SOURCE_LANG: u16 = 1261;
+    pub const TRANS_TARGET_LANG: u16 = 1262;
+    pub const TRANS_AUTO_DETECT: u16 = 1263;
+
     // 닫기 버튼
     pub const CLOSE: u16 = 1300;
 }
 
 const SETTINGS_CLASS_NAME: PCWSTR = w!("AnemoneSettingsClass");
 const SETTINGS_WIDTH: i32 = 500;
-const SETTINGS_HEIGHT: i32 = 800;
+const SETTINGS_HEIGHT: i32 = 870;
 
 /// 설정 변경 콜백 타입
 pub type SettingsChangeCallback = Box<dyn Fn(&Config)>;
@@ -384,7 +390,7 @@ impl SettingsDialog {
             self.create_checkbox(180, 280, 100, 20, ctrl_id::ORG_SHADOW, "그림자", org_shadow)?;
 
             // ====== 번역(TRANS) 설정 그룹 ======
-            self.create_group_box(330, 180, 150, 130, "번역 설정")?;
+            self.create_group_box(330, 180, 150, 130, "번역문 설정")?;
             self.create_color_button(340, 200, 65, 22, ctrl_id::TRANS_COLOR, "주색상")?;
             self.create_color_button(410, 200, 60, 22, ctrl_id::TRANS_OUTLINE1, "외곽1")?;
             self.create_color_button(340, 227, 65, 22, ctrl_id::TRANS_OUTLINE2, "외곽2")?;
@@ -662,8 +668,64 @@ impl SettingsDialog {
                 &format!("{}", jpeg_quality),
             )?;
 
+            // ====== 번역 설정 그룹 ======
+            self.create_group_box(10, 665, 470, 50, "번역 설정")?;
+
+            // 엔진 선택
+            self.create_label(20, 685, 40, 18, "엔진:")?;
+            let engine_items = vec!["EzTrans", "Google", "DeepL"];
+            let engine_sel = self.config.borrow().translation.engine as usize;
+            self.create_combobox(
+                60,
+                683,
+                85,
+                100,
+                ctrl_id::TRANS_ENGINE,
+                &engine_items,
+                engine_sel,
+            )?;
+
+            // 소스 언어
+            self.create_label(155, 685, 40, 18, "소스:")?;
+            let lang_items = vec!["일본어", "한국어", "영어", "중국어(간)", "중국어(번)"];
+            let source_sel = self.config.borrow().translation.source_lang as usize;
+            self.create_combobox(
+                195,
+                683,
+                80,
+                100,
+                ctrl_id::TRANS_SOURCE_LANG,
+                &lang_items,
+                source_sel,
+            )?;
+
+            // 타겟 언어
+            self.create_label(285, 685, 40, 18, "타겟:")?;
+            let target_sel = self.config.borrow().translation.target_lang as usize;
+            self.create_combobox(
+                325,
+                683,
+                80,
+                100,
+                ctrl_id::TRANS_TARGET_LANG,
+                &lang_items,
+                target_sel,
+            )?;
+
+            // 자동 감지 체크박스
+            let auto_detect = self.config.borrow().translation.auto_detect;
+            self.create_checkbox(
+                415,
+                685,
+                60,
+                18,
+                ctrl_id::TRANS_AUTO_DETECT,
+                "자동",
+                auto_detect,
+            )?;
+
             // ====== 닫기 버튼 ======
-            self.create_button(380, 720, 100, 30, ctrl_id::CLOSE, "닫기")?;
+            self.create_button(380, 790, 100, 30, ctrl_id::CLOSE, "닫기")?;
 
             Ok(())
         }
@@ -1313,6 +1375,14 @@ impl SettingsDialog {
                 }
             }
 
+            // 자동 언어 감지 체크박스
+            TRANS_AUTO_DETECT => {
+                let mut cfg = self.config.borrow_mut();
+                cfg.translation.auto_detect = !cfg.translation.auto_detect;
+                drop(cfg);
+                self.notify_change();
+            }
+
             _ => {}
         }
     }
@@ -1458,8 +1528,35 @@ impl SettingsDialog {
                     self.config.borrow_mut().screenshot.compression = sel as u8;
                     self.notify_change();
                 }
+                TRANS_ENGINE => {
+                    self.config.borrow_mut().translation.engine = sel as u8;
+                    self.sync_translation_manager();
+                    self.notify_change();
+                }
+                TRANS_SOURCE_LANG => {
+                    self.config.borrow_mut().translation.source_lang = sel as u8;
+                    self.sync_translation_manager();
+                    self.notify_change();
+                }
+                TRANS_TARGET_LANG => {
+                    self.config.borrow_mut().translation.target_lang = sel as u8;
+                    self.sync_translation_manager();
+                    self.notify_change();
+                }
                 _ => {}
             }
+        }
+    }
+
+    /// 번역 매니저 설정 동기화
+    fn sync_translation_manager(&self) {
+        use crate::translation::{get_translation_manager, Language, TranslationEngine};
+        let config = self.config.borrow();
+        let manager = get_translation_manager();
+        if let Ok(mut mgr) = manager.lock() {
+            mgr.set_engine(TranslationEngine::from_u8(config.translation.engine));
+            mgr.set_source_language(Language::from_u8(config.translation.source_lang));
+            mgr.set_target_language(Language::from_u8(config.translation.target_lang));
         }
     }
 

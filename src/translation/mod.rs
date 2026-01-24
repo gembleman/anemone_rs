@@ -8,10 +8,12 @@
 mod eztrans;
 mod google;
 mod deepl;
+mod detect;
 
 pub use eztrans::EzTransTranslator;
 pub use google::GoogleTranslator;
 pub use deepl::DeepLTranslator;
+pub use detect::{detect_language, is_source_language};
 
 use std::sync::{Arc, Mutex, OnceLock};
 

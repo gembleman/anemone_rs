@@ -40,3 +40,4 @@ chrono = "0.4"
 windows-numerics = "0.3"
 windows-core = "0.62"
 eztrans-rs = { path = "../eztrans-rs" }
+whatlang = "0.16"

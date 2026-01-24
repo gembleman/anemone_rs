@@ -475,13 +475,77 @@ impl App {
             // 클립보드 텍스트 처리
             println!("Clipboard: {}", text);
 
+            // 자동 번역 처리
+            let translated_text = self.process_clipboard_text(&text);
+
             // 현재 텍스트 업데이트 및 다시 그리기
-            self.current_text = text.clone();
+            self.current_text = translated_text;
             let _ = self.paint();
 
-            // 백로그에 추가
+            // 백로그에 추가 (원문 저장)
             let entry = LogEntry::new(text);
             add_to_backlog(entry);
+        }
+    }
+
+    /// 클립보드 텍스트 처리 (언어 감지 및 자동 번역)
+    fn process_clipboard_text(&self, text: &str) -> String {
+        let config = self.config.borrow();
+
+        // 자동 감지가 비활성화되면 원문 반환
+        if !config.translation.auto_detect {
+            return text.to_string();
+        }
+
+        let source_lang = crate::translation::Language::from_u8(config.translation.source_lang);
+        drop(config);
+
+        // 소스 언어가 아니면 번역하지 않음
+        if !crate::translation::is_source_language(text, source_lang) {
+            return text.to_string();
+        }
+
+        // 번역 수행
+        self.translate_text(text)
+    }
+
+    /// 텍스트 번역
+    fn translate_text(&self, text: &str) -> String {
+        use crate::translation::{
+            get_translation_manager, Language, TranslationEngine, TranslationResult,
+        };
+
+        let config = self.config.borrow();
+        let manager = get_translation_manager();
+
+        if let Ok(mut mgr) = manager.lock() {
+            // 설정 동기화
+            mgr.set_engine(TranslationEngine::from_u8(config.translation.engine));
+            mgr.set_source_language(Language::from_u8(config.translation.source_lang));
+            mgr.set_target_language(Language::from_u8(config.translation.target_lang));
+
+            // EzTrans/DeepL 초기화 (필요시)
+            if !config.translation.eztrans_dll_path.is_empty() {
+                let _ = mgr.init_eztrans(
+                    &config.translation.eztrans_dll_path,
+                    &config.translation.eztrans_dat_path,
+                );
+            }
+            if !config.translation.deepl_api_key.is_empty() {
+                mgr.set_deepl_api_key(config.translation.deepl_api_key.clone());
+            }
+
+            drop(config);
+
+            match mgr.translate(text) {
+                TranslationResult::Success(translated) => translated,
+                TranslationResult::Error(err) => {
+                    eprintln!("Translation error: {}", err);
+                    text.to_string()
+                }
+            }
+        } else {
+            text.to_string()
         }
     }
 

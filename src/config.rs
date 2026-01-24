@@ -162,6 +162,13 @@ pub struct TranslationConfig {
     pub eztrans_dat_path: String,
     /// DeepL API 키
     pub deepl_api_key: String,
+    /// 자동 언어 감지 활성화
+    #[serde(default = "default_auto_detect")]
+    pub auto_detect: bool,
+}
+
+fn default_auto_detect() -> bool {
+    true
 }
 
 impl Default for TranslationConfig {
@@ -173,6 +180,7 @@ impl Default for TranslationConfig {
             eztrans_dll_path: String::new(),
             eztrans_dat_path: String::new(),
             deepl_api_key: String::new(),
+            auto_detect: true,
         }
     }
 }
