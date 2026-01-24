@@ -15,8 +15,8 @@ use windows::{
 
 use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
+use crate::d2d::D2DRenderer;
 use crate::dialogs::{SettingsDialog, TranslateDialog, BacklogDialog, LogEntry, add_to_backlog};
-use crate::dwrite::DirectWriteRenderer;
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
@@ -51,7 +51,7 @@ pub struct App {
     backlog_hwnd: Option<HWND>,
     magnetic: Option<MagneticManager>,
     current_text: String,
-    dwrite_renderer: Option<DirectWriteRenderer>,
+    d2d_renderer: Option<D2DRenderer>,
 }
 
 // 전역 앱 인스턴스 (WndProc에서 접근용)
@@ -103,9 +103,9 @@ impl App {
             // TaskbarCreated 메시지 등록
             let taskbar_created_msg = tray::register_taskbar_created_message();
 
-            // DirectWriteRenderer 초기화
-            let dwrite_renderer = DirectWriteRenderer::new()?;
-            println!("DirectWrite renderer initialized");
+            // D2D 렌더러 초기화
+            let d2d_renderer = D2DRenderer::new()?;
+            println!("Direct2D renderer initialized");
 
             // App 인스턴스 생성
             let config = Rc::new(RefCell::new(Config::default()));
@@ -126,7 +126,7 @@ impl App {
                 backlog_hwnd: None,
                 magnetic: None,
                 current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
-                dwrite_renderer: Some(dwrite_renderer),
+                d2d_renderer: Some(d2d_renderer),
             }));
 
             // 전역 인스턴스 설정
@@ -220,22 +220,12 @@ impl App {
 
         let cfg = self.config.borrow();
 
-        // 배경 클리어
-        if cfg.background_visible {
-            let bg = cfg.background_color;
-            let a = ((bg >> 24) & 0xFF) as u8;
-            let r = ((bg >> 16) & 0xFF) as u8;
-            let g = ((bg >> 8) & 0xFF) as u8;
-            let b = (bg & 0xFF) as u8;
-            buffer.clear(r, g, b, a);
-        } else {
-            buffer.clear(0, 0, 0, 1); // 거의 투명
-        }
-
-        // 테두리 그리기
-        if cfg.border_visible {
-            buffer.draw_border(cfg.border_width, cfg.border_color);
-        }
+        // 설정 값 복사
+        let background_visible = cfg.background_visible;
+        let background_color = cfg.background_color;
+        let border_visible = cfg.border_visible;
+        let border_width = cfg.border_width;
+        let border_color = cfg.border_color;
 
         // 텍스트 스타일 정보 가져오기
         let text_style = &cfg.translation_style;
@@ -258,25 +248,50 @@ impl App {
 
         drop(cfg);
 
-        // 텍스트 그리기 (DirectWrite 사용)
-        if !self.current_text.is_empty() {
-            if let Some(ref mut renderer) = self.dwrite_renderer {
-                if let Err(e) = renderer.bind_dc(buffer.hdc(), buffer.width, buffer.height) {
-                    eprintln!("DirectWrite bind_dc failed: {e}");
-                } else {
-                    let max_width = (buffer.width - margin_x * 2) as f32;
-                    let max_height = (buffer.height - margin_y * 2) as f32;
-                    if let Err(e) = renderer.draw_text(
-                        &self.current_text,
-                        margin_x as f32,
-                        margin_y as f32,
-                        max_width,
-                        max_height,
-                        &render_style,
-                    ) {
-                        eprintln!("DirectWrite draw_text failed: {e}");
-                    }
+        // D2D 렌더러로 그리기
+        if let Some(ref mut renderer) = self.d2d_renderer {
+            // DC 바인딩
+            if let Err(e) = renderer.bind_dc(buffer.hdc(), buffer.width, buffer.height) {
+                eprintln!("D2D bind_dc failed: {e}");
+                return Ok(());
+            }
+
+            // 렌더링 시작
+            renderer.begin_draw();
+
+            // 배경 클리어
+            if background_visible {
+                renderer.clear(background_color);
+            } else {
+                renderer.clear(0x01000000); // 거의 투명 (alpha=1)
+            }
+
+            // 테두리 그리기
+            if border_visible {
+                if let Err(e) = renderer.draw_border(border_width, border_color) {
+                    eprintln!("D2D draw_border failed: {e}");
                 }
+            }
+
+            // 텍스트 그리기
+            if !self.current_text.is_empty() {
+                let max_width = (buffer.width - margin_x * 2) as f32;
+                let max_height = (buffer.height - margin_y * 2) as f32;
+                if let Err(e) = renderer.draw_text(
+                    &self.current_text,
+                    margin_x as f32,
+                    margin_y as f32,
+                    max_width,
+                    max_height,
+                    &render_style,
+                ) {
+                    eprintln!("D2D draw_text failed: {e}");
+                }
+            }
+
+            // 렌더링 종료
+            if let Err(e) = renderer.end_draw() {
+                eprintln!("D2D end_draw failed: {e}");
             }
         }
 

@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod d2d;
 mod dialogs;
 mod dwrite;
 mod tray;
