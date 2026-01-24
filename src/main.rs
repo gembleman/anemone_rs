@@ -3,6 +3,7 @@
 mod app;
 mod config;
 mod dialogs;
+mod dwrite;
 mod tray;
 mod menu;
 mod hotkey;
