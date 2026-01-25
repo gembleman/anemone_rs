@@ -3,17 +3,32 @@
 //! whatlang 크레이트와 Unicode 범위 기반 휴리스틱을 사용하여
 //! 텍스트의 언어를 감지합니다.
 
-use super::Language;
+use isolang::Language;
 
 /// whatlang 기반 언어 감지
 pub fn detect_language(text: &str) -> Option<Language> {
     // whatlang으로 언어 감지
     if let Some(info) = whatlang::detect(text) {
         let lang = match info.lang() {
-            whatlang::Lang::Jpn => Language::Japanese,
-            whatlang::Lang::Kor => Language::Korean,
-            whatlang::Lang::Eng => Language::English,
-            whatlang::Lang::Cmn => Language::ChineseSimplified,
+            whatlang::Lang::Jpn => Language::Jpn,
+            whatlang::Lang::Kor => Language::Kor,
+            whatlang::Lang::Eng => Language::Eng,
+            whatlang::Lang::Cmn => Language::Zho,
+            whatlang::Lang::Spa => Language::Spa,
+            whatlang::Lang::Fra => Language::Fra,
+            whatlang::Lang::Deu => Language::Deu,
+            whatlang::Lang::Ita => Language::Ita,
+            whatlang::Lang::Por => Language::Por,
+            whatlang::Lang::Rus => Language::Rus,
+            whatlang::Lang::Ara => Language::Ara,
+            whatlang::Lang::Hin => Language::Hin,
+            whatlang::Lang::Tha => Language::Tha,
+            whatlang::Lang::Vie => Language::Vie,
+            whatlang::Lang::Ind => Language::Ind,
+            whatlang::Lang::Nld => Language::Nld,
+            whatlang::Lang::Pol => Language::Pol,
+            whatlang::Lang::Tur => Language::Tur,
+            whatlang::Lang::Ukr => Language::Ukr,
             _ => return detect_language_heuristic(text),
         };
         return Some(lang);
@@ -66,22 +81,22 @@ pub fn detect_language_heuristic(text: &str) -> Option<Language> {
 
     // 히라가나/가타카나가 있으면 일본어
     if hiragana_katakana > threshold {
-        return Some(Language::Japanese);
+        return Some(Language::Jpn);
     }
 
     // 한글이 있으면 한국어
     if hangul > threshold {
-        return Some(Language::Korean);
+        return Some(Language::Kor);
     }
 
-    // CJK 한자만 있으면 중국어 (간체로 기본 설정)
+    // CJK 한자만 있으면 중국어
     if cjk > threshold && hiragana_katakana == 0 && hangul == 0 {
-        return Some(Language::ChineseSimplified);
+        return Some(Language::Zho);
     }
 
     // 라틴 알파벳이 대다수면 영어
     if latin > total / 2 {
-        return Some(Language::English);
+        return Some(Language::Eng);
     }
 
     None
@@ -111,30 +126,30 @@ mod tests {
     #[test]
     fn test_detect_japanese() {
         let text = "こんにちは世界";
-        assert_eq!(detect_language(text), Some(Language::Japanese));
+        assert_eq!(detect_language(text), Some(Language::Jpn));
     }
 
     #[test]
     fn test_detect_korean() {
         let text = "안녕하세요 세계";
-        assert_eq!(detect_language(text), Some(Language::Korean));
+        assert_eq!(detect_language(text), Some(Language::Kor));
     }
 
     #[test]
     fn test_detect_english() {
         let text = "Hello World";
-        assert_eq!(detect_language(text), Some(Language::English));
+        assert_eq!(detect_language(text), Some(Language::Eng));
     }
 
     #[test]
     fn test_detect_chinese() {
         let text = "你好世界";
-        assert_eq!(detect_language(text), Some(Language::ChineseSimplified));
+        assert_eq!(detect_language(text), Some(Language::Zho));
     }
 
     #[test]
     fn test_is_source_language() {
-        assert!(is_source_language("こんにちは", Language::Japanese));
-        assert!(!is_source_language("안녕하세요", Language::Japanese));
+        assert!(is_source_language("こんにちは", Language::Jpn));
+        assert!(!is_source_language("안녕하세요", Language::Jpn));
     }
 }

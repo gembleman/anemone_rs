@@ -205,22 +205,23 @@ impl TranslateDialog {
             // 설정에서 초기값 로드
             {
                 let config = self.config.borrow();
+                let engine = config.translation.get_engine();
                 let _ = SendMessageW(
                     self.engine_combo,
                     CB_SETCURSEL,
-                    Some(WPARAM(config.translation.engine as usize)),
+                    Some(WPARAM(config.translation.engine_as_u8() as usize)),
                     None,
                 );
                 let _ = SendMessageW(
                     self.source_lang_combo,
                     CB_SETCURSEL,
-                    Some(WPARAM(config.translation.source_lang as usize)),
+                    Some(WPARAM(config.translation.source_lang_index(engine))),
                     None,
                 );
                 let _ = SendMessageW(
                     self.target_lang_combo,
                     CB_SETCURSEL,
-                    Some(WPARAM(config.translation.target_lang as usize)),
+                    Some(WPARAM(config.translation.target_lang_index(engine))),
                     None,
                 );
             }
@@ -738,7 +739,7 @@ impl TranslateDialog {
         }
 
         let config = self.config.borrow();
-        let engine = TranslationEngine::from_u8(config.translation.engine);
+        let engine = config.translation.get_engine();
         let manager = get_translation_manager();
 
         if let Ok(mut mgr) = manager.lock() {
@@ -767,8 +768,8 @@ impl TranslateDialog {
 
             // 엔진 설정
             mgr.set_engine(engine);
-            mgr.set_source_language(Language::from_u8(config.translation.source_lang));
-            mgr.set_target_language(Language::from_u8(config.translation.target_lang));
+            mgr.set_source_language(config.translation.get_source_language());
+            mgr.set_target_language(config.translation.get_target_language());
         } else {
             return Err("번역 매니저 잠금 실패".to_string());
         }
@@ -780,25 +781,32 @@ impl TranslateDialog {
     /// 현재 선택된 엔진/언어를 매니저에 적용
     fn apply_current_settings(&self) {
         unsafe {
-            let engine_idx = SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8;
+            let engine_idx = SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as usize;
             let source_idx =
-                SendMessageW(self.source_lang_combo, CB_GETCURSEL, None, None).0 as u8;
+                SendMessageW(self.source_lang_combo, CB_GETCURSEL, None, None).0 as usize;
             let target_idx =
-                SendMessageW(self.target_lang_combo, CB_GETCURSEL, None, None).0 as u8;
+                SendMessageW(self.target_lang_combo, CB_GETCURSEL, None, None).0 as usize;
+
+            let engine = TranslationEngine::from_u8(engine_idx as u8);
+            let supported_source = engine.supported_source_languages();
+            let supported_target = engine.supported_target_languages();
+
+            let source_lang = supported_source.get(source_idx).copied().unwrap_or(Language::Jpn);
+            let target_lang = supported_target.get(target_idx).copied().unwrap_or(Language::Kor);
 
             let manager = get_translation_manager();
             if let Ok(mut mgr) = manager.lock() {
-                mgr.set_engine(TranslationEngine::from_u8(engine_idx));
-                mgr.set_source_language(Language::from_u8(source_idx));
-                mgr.set_target_language(Language::from_u8(target_idx));
+                mgr.set_engine(engine);
+                mgr.set_source_language(source_lang);
+                mgr.set_target_language(target_lang);
             }
 
             // 설정 저장
             {
                 let mut config = self.config.borrow_mut();
-                config.translation.engine = engine_idx;
-                config.translation.source_lang = source_idx;
-                config.translation.target_lang = target_idx;
+                config.translation.set_engine(engine);
+                config.translation.set_source_language(source_lang);
+                config.translation.set_target_language(target_lang);
             }
         }
     }

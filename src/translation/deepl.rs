@@ -2,7 +2,8 @@
 //!
 //! DeepL API를 사용한 번역 (API 키 필요)
 
-use super::{Language, TranslationResult, Translator};
+use super::{lang_utils, TranslationResult, Translator};
+use isolang::Language;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
@@ -166,7 +167,10 @@ impl Translator for DeepLTranslator {
             return TranslationResult::Error("DeepL API 키가 설정되지 않았습니다.".to_string());
         }
 
-        match self.call_api(text, source.deepl_code(), target.deepl_code()) {
+        let source_code = lang_utils::to_deepl_code(source);
+        let target_code = lang_utils::to_deepl_code(target);
+
+        match self.call_api(text, source_code, target_code) {
             Ok(result) => TranslationResult::Success(result),
             Err(e) => TranslationResult::Error(e),
         }

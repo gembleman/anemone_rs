@@ -105,8 +105,8 @@ impl App {
             let d2d_renderer = D2DRenderer::new()?;
             println!("Direct2D renderer initialized");
 
-            // App 인스턴스 생성
-            let config = Rc::new(RefCell::new(Config::default()));
+            // 설정 로드 (파일이 없으면 기본값)
+            let config = Rc::new(RefCell::new(Config::load_or_default()));
             let app = Rc::new(RefCell::new(App {
                 hwnd,
                 hwnd_parent,
@@ -497,7 +497,7 @@ impl App {
             return text.to_string();
         }
 
-        let source_lang = crate::translation::Language::from_u8(config.translation.source_lang);
+        let source_lang = config.translation.get_source_language();
         drop(config);
 
         // 소스 언어가 아니면 번역하지 않음
@@ -511,18 +511,16 @@ impl App {
 
     /// 텍스트 번역
     fn translate_text(&self, text: &str) -> String {
-        use crate::translation::{
-            get_translation_manager, Language, TranslationEngine, TranslationResult,
-        };
+        use crate::translation::{get_translation_manager, TranslationResult};
 
         let config = self.config.borrow();
         let manager = get_translation_manager();
 
         if let Ok(mut mgr) = manager.lock() {
             // 설정 동기화
-            mgr.set_engine(TranslationEngine::from_u8(config.translation.engine));
-            mgr.set_source_language(Language::from_u8(config.translation.source_lang));
-            mgr.set_target_language(Language::from_u8(config.translation.target_lang));
+            mgr.set_engine(config.translation.get_engine());
+            mgr.set_source_language(config.translation.get_source_language());
+            mgr.set_target_language(config.translation.get_target_language());
 
             // EzTrans/DeepL 초기화 (필요시)
             if !config.translation.eztrans_dll_path.is_empty() {
@@ -583,6 +581,12 @@ impl App {
             unsafe {
                 match msg {
                     WM_DESTROY => {
+                        // 종료 시 설정 저장
+                        if let Ok(app_ref) = app.try_borrow() {
+                            if let Err(e) = app_ref.config.borrow().save() {
+                                eprintln!("설정 저장 실패: {}", e);
+                            }
+                        }
                         PostQuitMessage(0);
                         return LRESULT(0);
                     }

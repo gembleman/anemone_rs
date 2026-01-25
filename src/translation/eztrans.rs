@@ -2,8 +2,9 @@
 //!
 //! eztrans-rs 라이브러리를 사용하여 일본어-한국어 번역 수행
 
-use super::{Language, TranslationResult, Translator};
+use super::{TranslationResult, Translator};
 use eztrans_rs::EzTransEngine;
+use isolang::Language;
 use std::sync::Mutex;
 
 /// EzTrans 번역기
@@ -40,7 +41,7 @@ impl EzTransTranslator {
 impl Translator for EzTransTranslator {
     fn translate(&self, text: &str, source: Language, target: Language) -> TranslationResult {
         // EzTrans는 일본어→한국어만 지원
-        if source != Language::Japanese || target != Language::Korean {
+        if source != Language::Jpn || target != Language::Kor {
             return TranslationResult::Error(
                 "EzTrans는 일본어→한국어 번역만 지원합니다.".to_string(),
             );

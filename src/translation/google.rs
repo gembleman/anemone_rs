@@ -2,7 +2,8 @@
 //!
 //! Google Translate 웹 API를 사용한 번역
 
-use super::{Language, TranslationResult, Translator};
+use super::{lang_utils, TranslationResult, Translator};
+use isolang::Language;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
@@ -170,7 +171,10 @@ impl Translator for GoogleTranslator {
             return TranslationResult::Error("빈 텍스트입니다.".to_string());
         }
 
-        match Self::http_request(text, source.google_code(), target.google_code()) {
+        let source_code = lang_utils::to_google_code(source);
+        let target_code = lang_utils::to_google_code(target);
+
+        match Self::http_request(text, source_code, target_code) {
             Ok(result) => TranslationResult::Success(result),
             Err(e) => TranslationResult::Error(format!("Google 번역 실패: {}", e)),
         }

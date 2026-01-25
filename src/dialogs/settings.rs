@@ -678,7 +678,7 @@ impl SettingsDialog {
             // 엔진 선택
             self.create_label(20, 685, 40, 18, "엔진:")?;
             let engine_items = vec!["EzTrans", "Google", "DeepL"];
-            let engine_sel = self.config.borrow().translation.engine as usize;
+            let engine_sel = self.config.borrow().translation.engine_as_u8() as usize;
             self.create_combobox(
                 60,
                 683,
@@ -691,8 +691,11 @@ impl SettingsDialog {
 
             // 소스 언어
             self.create_label(155, 685, 40, 18, "소스:")?;
-            let lang_items = vec!["일본어", "한국어", "영어", "중국어(간)", "중국어(번)"];
-            let source_sel = self.config.borrow().translation.source_lang as usize;
+            let lang_items = vec!["일본어", "한국어", "영어", "중국어"];
+            let config = self.config.borrow();
+            let engine = config.translation.get_engine();
+            let source_sel = config.translation.source_lang_index(engine);
+            drop(config);
             self.create_combobox(
                 195,
                 683,
@@ -705,7 +708,9 @@ impl SettingsDialog {
 
             // 타겟 언어
             self.create_label(285, 685, 40, 18, "타겟:")?;
-            let target_sel = self.config.borrow().translation.target_lang as usize;
+            let config = self.config.borrow();
+            let target_sel = config.translation.target_lang_index(engine);
+            drop(config);
             self.create_combobox(
                 325,
                 683,
@@ -1412,6 +1417,7 @@ impl SettingsDialog {
                             }
                         }
                     }
+                    self.sync_translation_manager();
                     self.notify_change();
                 }
             }
@@ -1429,6 +1435,7 @@ impl SettingsDialog {
                             }
                         }
                     }
+                    self.sync_translation_manager();
                     self.notify_change();
                 }
             }
@@ -1579,17 +1586,21 @@ impl SettingsDialog {
                     self.notify_change();
                 }
                 TRANS_ENGINE => {
-                    self.config.borrow_mut().translation.engine = sel as u8;
+                    use crate::translation::TranslationEngine;
+                    let engine = TranslationEngine::from_u8(sel as u8);
+                    self.config.borrow_mut().translation.set_engine(engine);
                     self.sync_translation_manager();
                     self.notify_change();
                 }
                 TRANS_SOURCE_LANG => {
-                    self.config.borrow_mut().translation.source_lang = sel as u8;
+                    let engine = self.config.borrow().translation.get_engine();
+                    self.config.borrow_mut().translation.set_source_lang_by_index(sel, engine);
                     self.sync_translation_manager();
                     self.notify_change();
                 }
                 TRANS_TARGET_LANG => {
-                    self.config.borrow_mut().translation.target_lang = sel as u8;
+                    let engine = self.config.borrow().translation.get_engine();
+                    self.config.borrow_mut().translation.set_target_lang_by_index(sel, engine);
                     self.sync_translation_manager();
                     self.notify_change();
                 }
@@ -1600,13 +1611,28 @@ impl SettingsDialog {
 
     /// 번역 매니저 설정 동기화
     fn sync_translation_manager(&self) {
-        use crate::translation::{get_translation_manager, Language, TranslationEngine};
+        use crate::translation::get_translation_manager;
         let config = self.config.borrow();
         let manager = get_translation_manager();
         if let Ok(mut mgr) = manager.lock() {
-            mgr.set_engine(TranslationEngine::from_u8(config.translation.engine));
-            mgr.set_source_language(Language::from_u8(config.translation.source_lang));
-            mgr.set_target_language(Language::from_u8(config.translation.target_lang));
+            mgr.set_engine(config.translation.get_engine());
+            mgr.set_source_language(config.translation.get_source_language());
+            mgr.set_target_language(config.translation.get_target_language());
+
+            // EzTrans 초기화 (경로가 설정되어 있을 경우)
+            if !config.translation.eztrans_dll_path.is_empty()
+                && !config.translation.eztrans_dat_path.is_empty()
+            {
+                let _ = mgr.init_eztrans(
+                    &config.translation.eztrans_dll_path,
+                    &config.translation.eztrans_dat_path,
+                );
+            }
+
+            // DeepL API 키 설정
+            if !config.translation.deepl_api_key.is_empty() {
+                mgr.set_deepl_api_key(config.translation.deepl_api_key.clone());
+            }
         }
     }
 
@@ -1779,6 +1805,11 @@ impl SettingsDialog {
         // 콜백 호출
         if let Some(ref cb) = self.on_change {
             cb(&self.config.borrow());
+        }
+
+        // 설정 파일 저장
+        if let Err(e) = self.config.borrow().save() {
+            eprintln!("설정 저장 실패: {}", e);
         }
 
         // 메인 윈도우에 WM_PAINT 전송
