@@ -275,41 +275,6 @@ impl TranslationConfig {
         }
     }
 
-    // ========== 레거시 호환용 (삭제 예정) ==========
-
-    #[deprecated(note = "Use get_source_language() instead")]
-    pub fn source_lang_as_u8(&self) -> u8 {
-        Self::lang_as_u8(&self.source_lang)
-    }
-
-    #[deprecated(note = "Use get_target_language() instead")]
-    pub fn target_lang_as_u8(&self) -> u8 {
-        Self::lang_as_u8(&self.target_lang)
-    }
-
-    /// 언어 문자열을 u8로 변환 (레거시)
-    pub fn lang_as_u8(lang: &str) -> u8 {
-        match lang.to_lowercase().as_str() {
-            "ja" | "jpn" => 0,
-            "ko" | "kor" => 1,
-            "en" | "eng" => 2,
-            "zh" | "zho" | "zh-cn" => 3,
-            "zh-tw" => 4,
-            _ => 0,
-        }
-    }
-
-    /// u8을 언어 문자열로 변환 (레거시)
-    pub fn lang_from_u8(value: u8) -> String {
-        match value {
-            0 => "ja".to_string(),
-            1 => "ko".to_string(),
-            2 => "en".to_string(),
-            3 => "zh".to_string(),
-            4 => "zh".to_string(),
-            _ => "ja".to_string(),
-        }
-    }
 }
 
 impl Default for TranslationConfig {

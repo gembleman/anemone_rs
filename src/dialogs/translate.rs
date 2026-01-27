@@ -19,6 +19,7 @@ use windows::{
 use crate::config::Config;
 use crate::translation::{
     get_translation_manager, Language, TranslationEngine, TranslationResult,
+    TranslationWorker, WM_TRANSLATION_COMPLETE, take_all_responses,
 };
 
 const CF_UNICODETEXT: u32 = 13;
@@ -70,6 +71,10 @@ pub struct TranslateDialog {
     original_source_proc: isize,
     original_dest_proc: isize,
     engine_initialized: bool,
+    /// 비동기 번역 워커
+    translation_worker: Option<TranslationWorker>,
+    /// 번역 진행 중 여부
+    translating: bool,
 }
 
 thread_local! {
@@ -132,6 +137,9 @@ impl TranslateDialog {
                 None,
             )?;
 
+            // 번역 워커 생성
+            let translation_worker = TranslationWorker::spawn(hwnd);
+
             // 인스턴스 생성
             let dialog = Rc::new(RefCell::new(TranslateDialog {
                 hwnd,
@@ -148,6 +156,8 @@ impl TranslateDialog {
                 original_source_proc: 0,
                 original_dest_proc: 0,
                 engine_initialized: false,
+                translation_worker: Some(translation_worker),
+                translating: false,
             }));
 
             // 전역 인스턴스 설정
@@ -811,10 +821,15 @@ impl TranslateDialog {
         }
     }
 
-    /// 번역 수행
+    /// 번역 수행 (비동기)
     fn do_translate(&mut self) {
         let source = self.get_source_text();
         if source.is_empty() {
+            return;
+        }
+
+        // 이미 번역 중이면 무시
+        if self.translating {
             return;
         }
 
@@ -834,10 +849,45 @@ impl TranslateDialog {
             source
         };
 
-        // 번역 수행
-        let manager = get_translation_manager();
-        let result = if let Ok(mgr) = manager.lock() {
-            match mgr.translate(&text) {
+        // 현재 엔진 설정 가져오기
+        let (engine, source_lang, target_lang, deepl_api_key) = {
+            let config = self.config.borrow();
+            let engine = config.translation.get_engine();
+            let source_lang = config.translation.get_source_language();
+            let target_lang = config.translation.get_target_language();
+            let deepl_api_key = if engine == TranslationEngine::DeepL {
+                Some(config.translation.deepl_api_key.clone())
+            } else {
+                None
+            };
+            (engine, source_lang, target_lang, deepl_api_key)
+        };
+
+        // 번역 중 표시
+        self.set_dest_text("[번역 중...]");
+        self.translating = true;
+
+        // 워커에 번역 요청
+        if let Some(ref mut worker) = self.translation_worker {
+            worker.translate(
+                text,
+                engine,
+                source_lang,
+                target_lang,
+                deepl_api_key,
+            );
+        }
+    }
+
+    /// 번역 완료 처리
+    fn handle_translation_complete(&mut self) {
+        self.translating = false;
+
+        // 모든 완료된 번역 결과 가져오기
+        let responses = take_all_responses();
+
+        for response in responses {
+            let result = match response.result {
                 TranslationResult::Success(translated) => {
                     // 출력 형식 적용
                     match self.output_format {
@@ -856,12 +906,10 @@ impl TranslateDialog {
                 TranslationResult::Error(err) => {
                     format!("[오류] {}", err)
                 }
-            }
-        } else {
-            "[오류] 번역 엔진 잠금 실패".to_string()
-        };
+            };
 
-        self.set_dest_text(&result);
+            self.set_dest_text(&result);
+        }
     }
 
     /// 번역 결과를 클립보드에 복사
@@ -999,6 +1047,12 @@ impl TranslateDialog {
                             Some(WPARAM(HTCAPTION as usize)),
                             Some(LPARAM(0)),
                         );
+                        return LRESULT(0);
+                    }
+
+                    // 번역 완료 메시지
+                    msg if msg == WM_TRANSLATION_COMPLETE => {
+                        dialog.borrow_mut().handle_translation_complete();
                         return LRESULT(0);
                     }
 

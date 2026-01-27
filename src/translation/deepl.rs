@@ -1,11 +1,10 @@
 //! DeepL API 번역 엔진
 //!
-//! DeepL API를 사용한 번역 (API 키 필요)
+//! DeepL 공식 API를 사용한 번역 (API 키 필요)
+//! 비동기 HTTP 요청으로 UI 블로킹 없이 번역 수행
 
 use super::{lang_utils, TranslationResult, Translator};
 use isolang::Language;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 
 /// DeepL 번역기
 pub struct DeepLTranslator {
@@ -17,143 +16,14 @@ impl DeepLTranslator {
         Self { api_key }
     }
 
-    /// URL 인코딩
-    fn url_encode(s: &str) -> String {
-        let mut result = String::new();
-        for byte in s.bytes() {
-            match byte {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                    result.push(byte as char);
-                }
-                b' ' => {
-                    result.push_str("%20");
-                }
-                _ => {
-                    result.push_str(&format!("%{:02X}", byte));
-                }
-            }
-        }
-        result
+    /// API 키 설정
+    pub fn set_api_key(&mut self, api_key: String) {
+        self.api_key = api_key;
     }
 
-    /// DeepL API 호출
-    fn call_api(&self, text: &str, source: &str, target: &str) -> Result<String, String> {
-        if self.api_key.is_empty() {
-            return Err("DeepL API 키가 설정되지 않았습니다.".to_string());
-        }
-
-        // DeepL API 엔드포인트 (Free API는 api-free.deepl.com)
-        let host = if self.api_key.ends_with(":fx") {
-            "api-free.deepl.com"
-        } else {
-            "api.deepl.com"
-        };
-
-        // POST 데이터
-        let encoded_text = Self::url_encode(text);
-        let body = format!(
-            "auth_key={}&text={}&source_lang={}&target_lang={}",
-            Self::url_encode(&self.api_key),
-            encoded_text,
-            source,
-            target
-        );
-
-        // TCP 연결 (실제로는 HTTPS 필요)
-        let mut stream = TcpStream::connect(format!("{}:80", host))
-            .map_err(|e| format!("연결 실패: {}", e))?;
-
-        // HTTP 요청
-        let request = format!(
-            "POST /v2/translate HTTP/1.1\r\n\
-             Host: {}\r\n\
-             Content-Type: application/x-www-form-urlencoded\r\n\
-             Content-Length: {}\r\n\
-             User-Agent: AnemoneRS/1.0\r\n\
-             Connection: close\r\n\
-             \r\n\
-             {}",
-            host,
-            body.len(),
-            body
-        );
-
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|e| format!("요청 전송 실패: {}", e))?;
-
-        // 응답 읽기
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .map_err(|e| format!("응답 읽기 실패: {}", e))?;
-
-        let response_str = String::from_utf8_lossy(&response).to_string();
-
-        // HTTP 헤더와 본문 분리
-        if let Some(body_start) = response_str.find("\r\n\r\n") {
-            let body = &response_str[body_start + 4..];
-            Self::parse_deepl_response(body)
-        } else {
-            Err("응답 파싱 실패".to_string())
-        }
-    }
-
-    /// DeepL API 응답 파싱
-    fn parse_deepl_response(json: &str) -> Result<String, String> {
-        // DeepL API 응답 형식:
-        // {"translations":[{"detected_source_language":"JA","text":"번역결과"}]}
-
-        // "text":" 찾기
-        if let Some(text_start) = json.find("\"text\":\"") {
-            let start = text_start + 8;
-            let remaining = &json[start..];
-
-            // 닫는 따옴표 찾기 (이스케이프 처리)
-            let mut result = String::new();
-            let mut escape = false;
-
-            for ch in remaining.chars() {
-                if escape {
-                    match ch {
-                        'n' => result.push('\n'),
-                        'r' => result.push('\r'),
-                        't' => result.push('\t'),
-                        '"' => result.push('"'),
-                        '\\' => result.push('\\'),
-                        _ => {
-                            result.push('\\');
-                            result.push(ch);
-                        }
-                    }
-                    escape = false;
-                } else if ch == '\\' {
-                    escape = true;
-                } else if ch == '"' {
-                    break;
-                } else {
-                    result.push(ch);
-                }
-            }
-
-            if result.is_empty() {
-                Err("빈 번역 결과".to_string())
-            } else {
-                Ok(result)
-            }
-        } else if json.contains("\"message\"") {
-            // 에러 응답
-            if let Some(msg_start) = json.find("\"message\":\"") {
-                let start = msg_start + 11;
-                let remaining = &json[start..];
-                if let Some(end) = remaining.find('"') {
-                    return Err(format!("DeepL 에러: {}", &remaining[..end]));
-                }
-            }
-            Err("DeepL API 에러".to_string())
-        } else {
-            Err("번역 결과를 찾을 수 없습니다.".to_string())
-        }
+    /// API 키 가져오기
+    pub fn api_key(&self) -> &str {
+        &self.api_key
     }
 }
 
@@ -167,13 +37,14 @@ impl Translator for DeepLTranslator {
             return TranslationResult::Error("DeepL API 키가 설정되지 않았습니다.".to_string());
         }
 
-        let source_code = lang_utils::to_deepl_code(source);
-        let target_code = lang_utils::to_deepl_code(target);
+        // 동기 번역은 blocking으로 수행 (하위 호환용)
+        // 실제 사용은 translate_async 권장
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => return TranslationResult::Error(format!("런타임 생성 실패: {}", e)),
+        };
 
-        match self.call_api(text, source_code, target_code) {
-            Ok(result) => TranslationResult::Success(result),
-            Err(e) => TranslationResult::Error(e),
-        }
+        rt.block_on(translate_async(text, source, target, &self.api_key))
     }
 
     fn engine_name(&self) -> &'static str {
@@ -183,4 +54,103 @@ impl Translator for DeepLTranslator {
     fn is_available(&self) -> bool {
         !self.api_key.is_empty()
     }
+}
+
+/// 비동기 번역 함수 (워커에서 호출용)
+pub async fn translate_async(
+    text: &str,
+    source: Language,
+    target: Language,
+    api_key: &str,
+) -> TranslationResult {
+    if text.is_empty() {
+        return TranslationResult::Error("빈 텍스트입니다.".to_string());
+    }
+
+    if api_key.is_empty() {
+        return TranslationResult::Error("DeepL API 키가 설정되지 않았습니다.".to_string());
+    }
+
+    let source_code = lang_utils::to_deepl_code(source);
+    let target_code = lang_utils::to_deepl_code(target);
+
+    match call_deepl_api(text, source_code, target_code, api_key).await {
+        Ok(result) => TranslationResult::Success(result),
+        Err(e) => TranslationResult::Error(e),
+    }
+}
+
+/// DeepL API 호출 (HTTPS)
+async fn call_deepl_api(
+    text: &str,
+    source_lang: &str,
+    target_lang: &str,
+    api_key: &str,
+) -> Result<String, String> {
+    // API 엔드포인트 결정 (Free API vs Pro API)
+    let base_url = if api_key.ends_with(":fx") {
+        "https://api-free.deepl.com"
+    } else {
+        "https://api.deepl.com"
+    };
+
+    let url = format!("{}/v2/translate", base_url);
+
+    // 요청 본문 구성
+    let params = [
+        ("auth_key", api_key),
+        ("text", text),
+        ("source_lang", source_lang),
+        ("target_lang", target_lang),
+    ];
+
+    // HTTP 요청
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .form(&params)
+        .header("User-Agent", "AnemoneRS/1.0")
+        .send()
+        .await
+        .map_err(|e| format!("요청 전송 실패: {}", e))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("응답 읽기 실패: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("DeepL API 오류 ({}): {}", status.as_u16(), body));
+    }
+
+    // JSON 응답 파싱
+    parse_deepl_response(&body)
+}
+
+/// DeepL API 응답 파싱
+fn parse_deepl_response(json: &str) -> Result<String, String> {
+    // JSON 파싱
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("JSON 파싱 실패: {}", e))?;
+
+    // translations[0].text 추출
+    if let Some(translations) = value.get("translations") {
+        if let Some(first) = translations.get(0) {
+            if let Some(text) = first.get("text") {
+                if let Some(s) = text.as_str() {
+                    return Ok(s.to_string());
+                }
+            }
+        }
+    }
+
+    // 에러 메시지 확인
+    if let Some(message) = value.get("message") {
+        if let Some(s) = message.as_str() {
+            return Err(format!("DeepL 에러: {}", s));
+        }
+    }
+
+    Err("번역 결과를 찾을 수 없습니다.".to_string())
 }

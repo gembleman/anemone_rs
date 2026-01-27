@@ -18,6 +18,9 @@ use crate::dialogs::{BacklogDialog, LogEntry, SettingsDialog, TranslateDialog, a
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
+use crate::translation::{
+    TranslationWorker, WM_TRANSLATION_COMPLETE, take_all_responses,
+};
 use crate::tray::{self, TrayIcon};
 use crate::window::{self, DoubleBuffer, TextRenderStyle};
 
@@ -50,6 +53,10 @@ pub struct App {
     magnetic: Option<MagneticManager>,
     current_text: String,
     d2d_renderer: Option<D2DRenderer>,
+    /// 비동기 번역 워커
+    translation_worker: Option<TranslationWorker>,
+    /// 대기 중인 번역의 원문 (번역 완료 시 백로그에 추가)
+    pending_original_text: Option<String>,
 }
 
 // 전역 앱 인스턴스 (WndProc에서 접근용)
@@ -107,6 +114,10 @@ impl App {
 
             // 설정 로드 (파일이 없으면 기본값)
             let config = Rc::new(RefCell::new(Config::load_or_default()));
+
+            // 번역 워커 생성
+            let translation_worker = TranslationWorker::spawn(hwnd);
+
             let app = Rc::new(RefCell::new(App {
                 hwnd,
                 hwnd_parent,
@@ -125,6 +136,8 @@ impl App {
                 magnetic: None,
                 current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
                 d2d_renderer: Some(d2d_renderer),
+                translation_worker: Some(translation_worker),
+                pending_original_text: None,
             }));
 
             // 전역 인스턴스 설정
@@ -370,10 +383,19 @@ impl App {
         Ok(())
     }
 
-    /// 설정 대화상자 열기
-    fn open_settings_dialog(&mut self) {
+    /// 대화상자 열기 헬퍼
+    ///
+    /// 이미 열려있으면 포커스, 아니면 새로 생성
+    fn open_dialog_generic<F, E>(
+        hwnd_storage: &mut Option<HWND>,
+        dialog_name: &str,
+        create_fn: F,
+    ) where
+        F: FnOnce() -> std::result::Result<HWND, E>,
+        E: std::fmt::Display,
+    {
         // 이미 열려있으면 포커스
-        if let Some(hwnd) = self.settings_hwnd {
+        if let Some(hwnd) = *hwnd_storage {
             unsafe {
                 if IsWindow(Some(hwnd)).as_bool() {
                     let _ = SetForegroundWindow(hwnd);
@@ -382,61 +404,48 @@ impl App {
             }
         }
 
-        // 새 설정 대화상자 열기
-        match SettingsDialog::show(self.hwnd, self.config.clone(), None) {
+        // 새 대화상자 열기
+        match create_fn() {
             Ok(hwnd) => {
-                self.settings_hwnd = Some(hwnd);
+                *hwnd_storage = Some(hwnd);
             }
             Err(e) => {
-                eprintln!("Failed to open settings dialog: {e}");
+                eprintln!("Failed to open {} dialog: {}", dialog_name, e);
             }
         }
+    }
+
+    /// 설정 대화상자 열기
+    fn open_settings_dialog(&mut self) {
+        let main_hwnd = self.hwnd;
+        let config = self.config.clone();
+        Self::open_dialog_generic(
+            &mut self.settings_hwnd,
+            "settings",
+            || SettingsDialog::show(main_hwnd, config, None),
+        );
     }
 
     /// 번역 대화상자 열기
     fn open_translate_dialog(&mut self) {
-        // 이미 열려있으면 포커스
-        if let Some(hwnd) = self.translate_hwnd {
-            unsafe {
-                if IsWindow(Some(hwnd)).as_bool() {
-                    let _ = SetForegroundWindow(hwnd);
-                    return;
-                }
-            }
-        }
-
-        // 새 번역 대화상자 열기
-        match TranslateDialog::show(self.hwnd, self.config.clone()) {
-            Ok(hwnd) => {
-                self.translate_hwnd = Some(hwnd);
-            }
-            Err(e) => {
-                eprintln!("Failed to open translate dialog: {e}");
-            }
-        }
+        let main_hwnd = self.hwnd;
+        let config = self.config.clone();
+        Self::open_dialog_generic(
+            &mut self.translate_hwnd,
+            "translate",
+            || TranslateDialog::show(main_hwnd, config),
+        );
     }
 
     /// 백로그 대화상자 열기
     fn open_backlog_dialog(&mut self) {
-        // 이미 열려있으면 포커스
-        if let Some(hwnd) = self.backlog_hwnd {
-            unsafe {
-                if IsWindow(Some(hwnd)).as_bool() {
-                    let _ = SetForegroundWindow(hwnd);
-                    return;
-                }
-            }
-        }
-
-        // 새 백로그 대화상자 열기
-        match BacklogDialog::show(self.hwnd, self.config.clone()) {
-            Ok(hwnd) => {
-                self.backlog_hwnd = Some(hwnd);
-            }
-            Err(e) => {
-                eprintln!("Failed to open backlog dialog: {e}");
-            }
-        }
+        let main_hwnd = self.hwnd;
+        let config = self.config.clone();
+        Self::open_dialog_generic(
+            &mut self.backlog_hwnd,
+            "backlog",
+            || BacklogDialog::show(main_hwnd, config),
+        );
     }
 
     /// 자석 모드 토글
@@ -475,26 +484,25 @@ impl App {
             // 클립보드 텍스트 처리
             println!("Clipboard: {}", text);
 
-            // 자동 번역 처리
-            let translated_text = self.process_clipboard_text(&text);
-
-            // 현재 텍스트 업데이트 및 다시 그리기
-            self.current_text = translated_text;
-            let _ = self.paint();
-
-            // 백로그에 추가 (원문 저장)
-            let entry = LogEntry::new(text);
-            add_to_backlog(entry);
+            // 자동 번역 처리 (비동기)
+            self.process_clipboard_text_async(&text);
         }
     }
 
-    /// 클립보드 텍스트 처리 (언어 감지 및 자동 번역)
-    fn process_clipboard_text(&self, text: &str) -> String {
+    /// 클립보드 텍스트 처리 (언어 감지 및 비동기 번역)
+    fn process_clipboard_text_async(&mut self, text: &str) {
         let config = self.config.borrow();
 
-        // 자동 감지가 비활성화되면 원문 반환
+        // 자동 감지가 비활성화되면 원문 표시
         if !config.translation.auto_detect {
-            return text.to_string();
+            drop(config);
+            self.current_text = text.to_string();
+            let _ = self.paint();
+
+            // 백로그에 추가
+            let entry = LogEntry::new(text.to_string());
+            add_to_backlog(entry);
+            return;
         }
 
         let source_lang = config.translation.get_source_language();
@@ -502,15 +510,101 @@ impl App {
 
         // 소스 언어가 아니면 번역하지 않음
         if !crate::translation::is_source_language(text, source_lang) {
-            return text.to_string();
+            self.current_text = text.to_string();
+            let _ = self.paint();
+
+            // 백로그에 추가
+            let entry = LogEntry::new(text.to_string());
+            add_to_backlog(entry);
+            return;
         }
 
-        // 번역 수행
-        self.translate_text(text)
+        // 비동기 번역 요청
+        self.request_translation_async(text);
     }
 
-    /// 텍스트 번역
-    fn translate_text(&self, text: &str) -> String {
+    /// 비동기 번역 요청
+    fn request_translation_async(&mut self, text: &str) {
+        use crate::translation::{get_translation_manager, TranslationEngine};
+
+        let config = self.config.borrow();
+        let engine = config.translation.get_engine();
+        let source_lang = config.translation.get_source_language();
+        let target_lang = config.translation.get_target_language();
+        let deepl_api_key = if engine == TranslationEngine::DeepL {
+            Some(config.translation.deepl_api_key.clone())
+        } else {
+            None
+        };
+
+        // EzTrans 초기화 (필요시)
+        if engine == TranslationEngine::EzTrans {
+            if !config.translation.eztrans_dll_path.is_empty() {
+                let manager = get_translation_manager();
+                if let Ok(mut mgr) = manager.lock() {
+                    let _ = mgr.init_eztrans(
+                        &config.translation.eztrans_dll_path,
+                        &config.translation.eztrans_dat_path,
+                    );
+                }
+            }
+        }
+
+        drop(config);
+
+        // 원문 저장 (번역 완료 시 백로그에 추가)
+        self.pending_original_text = Some(text.to_string());
+
+        // 번역 중 표시
+        self.current_text = format!("[번역 중...]\n{}", text);
+        let _ = self.paint();
+
+        // 워커에 번역 요청
+        if let Some(ref mut worker) = self.translation_worker {
+            worker.translate(
+                text.to_string(),
+                engine,
+                source_lang,
+                target_lang,
+                deepl_api_key,
+            );
+        }
+    }
+
+    /// 번역 완료 처리
+    fn handle_translation_complete(&mut self) {
+        use crate::translation::TranslationResult;
+
+        // 모든 완료된 번역 결과 가져오기
+        let responses = take_all_responses();
+
+        for response in responses {
+            match response.result {
+                TranslationResult::Success(translated) => {
+                    self.current_text = translated;
+                }
+                TranslationResult::Error(err) => {
+                    eprintln!("Translation error: {}", err);
+                    // 오류 시 원문 표시
+                    if let Some(ref original) = self.pending_original_text {
+                        self.current_text = original.clone();
+                    }
+                }
+            }
+
+            // 백로그에 추가 (원문)
+            if let Some(original) = self.pending_original_text.take() {
+                let entry = LogEntry::new(original);
+                add_to_backlog(entry);
+            }
+        }
+
+        let _ = self.paint();
+    }
+
+    /// 동기 텍스트 번역 (하위 호환용)
+    #[allow(dead_code)]
+    fn translate_text_sync(&self, text: &str) -> String {
         use crate::translation::{get_translation_manager, TranslationResult};
 
         let config = self.config.borrow();
@@ -706,6 +800,14 @@ impl App {
                         // try_borrow_mut 사용: 재진입 방지
                         if let Ok(mut app_ref) = app.try_borrow_mut() {
                             app_ref.clipboard.on_change_chain(wparam, lparam);
+                        }
+                        return LRESULT(0);
+                    }
+
+                    // 번역 완료 메시지
+                    msg if msg == WM_TRANSLATION_COMPLETE => {
+                        if let Ok(mut app_ref) = app.try_borrow_mut() {
+                            app_ref.handle_translation_complete();
                         }
                         return LRESULT(0);
                     }

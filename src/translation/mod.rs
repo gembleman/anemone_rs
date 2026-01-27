@@ -2,19 +2,27 @@
 //!
 //! 지원 엔진:
 //! - EzTrans (eztrans-rs 라이브러리 사용)
-//! - Google Translate (HTTP API)
-//! - DeepL (HTTP API)
+//! - Google Translate (HTTPS API)
+//! - DeepL (HTTPS API)
+//!
+//! 비동기 번역 지원:
+//! - TranslationWorker: 별도 스레드에서 tokio 런타임 실행
+//! - Windows 메시지로 결과 전달 (UI 블로킹 없음)
 
-mod deepl;
+pub mod deepl;
 mod detect;
 mod eztrans;
-mod google;
+pub mod google;
+pub mod worker;
 
 pub use deepl::DeepLTranslator;
-pub use detect::{detect_language, is_source_language};
+pub use detect::is_source_language;
 pub use eztrans::EzTransTranslator;
 pub use google::GoogleTranslator;
 pub use isolang::Language;
+pub use worker::{
+    TranslationWorker, WM_TRANSLATION_COMPLETE, take_all_responses,
+};
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -224,7 +232,7 @@ pub mod lang_utils {
 }
 
 /// 번역 결과
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TranslationResult {
     Success(String),
     Error(String),
@@ -356,4 +364,17 @@ pub fn get_translation_manager() -> Arc<Mutex<TranslationManager>> {
     TRANSLATION_MANAGER
         .get_or_init(|| Arc::new(Mutex::new(TranslationManager::new())))
         .clone()
+}
+
+/// EzTrans로 번역 수행 (워커 스레드에서 호출용)
+///
+/// 글로벌 매니저의 EzTrans 인스턴스를 사용합니다.
+pub fn translate_with_eztrans(text: &str, source: Language, target: Language) -> TranslationResult {
+    let manager = get_translation_manager();
+    if let Ok(mgr) = manager.lock() {
+        if let Some(ref engine) = mgr.eztrans {
+            return engine.translate(text, source, target);
+        }
+    }
+    TranslationResult::Error("EzTrans 엔진이 초기화되지 않았습니다.".to_string())
 }

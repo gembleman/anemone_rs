@@ -1,11 +1,10 @@
 //! Google Translate API (비공식 웹 API)
 //!
-//! Google Translate 웹 API를 사용한 번역
+//! Google Translate 비공식 웹 API를 사용한 번역
+//! 비동기 HTTPS 요청으로 UI 블로킹 없이 번역 수행
 
 use super::{lang_utils, TranslationResult, Translator};
 use isolang::Language;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 
 /// Google 번역기
 pub struct GoogleTranslator;
@@ -13,149 +12,6 @@ pub struct GoogleTranslator;
 impl GoogleTranslator {
     pub fn new() -> Self {
         Self
-    }
-
-    /// URL 인코딩
-    fn url_encode(s: &str) -> String {
-        let mut result = String::new();
-        for byte in s.bytes() {
-            match byte {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                    result.push(byte as char);
-                }
-                b' ' => {
-                    result.push_str("%20");
-                }
-                _ => {
-                    result.push_str(&format!("%{:02X}", byte));
-                }
-            }
-        }
-        result
-    }
-
-    /// HTTPS 요청을 Windows API로 수행
-    fn http_request(text: &str, source: &str, target: &str) -> Result<String, String> {
-        // Google Translate 비공식 API 엔드포인트
-        let encoded_text = Self::url_encode(text);
-        let path = format!(
-            "/translate_a/single?client=gtx&sl={}&tl={}&dt=t&q={}",
-            source, target, encoded_text
-        );
-
-        // TLS 연결을 위해 native-tls 또는 Windows API 사용
-        // 여기서는 간단히 HTTP 연결 시도 (실제로는 HTTPS 필요)
-        // 실제 구현에서는 winhttp나 외부 크레이트 사용 권장
-
-        let host = "translate.googleapis.com";
-
-        // TCP 연결
-        let mut stream = TcpStream::connect(format!("{}:80", host))
-            .map_err(|e| format!("연결 실패: {}", e))?;
-
-        // HTTP 요청 생성
-        let request = format!(
-            "GET {} HTTP/1.1\r\n\
-             Host: {}\r\n\
-             User-Agent: Mozilla/5.0\r\n\
-             Accept: */*\r\n\
-             Connection: close\r\n\
-             \r\n",
-            path, host
-        );
-
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|e| format!("요청 전송 실패: {}", e))?;
-
-        // 응답 읽기
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .map_err(|e| format!("응답 읽기 실패: {}", e))?;
-
-        let response_str =
-            String::from_utf8_lossy(&response).to_string();
-
-        // HTTP 헤더와 본문 분리
-        if let Some(body_start) = response_str.find("\r\n\r\n") {
-            let body = &response_str[body_start + 4..];
-            Self::parse_google_response(body)
-        } else {
-            Err("응답 파싱 실패".to_string())
-        }
-    }
-
-    /// Google API 응답 파싱
-    fn parse_google_response(json: &str) -> Result<String, String> {
-        // Google Translate API 응답 형식:
-        // [[["번역결과","원문",null,null,10],...],...]
-        // 간단한 JSON 파싱
-
-        let mut result = String::new();
-        let mut in_string = false;
-        let mut escape = false;
-        let mut current_string = String::new();
-        let mut strings: Vec<String> = Vec::new();
-
-        for ch in json.chars() {
-            if escape {
-                current_string.push(ch);
-                escape = false;
-                continue;
-            }
-
-            match ch {
-                '\\' if in_string => {
-                    escape = true;
-                    current_string.push(ch);
-                }
-                '"' => {
-                    if in_string {
-                        strings.push(current_string.clone());
-                        current_string.clear();
-                    }
-                    in_string = !in_string;
-                }
-                _ if in_string => {
-                    current_string.push(ch);
-                }
-                _ => {}
-            }
-        }
-
-        // 첫 번째, 세 번째, 다섯 번째... 문자열이 번역 결과
-        // 형식: [["번역1","원문1",...],["번역2","원문2",...],...]
-        let mut i = 0;
-        while i < strings.len() {
-            // 번역 결과는 짝수 인덱스에 있음 (0, 2, 4, ...)
-            // 하지만 실제로는 더 복잡한 구조
-            if i % 2 == 0 && !strings[i].is_empty() {
-                if !result.is_empty() {
-                    result.push(' ');
-                }
-                // unescape
-                let unescaped = strings[i]
-                    .replace("\\n", "\n")
-                    .replace("\\r", "\r")
-                    .replace("\\t", "\t")
-                    .replace("\\\"", "\"")
-                    .replace("\\\\", "\\");
-                result.push_str(&unescaped);
-            }
-            i += 2;
-
-            // 너무 많이 반복하지 않도록
-            if i > 20 {
-                break;
-            }
-        }
-
-        if result.is_empty() {
-            Err("번역 결과를 찾을 수 없습니다.".to_string())
-        } else {
-            Ok(result)
-        }
     }
 }
 
@@ -171,13 +27,14 @@ impl Translator for GoogleTranslator {
             return TranslationResult::Error("빈 텍스트입니다.".to_string());
         }
 
-        let source_code = lang_utils::to_google_code(source);
-        let target_code = lang_utils::to_google_code(target);
+        // 동기 번역은 blocking으로 수행 (하위 호환용)
+        // 실제 사용은 translate_async 권장
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => return TranslationResult::Error(format!("런타임 생성 실패: {}", e)),
+        };
 
-        match Self::http_request(text, source_code, target_code) {
-            Ok(result) => TranslationResult::Success(result),
-            Err(e) => TranslationResult::Error(format!("Google 번역 실패: {}", e)),
-        }
+        rt.block_on(translate_async(text, source, target))
     }
 
     fn engine_name(&self) -> &'static str {
@@ -188,5 +45,116 @@ impl Translator for GoogleTranslator {
         // 네트워크 연결 확인 없이 항상 true
         // 실제 번역 시 오류 처리
         true
+    }
+}
+
+/// 비동기 번역 함수 (워커에서 호출용)
+pub async fn translate_async(
+    text: &str,
+    source: Language,
+    target: Language,
+) -> TranslationResult {
+    if text.is_empty() {
+        return TranslationResult::Error("빈 텍스트입니다.".to_string());
+    }
+
+    let source_code = lang_utils::to_google_code(source);
+    let target_code = lang_utils::to_google_code(target);
+
+    match call_google_api(text, source_code, target_code).await {
+        Ok(result) => TranslationResult::Success(result),
+        Err(e) => TranslationResult::Error(format!("Google 번역 실패: {}", e)),
+    }
+}
+
+/// Google Translate API 호출 (HTTPS)
+async fn call_google_api(
+    text: &str,
+    source_lang: &str,
+    target_lang: &str,
+) -> Result<String, String> {
+    // URL 인코딩
+    let encoded_text = url_encode(text);
+
+    // Google Translate 비공식 API URL
+    let url = format!(
+        "https://translate.googleapis.com/translate_a/single?client=gtx&sl={}&tl={}&dt=t&q={}",
+        source_lang, target_lang, encoded_text
+    );
+
+    // HTTP 요청
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .send()
+        .await
+        .map_err(|e| format!("요청 전송 실패: {}", e))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("응답 읽기 실패: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("Google API 오류 ({})", status.as_u16()));
+    }
+
+    // 응답 파싱
+    parse_google_response(&body)
+}
+
+/// URL 인코딩
+fn url_encode(s: &str) -> String {
+    let mut result = String::new();
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(byte as char);
+            }
+            b' ' => {
+                result.push_str("%20");
+            }
+            _ => {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    result
+}
+
+/// Google API 응답 파싱
+fn parse_google_response(json: &str) -> Result<String, String> {
+    // Google Translate API 응답 형식:
+    // [[["번역결과","원문",null,null,10],...],...]
+    //
+    // serde_json으로 파싱
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("JSON 파싱 실패: {}", e))?;
+
+    let mut result = String::new();
+
+    // 첫 번째 배열이 번역 결과들
+    if let Some(outer) = value.as_array() {
+        if let Some(first) = outer.first() {
+            if let Some(translations) = first.as_array() {
+                for item in translations {
+                    if let Some(inner) = item.as_array() {
+                        if let Some(first_elem) = inner.first() {
+                            if let Some(translated) = first_elem.as_str() {
+                                result.push_str(translated);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if result.is_empty() {
+        Err("번역 결과를 찾을 수 없습니다.".to_string())
+    } else {
+        Ok(result)
     }
 }
