@@ -14,17 +14,11 @@ features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_Controls",
     "Win32_UI_Controls_Dialogs",
-    "Win32_UI_Controls_RichEdit",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Accessibility",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Com",
-    "Win32_Globalization",
-    "Win32_Storage_FileSystem",
-    "Win32_System_IO",
-    "Win32_System_Threading",
-    "Win32_Security",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_Dxgi_Common",
@@ -35,16 +29,13 @@ features = [
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
-image = "0.25"
-chrono = "0.4"
+toml = "1.0"
 windows-numerics = "0.3"
 windows-core = "0.62"
 eztrans-rs = { path = "../eztrans-rs" }
-whatlang = "0.16"
-dirs = "5.0"
+whatlang = "0.18"
 isolang = { version = "2.4", features = ["serde", "english_names"] }
 
 # Async translation support
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.13", features = ["json", "native-tls", "form"], default-features = false }

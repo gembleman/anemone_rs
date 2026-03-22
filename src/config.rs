@@ -102,30 +102,6 @@ impl TextStyle {
     }
 }
 
-/// 스크린샷 설정
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ScreenshotConfig {
-    /// 저장 경로
-    pub path: String,
-    /// 포맷 (0: PNG, 1: JPEG, 2: WebP)
-    pub format: u8,
-    /// 압축 레벨 (0: 빠름, 1: 표준, 2: 최대)
-    pub compression: u8,
-    /// JPEG 품질 (1-100)
-    pub jpeg_quality: u8,
-}
-
-impl Default for ScreenshotConfig {
-    fn default() -> Self {
-        Self {
-            path: String::new(),
-            format: 0,      // PNG
-            compression: 1, // 표준
-            jpeg_quality: 85,
-        }
-    }
-}
-
 /// 후크 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HookConfig {
@@ -346,9 +322,6 @@ pub struct Config {
     pub revise_name: bool,
     pub middle_bracket_recognize: bool,
 
-    // 스크린샷 설정
-    pub screenshot: ScreenshotConfig,
-
     // 후크 설정
     #[serde(default)]
     pub hook: HookConfig,
@@ -430,9 +403,6 @@ impl Default for Config {
             separate_name: true,
             revise_name: false,
             middle_bracket_recognize: false,
-
-            // 스크린샷
-            screenshot: ScreenshotConfig::default(),
 
             // 후크
             hook: HookConfig::default(),

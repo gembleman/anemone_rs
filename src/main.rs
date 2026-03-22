@@ -8,7 +8,6 @@ mod dialogs;
 mod hotkey;
 mod magnetic;
 mod menu;
-mod screenshot;
 mod translation;
 mod tray;
 mod window;

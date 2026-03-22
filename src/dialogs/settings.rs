@@ -115,14 +115,6 @@ mod ctrl_id {
     pub const TEXTALIGN_MID: u16 = 1221;
     pub const TEXTALIGN_RIGHT: u16 = 1222;
 
-    // 스크린샷 설정
-    pub const SCREENSHOT_PATH_EDIT: u16 = 1250;
-    pub const SCREENSHOT_PATH_BROWSE: u16 = 1251;
-    pub const SCREENSHOT_FORMAT: u16 = 1252;
-    pub const SCREENSHOT_COMPRESSION: u16 = 1253;
-    pub const SCREENSHOT_QUALITY_TRACKBAR: u16 = 1254;
-    pub const SCREENSHOT_QUALITY_TEXT: u16 = 1255;
-
     // 번역 설정
     pub const TRANS_ENGINE: u16 = 1260;
     pub const TRANS_SOURCE_LANG: u16 = 1261;
@@ -594,94 +586,16 @@ impl SettingsDialog {
                 Some(LPARAM(border_size as isize)),
             );
 
-            // ====== 스크린샷 설정 그룹 ======
-            self.create_group_box(10, 550, 470, 110, "스크린샷 설정")?;
-
-            // 저장 경로
-            self.create_label(20, 572, 50, 18, "경로:")?;
-            let screenshot_path = self.config.borrow().screenshot.path.clone();
-            self.create_edit(
-                70,
-                570,
-                330,
-                22,
-                ctrl_id::SCREENSHOT_PATH_EDIT,
-                &screenshot_path,
-            )?;
-            self.create_button(
-                405,
-                570,
-                65,
-                22,
-                ctrl_id::SCREENSHOT_PATH_BROWSE,
-                "찾아보기",
-            )?;
-
-            // 포맷 선택
-            self.create_label(20, 600, 40, 18, "포맷:")?;
-            let format_items = vec!["PNG", "JPEG", "WebP"];
-            let format_sel = self.config.borrow().screenshot.format as usize;
-            self.create_combobox(
-                60,
-                598,
-                70,
-                100,
-                ctrl_id::SCREENSHOT_FORMAT,
-                &format_items,
-                format_sel,
-            )?;
-
-            // 압축 레벨
-            self.create_label(140, 600, 40, 18, "압축:")?;
-            let compress_items = vec!["빠름", "표준", "최대"];
-            let compress_sel = self.config.borrow().screenshot.compression as usize;
-            self.create_combobox(
-                180,
-                598,
-                60,
-                100,
-                ctrl_id::SCREENSHOT_COMPRESSION,
-                &compress_items,
-                compress_sel,
-            )?;
-
-            // JPEG 품질
-            self.create_label(250, 600, 60, 18, "JPEG품질:")?;
-            let quality_tb = self.create_trackbar(
-                310,
-                598,
-                100,
-                22,
-                ctrl_id::SCREENSHOT_QUALITY_TRACKBAR,
-                1,
-                100,
-            )?;
-            let jpeg_quality = self.config.borrow().screenshot.jpeg_quality;
-            let _ = SendMessageW(
-                quality_tb,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(jpeg_quality as isize)),
-            );
-            self.create_label_with_id(
-                415,
-                600,
-                40,
-                18,
-                ctrl_id::SCREENSHOT_QUALITY_TEXT,
-                &format!("{}", jpeg_quality),
-            )?;
-
             // ====== 번역 설정 그룹 ======
-            self.create_group_box(10, 665, 470, 120, "번역 설정")?;
+            self.create_group_box(10, 550, 470, 120, "번역 설정")?;
 
             // 엔진 선택
-            self.create_label(20, 685, 40, 18, "엔진:")?;
+            self.create_label(20, 570, 40, 18, "엔진:")?;
             let engine_items = vec!["EzTrans", "Google", "DeepL"];
             let engine_sel = self.config.borrow().translation.engine_as_u8() as usize;
             self.create_combobox(
                 60,
-                683,
+                568,
                 85,
                 100,
                 ctrl_id::TRANS_ENGINE,
@@ -690,7 +604,7 @@ impl SettingsDialog {
             )?;
 
             // 소스 언어
-            self.create_label(155, 685, 40, 18, "소스:")?;
+            self.create_label(155, 570, 40, 18, "소스:")?;
             let lang_items = vec!["일본어", "한국어", "영어", "중국어"];
             let config = self.config.borrow();
             let engine = config.translation.get_engine();
@@ -698,7 +612,7 @@ impl SettingsDialog {
             drop(config);
             self.create_combobox(
                 195,
-                683,
+                568,
                 80,
                 100,
                 ctrl_id::TRANS_SOURCE_LANG,
@@ -707,13 +621,13 @@ impl SettingsDialog {
             )?;
 
             // 타겟 언어
-            self.create_label(285, 685, 40, 18, "타겟:")?;
+            self.create_label(285, 570, 40, 18, "타겟:")?;
             let config = self.config.borrow();
             let target_sel = config.translation.target_lang_index(engine);
             drop(config);
             self.create_combobox(
                 325,
-                683,
+                568,
                 80,
                 100,
                 ctrl_id::TRANS_TARGET_LANG,
@@ -725,7 +639,7 @@ impl SettingsDialog {
             let auto_detect = self.config.borrow().translation.auto_detect;
             self.create_checkbox(
                 415,
-                685,
+                570,
                 60,
                 18,
                 ctrl_id::TRANS_AUTO_DETECT,
@@ -734,19 +648,19 @@ impl SettingsDialog {
             )?;
 
             // EzTrans DLL 경로
-            self.create_label(20, 710, 70, 18, "EzTrans DLL:")?;
+            self.create_label(20, 595, 70, 18, "EzTrans DLL:")?;
             let dll_path = self.config.borrow().translation.eztrans_dll_path.clone();
-            self.create_edit(90, 708, 310, 22, ctrl_id::EZTRANS_DLL_EDIT, &dll_path)?;
-            self.create_button(405, 708, 65, 22, ctrl_id::EZTRANS_DLL_BROWSE, "찾아보기")?;
+            self.create_edit(90, 593, 310, 22, ctrl_id::EZTRANS_DLL_EDIT, &dll_path)?;
+            self.create_button(405, 593, 65, 22, ctrl_id::EZTRANS_DLL_BROWSE, "찾아보기")?;
 
             // EzTrans Dat 경로
-            self.create_label(20, 735, 70, 18, "EzTrans Dat:")?;
+            self.create_label(20, 620, 70, 18, "EzTrans Dat:")?;
             let dat_path = self.config.borrow().translation.eztrans_dat_path.clone();
-            self.create_edit(90, 733, 310, 22, ctrl_id::EZTRANS_DAT_EDIT, &dat_path)?;
-            self.create_button(405, 733, 65, 22, ctrl_id::EZTRANS_DAT_BROWSE, "찾아보기")?;
+            self.create_edit(90, 618, 310, 22, ctrl_id::EZTRANS_DAT_EDIT, &dat_path)?;
+            self.create_button(405, 618, 65, 22, ctrl_id::EZTRANS_DAT_BROWSE, "찾아보기")?;
 
             // ====== 닫기 버튼 ======
-            self.create_button(380, 860, 100, 30, ctrl_id::CLOSE, "닫기")?;
+            self.create_button(380, 745, 100, 30, ctrl_id::CLOSE, "닫기")?;
 
             Ok(())
         }
@@ -1379,23 +1293,6 @@ impl SettingsDialog {
                 self.notify_change();
             }
 
-            // 스크린샷 경로 찾아보기
-            SCREENSHOT_PATH_BROWSE => {
-                if let Some(path) = self.browse_folder() {
-                    self.config.borrow_mut().screenshot.path = path.clone();
-                    unsafe {
-                        if let Ok(edit) = GetDlgItem(Some(self.hwnd), SCREENSHOT_PATH_EDIT as i32) {
-                            if !edit.is_invalid() {
-                                let text_wide: Vec<u16> =
-                                    path.encode_utf16().chain(std::iter::once(0)).collect();
-                                let _ = SetWindowTextW(edit, PCWSTR(text_wide.as_ptr()));
-                            }
-                        }
-                    }
-                    self.notify_change();
-                }
-            }
-
             // 자동 언어 감지 체크박스
             TRANS_AUTO_DETECT => {
                 let mut cfg = self.config.borrow_mut();
@@ -1545,21 +1442,6 @@ impl SettingsDialog {
                 self.config.borrow_mut().border_width = value;
                 self.notify_change();
             }
-            SCREENSHOT_QUALITY_TRACKBAR => {
-                self.config.borrow_mut().screenshot.jpeg_quality = value as u8;
-                // 품질 텍스트 업데이트
-                unsafe {
-                    if let Ok(label) = GetDlgItem(Some(self.hwnd), SCREENSHOT_QUALITY_TEXT as i32) {
-                        if !label.is_invalid() {
-                            let text = format!("{}", value);
-                            let text_wide: Vec<u16> =
-                                text.encode_utf16().chain(std::iter::once(0)).collect();
-                            let _ = SetWindowTextW(label, PCWSTR(text_wide.as_ptr()));
-                        }
-                    }
-                }
-                self.notify_change();
-            }
             _ => {}
         }
     }
@@ -1577,14 +1459,6 @@ impl SettingsDialog {
                 SendMessageW(combo, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as usize;
 
             match id {
-                SCREENSHOT_FORMAT => {
-                    self.config.borrow_mut().screenshot.format = sel as u8;
-                    self.notify_change();
-                }
-                SCREENSHOT_COMPRESSION => {
-                    self.config.borrow_mut().screenshot.compression = sel as u8;
-                    self.notify_change();
-                }
                 TRANS_ENGINE => {
                     use crate::translation::TranslationEngine;
                     let engine = TranslationEngine::from_u8(sel as u8);
@@ -1654,52 +1528,56 @@ impl SettingsDialog {
             // COM 초기화
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-            let dialog: IFileOpenDialog = match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)
-            {
-                Ok(d) => d,
-                Err(_) => {
-                    CoUninitialize();
+            // COM 객체들이 CoUninitialize() 전에 drop되도록 scope 블록 사용
+            let result = {
+                let dialog: IFileOpenDialog =
+                    match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL) {
+                        Ok(d) => d,
+                        Err(_) => {
+                            return None;
+                        }
+                    };
+
+                // 폴더 선택 모드
+                let _ = dialog.SetOptions(FOS_PICKFOLDERS);
+                let title_wide: Vec<u16> =
+                    title.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = dialog.SetTitle(PCWSTR(title_wide.as_ptr()));
+
+                // 대화상자 표시
+                if dialog.Show(Some(self.hwnd)).is_err() {
                     return None;
                 }
+
+                // 결과 가져오기
+                let item: IShellItem = match dialog.GetResult() {
+                    Ok(i) => i,
+                    Err(_) => {
+                        return None;
+                    }
+                };
+
+                let path_ptr = match item.GetDisplayName(SIGDN_FILESYSPATH) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return None;
+                    }
+                };
+
+                // PWSTR을 String으로 변환
+                let path = path_ptr.to_string().ok();
+
+                // path_ptr 메모리 해제
+                windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
+
+                path
+                // dialog, item이 여기서 drop됨
             };
 
-            // 폴더 선택 모드
-            let _ = dialog.SetOptions(FOS_PICKFOLDERS);
-            let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-            let _ = dialog.SetTitle(PCWSTR(title_wide.as_ptr()));
-
-            // 대화상자 표시
-            let result = dialog.Show(Some(self.hwnd));
-            if result.is_err() {
-                CoUninitialize();
-                return None;
-            }
-
-            // 결과 가져오기
-            let item: IShellItem = match dialog.GetResult() {
-                Ok(i) => i,
-                Err(_) => {
-                    CoUninitialize();
-                    return None;
-                }
-            };
-
-            let path_ptr = match item.GetDisplayName(SIGDN_FILESYSPATH) {
-                Ok(p) => p,
-                Err(_) => {
-                    CoUninitialize();
-                    return None;
-                }
-            };
-
-            // PWSTR을 String으로 변환
-            let path = path_ptr.to_string().ok();
-
-            // COM 정리
-            windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
+            // 모든 COM 객체가 drop된 후 CoUninitialize 호출
             CoUninitialize();
 
-            path
+            result
         }
     }
 
@@ -1717,60 +1595,66 @@ impl SettingsDialog {
             // COM 초기화
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-            let dialog: IFileOpenDialog = match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)
-            {
-                Ok(d) => d,
-                Err(_) => {
-                    CoUninitialize();
+            // COM 객체들이 CoUninitialize() 전에 drop되도록 scope 블록 사용
+            let result = {
+                let dialog: IFileOpenDialog =
+                    match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL) {
+                        Ok(d) => d,
+                        Err(_) => {
+                            return None;
+                        }
+                    };
+
+                // 제목 설정
+                let title_wide: Vec<u16> =
+                    title.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = dialog.SetTitle(PCWSTR(title_wide.as_ptr()));
+
+                // 파일 필터 설정
+                let filter_name: Vec<u16> =
+                    "DLL 파일".encode_utf16().chain(std::iter::once(0)).collect();
+                let filter_spec: Vec<u16> =
+                    "*.dll".encode_utf16().chain(std::iter::once(0)).collect();
+                let filters = [COMDLG_FILTERSPEC {
+                    pszName: PCWSTR(filter_name.as_ptr()),
+                    pszSpec: PCWSTR(filter_spec.as_ptr()),
+                }];
+                let _ = dialog.SetFileTypes(&filters);
+
+                // 대화상자 표시
+                if dialog.Show(Some(self.hwnd)).is_err() {
                     return None;
                 }
+
+                // 결과 가져오기
+                let item: IShellItem = match dialog.GetResult() {
+                    Ok(i) => i,
+                    Err(_) => {
+                        return None;
+                    }
+                };
+
+                let path_ptr = match item.GetDisplayName(SIGDN_FILESYSPATH) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return None;
+                    }
+                };
+
+                // PWSTR을 String으로 변환
+                let path = path_ptr.to_string().ok();
+
+                // path_ptr 메모리 해제
+                windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
+
+                path
+                // dialog, item이 여기서 drop됨
             };
 
-            // 제목 설정
-            let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-            let _ = dialog.SetTitle(PCWSTR(title_wide.as_ptr()));
-
-            // 파일 필터 설정
-            let filter_name: Vec<u16> = "DLL 파일".encode_utf16().chain(std::iter::once(0)).collect();
-            let filter_spec: Vec<u16> = "*.dll".encode_utf16().chain(std::iter::once(0)).collect();
-            let filters = [COMDLG_FILTERSPEC {
-                pszName: PCWSTR(filter_name.as_ptr()),
-                pszSpec: PCWSTR(filter_spec.as_ptr()),
-            }];
-            let _ = dialog.SetFileTypes(&filters);
-
-            // 대화상자 표시
-            let result = dialog.Show(Some(self.hwnd));
-            if result.is_err() {
-                CoUninitialize();
-                return None;
-            }
-
-            // 결과 가져오기
-            let item: IShellItem = match dialog.GetResult() {
-                Ok(i) => i,
-                Err(_) => {
-                    CoUninitialize();
-                    return None;
-                }
-            };
-
-            let path_ptr = match item.GetDisplayName(SIGDN_FILESYSPATH) {
-                Ok(p) => p,
-                Err(_) => {
-                    CoUninitialize();
-                    return None;
-                }
-            };
-
-            // PWSTR을 String으로 변환
-            let path = path_ptr.to_string().ok();
-
-            // COM 정리
-            windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
+            // 모든 COM 객체가 drop된 후 CoUninitialize 호출
             CoUninitialize();
 
-            path
+            result
         }
     }
 
