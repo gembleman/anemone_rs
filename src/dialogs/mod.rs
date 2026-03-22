@@ -16,6 +16,8 @@
 //! 추가 구현:
 //! - 후크 설정 대화상자 (hook_settings.rs)
 
+pub mod helpers;
+
 pub mod backlog;
 pub mod color;
 pub mod file_trans;

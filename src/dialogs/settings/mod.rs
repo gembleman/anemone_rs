@@ -3,7 +3,6 @@
 //! 모든 설정을 관리하는 메인 설정 대화상자.
 //! Win32 CreateWindowEx를 사용하여 컨트롤을 프로그래매틱하게 생성.
 
-mod controls;
 pub(self) mod ctrl_id;
 mod handlers;
 
@@ -19,19 +18,9 @@ use windows::{
 };
 
 use crate::config::{Config, TextAlign};
-
-// TrackBar 메시지 상수 (windows crate 0.62에서 누락)
-const TBM_GETPOS_VAL: u32 = 1024;
-
-// ComboBox 메시지 상수
-const CB_ADDSTRING: u32 = 0x0143;
-const CB_SETCURSEL: u32 = 0x014E;
-const CB_GETCURSEL: u32 = 0x0147;
-const CBN_SELCHANGE: u32 = 1;
-
-const SETTINGS_CLASS_NAME: PCWSTR = w!("AnemoneSettingsClass");
-const SETTINGS_WIDTH: i32 = 500;
-const SETTINGS_HEIGHT: i32 = 940;
+use crate::constants::TBM_GETPOS_VAL;
+use crate::impl_dialog;
+use super::helpers::DialogControls;
 
 /// 설정 변경 콜백 타입
 pub type SettingsChangeCallback = Box<dyn Fn(&Config)>;
@@ -44,100 +33,35 @@ pub struct SettingsDialog {
     on_change: Option<SettingsChangeCallback>,
 }
 
-thread_local! {
-    static SETTINGS_INSTANCE: RefCell<Option<Rc<RefCell<SettingsDialog>>>> = const { RefCell::new(None) };
+impl DialogControls for SettingsDialog {
+    fn dialog_hwnd(&self) -> HWND { self.hwnd }
+}
+
+impl_dialog! {
+    dialog: SettingsDialog,
+    instance: SETTINGS_INSTANCE,
+    class_name: w!("AnemoneSettingsClass"),
+    title: w!("아네모네 설정"),
+    width: 500,
+    height: 940,
+    extra_style: WINDOW_STYLE::default(),
+    params: (parent: HWND, config: Rc<RefCell<Config>>, on_change: Option<SettingsChangeCallback>),
+    init: |hwnd, parent, config, on_change| {
+        SettingsDialog { hwnd, config, main_hwnd: parent, on_change }
+    },
 }
 
 impl SettingsDialog {
-    /// 설정 대화상자 생성 및 표시
-    pub fn show(
-        main_hwnd: HWND,
-        config: Rc<RefCell<Config>>,
-        on_change: Option<SettingsChangeCallback>,
-    ) -> Result<HWND> {
-        unsafe { Self::show_impl(main_hwnd, config, on_change) }
-    }
-
-    unsafe fn show_impl(
-        main_hwnd: HWND,
-        config: Rc<RefCell<Config>>,
-        on_change: Option<SettingsChangeCallback>,
-    ) -> Result<HWND> {
-        unsafe {
-            let instance = GetModuleHandleW(None)?;
-
-            // 윈도우 클래스 등록
-            let wc = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(Self::wndproc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: instance.into(),
-                hIcon: LoadIconW(None, IDI_APPLICATION)?,
-                hCursor: LoadCursorW(None, IDC_ARROW)?,
-                hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as *mut _),
-                lpszMenuName: PCWSTR::null(),
-                lpszClassName: SETTINGS_CLASS_NAME,
-                hIconSm: HICON::default(),
-            };
-
-            let atom = RegisterClassExW(&wc);
-            if atom == 0 {
-                let err = GetLastError();
-                if err != ERROR_CLASS_ALREADY_EXISTS {
-                    return Err(Error::from_hresult(HRESULT::from_win32(err.0)));
-                }
-            }
-
-            // 화면 중앙에 위치
-            let cx = GetSystemMetrics(SM_CXSCREEN);
-            let cy = GetSystemMetrics(SM_CYSCREEN);
-            let x = (cx - SETTINGS_WIDTH) / 2;
-            let y = (cy - SETTINGS_HEIGHT) / 2;
-
-            // 윈도우 생성
-            let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW,
-                SETTINGS_CLASS_NAME,
-                w!("아네모네 설정"),
-                WS_POPUP | WS_CAPTION | WS_SYSMENU,
-                x,
-                y,
-                SETTINGS_WIDTH,
-                SETTINGS_HEIGHT,
-                Some(main_hwnd),
-                None,
-                Some(instance.into()),
-                None,
-            )?;
-
-            // 인스턴스 생성
-            let dialog = Rc::new(RefCell::new(SettingsDialog {
-                hwnd,
-                config,
-                main_hwnd,
-                on_change,
-            }));
-
-            // 전역 인스턴스 설정
-            SETTINGS_INSTANCE.with(|cell| {
-                *cell.borrow_mut() = Some(dialog.clone());
-            });
-
-            // 컨트롤 생성
-            dialog.borrow_mut().create_controls()?;
-
-            // 윈도우 표시
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = UpdateWindow(hwnd);
-
-            Ok(hwnd)
-        }
+    // create_color_button은 create_button과 동일하지만 의미적으로 구분
+    unsafe fn create_color_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+        unsafe { self.create_button(x, y, w, h, id, text) }
     }
 
     /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
+        // SAFETY: self.hwnd is a valid window handle from show_impl. All control creation
+        // methods use valid parent handle. SendMessageW calls use valid control handles
+        // returned by create_trackbar.
         unsafe {
             let _hinst = GetModuleHandleW(None)?;
             let _hfont = GetStockObject(DEFAULT_GUI_FONT);
@@ -145,32 +69,19 @@ impl SettingsDialog {
             // ====== 배경 설정 그룹 ======
             self.create_group_box(10, 10, 230, 80, "배경 설정")?;
 
-            // 배경 투명도 트랙바
             self.create_label(20, 30, 60, 18, "투명도:")?;
             let trackbar =
                 self.create_trackbar(80, 28, 150, 22, ctrl_id::BACKGROUND_TRACKBAR, 0, 255)?;
             let alpha = (self.config.borrow().background_color >> 24) & 0xFF;
             let _ = SendMessageW(
-                trackbar,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(alpha as isize)),
+                trackbar, TBM_SETPOS,
+                Some(WPARAM(1)), Some(LPARAM(alpha as isize)),
             );
 
-            // 배경 색상 버튼
             self.create_color_button(20, 55, 70, 25, ctrl_id::BACKGROUND_COLOR, "배경색")?;
 
-            // 배경 표시 체크박스
             let bg_visible = self.config.borrow().background_visible;
-            self.create_checkbox(
-                100,
-                57,
-                80,
-                20,
-                ctrl_id::BACKGROUND_SWITCH,
-                "표시",
-                bg_visible,
-            )?;
+            self.create_checkbox(100, 57, 80, 20, ctrl_id::BACKGROUND_SWITCH, "표시", bg_visible)?;
 
             // ====== 텍스트 크기 그룹 ======
             self.create_group_box(250, 10, 230, 80, "텍스트 크기")?;
@@ -179,22 +90,14 @@ impl SettingsDialog {
                 self.create_trackbar(260, 30, 180, 22, ctrl_id::TEXTSIZE_TRACKBAR, 6, 100)?;
             let text_size = self.config.borrow().translation_style.size;
             let _ = SendMessageW(
-                size_trackbar,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(text_size as isize)),
+                size_trackbar, TBM_SETPOS,
+                Some(WPARAM(1)), Some(LPARAM(text_size as isize)),
             );
 
             self.create_button(260, 55, 30, 25, ctrl_id::TEXTSIZE_MINUS, "-")?;
             self.create_button(295, 55, 30, 25, ctrl_id::TEXTSIZE_PLUS, "+")?;
-            self.create_label_with_id(
-                330,
-                58,
-                100,
-                18,
-                ctrl_id::TEXTSIZE_TEXT,
-                &format!("크기: {}", text_size),
-            )?;
+            self.create_label_with_id(330, 58, 100, 18, ctrl_id::TEXTSIZE_TEXT,
+                &format!("크기: {}", text_size))?;
 
             // ====== 외곽선 설정 그룹 ======
             self.create_group_box(10, 95, 470, 80, "외곽선 설정")?;
@@ -204,10 +107,8 @@ impl SettingsDialog {
                 self.create_trackbar(80, 113, 120, 22, ctrl_id::OUTLINE1_TRACKBAR, 0, 20)?;
             let outline1_size = self.config.borrow().translation_style.outline1_size;
             let _ = SendMessageW(
-                outline1_tb,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(outline1_size as isize)),
+                outline1_tb, TBM_SETPOS,
+                Some(WPARAM(1)), Some(LPARAM(outline1_size as isize)),
             );
             self.create_button(205, 113, 25, 22, ctrl_id::OUTLINE1_MINUS, "-")?;
             self.create_button(232, 113, 25, 22, ctrl_id::OUTLINE1_PLUS, "+")?;
@@ -217,24 +118,19 @@ impl SettingsDialog {
                 self.create_trackbar(330, 113, 120, 22, ctrl_id::OUTLINE2_TRACKBAR, 0, 20)?;
             let outline2_size = self.config.borrow().translation_style.outline2_size;
             let _ = SendMessageW(
-                outline2_tb,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(outline2_size as isize)),
+                outline2_tb, TBM_SETPOS,
+                Some(WPARAM(1)), Some(LPARAM(outline2_size as isize)),
             );
             self.create_button(455, 113, 25, 22, ctrl_id::OUTLINE2_MINUS, "-")?;
             self.create_button(455, 140, 25, 22, ctrl_id::OUTLINE2_PLUS, "+")?;
 
-            // 그림자 오프셋
             self.create_label(20, 145, 80, 18, "그림자 X:")?;
             let shadow_x_tb =
                 self.create_trackbar(100, 143, 100, 22, ctrl_id::SHADOW_X_TRACKBAR, 0, 20)?;
             let shadow_x = self.config.borrow().shadow_offset_x;
             let _ = SendMessageW(
-                shadow_x_tb,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(shadow_x as isize)),
+                shadow_x_tb, TBM_SETPOS,
+                Some(WPARAM(1)), Some(LPARAM(shadow_x as isize)),
             );
 
             self.create_label(220, 145, 80, 18, "그림자 Y:")?;
@@ -242,10 +138,8 @@ impl SettingsDialog {
                 self.create_trackbar(300, 143, 100, 22, ctrl_id::SHADOW_Y_TRACKBAR, 0, 20)?;
             let shadow_y = self.config.borrow().shadow_offset_y;
             let _ = SendMessageW(
-                shadow_y_tb,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(shadow_y as isize)),
+                shadow_y_tb, TBM_SETPOS,
+                Some(WPARAM(1)), Some(LPARAM(shadow_y as isize)),
             );
 
             // ====== 이름(NAME) 설정 그룹 ======
@@ -284,34 +178,19 @@ impl SettingsDialog {
             let margin_x_tb =
                 self.create_trackbar(70, 333, 100, 22, ctrl_id::MARGIN_X_TRACKBAR, 0, 300)?;
             let margin_x = self.config.borrow().text_margin_x;
-            let _ = SendMessageW(
-                margin_x_tb,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(margin_x as isize)),
-            );
+            let _ = SendMessageW(margin_x_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(margin_x as isize)));
 
             self.create_label(180, 335, 50, 18, "상하:")?;
             let margin_y_tb =
                 self.create_trackbar(230, 333, 100, 22, ctrl_id::MARGIN_Y_TRACKBAR, 0, 300)?;
             let margin_y = self.config.borrow().text_margin_y;
-            let _ = SendMessageW(
-                margin_y_tb,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(margin_y as isize)),
-            );
+            let _ = SendMessageW(margin_y_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(margin_y as isize)));
 
             self.create_label(340, 335, 50, 18, "이름:")?;
             let margin_name_tb =
                 self.create_trackbar(390, 333, 80, 22, ctrl_id::MARGIN_NAME_TRACKBAR, 0, 300)?;
             let margin_name = self.config.borrow().name_margin;
-            let _ = SendMessageW(
-                margin_name_tb,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(margin_name as isize)),
-            );
+            let _ = SendMessageW(margin_name_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(margin_name as isize)));
 
             // ====== 표시 옵션 그룹 ======
             self.create_group_box(10, 380, 230, 100, "표시 옵션")?;
@@ -327,7 +206,6 @@ impl SettingsDialog {
             let repeat_mode = self.config.borrow().repeat_text_mode;
             self.create_button(20, 445, 60, 22, ctrl_id::REPEAT_TEXT, &format!("반복:{}", repeat_mode))?;
 
-            // 텍스트 정렬
             let align = self.config.borrow().text_align;
             self.create_radio(90, 448, 50, 20, ctrl_id::TEXTALIGN_LEFT, "왼쪽", align == TextAlign::Left)?;
             self.create_radio(145, 448, 50, 20, ctrl_id::TEXTALIGN_MID, "중앙", align == TextAlign::Center)?;
@@ -358,12 +236,7 @@ impl SettingsDialog {
             let border_tb =
                 self.create_trackbar(240, 505, 150, 22, ctrl_id::BORDER_SIZE_TRACKBAR, 0, 10)?;
             let border_size = self.config.borrow().border_width;
-            let _ = SendMessageW(
-                border_tb,
-                TBM_SETPOS,
-                Some(WPARAM(1)),
-                Some(LPARAM(border_size as isize)),
-            );
+            let _ = SendMessageW(border_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(border_size as isize)));
 
             // ====== 번역 설정 그룹 ======
             self.create_group_box(10, 550, 470, 120, "번역 설정")?;
@@ -407,81 +280,36 @@ impl SettingsDialog {
         }
     }
 
-    /// WndProc
-    unsafe extern "system" fn wndproc(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
-        unsafe {
-            let instance = SETTINGS_INSTANCE.with(|cell| cell.borrow().clone());
+    /// 커스텀 메시지 핸들러
+    fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+        match msg {
+            WM_HSCROLL => {
+                // SAFETY: lparam contains a valid trackbar HWND from the system. GetDlgCtrlID
+                // and SendMessageW use valid control handles.
+                unsafe {
+                    let code = (wparam.0 & 0xFFFF) as u32;
+                    let trackbar_hwnd = HWND(lparam.0 as *mut _);
 
-            if let Some(dialog) = instance {
-                match msg {
-                    WM_COMMAND => {
-                        let id = (wparam.0 & 0xFFFF) as u16;
-                        let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-
-                        if notify_code == CBN_SELCHANGE {
-                            dialog.borrow_mut().handle_combobox(id);
-                        } else {
-                            dialog.borrow_mut().handle_command(id);
+                    let id = GetDlgCtrlID(trackbar_hwnd) as u16;
+                    let value = match code {
+                        TB_THUMBTRACK => ((wparam.0 >> 16) & 0xFFFF) as i32,
+                        TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP
+                        | TB_BOTTOM | TB_ENDTRACK => {
+                            SendMessageW(
+                                trackbar_hwnd,
+                                TBM_GETPOS_VAL,
+                                Some(WPARAM(0)),
+                                Some(LPARAM(0)),
+                            ).0 as i32
                         }
-                        return LRESULT(0);
-                    }
+                        _ => return Some(LRESULT(0)),
+                    };
 
-                    WM_HSCROLL => {
-                        let code = (wparam.0 & 0xFFFF) as u32;
-                        let trackbar_hwnd = HWND(lparam.0 as *mut _);
-
-                        let id = GetDlgCtrlID(trackbar_hwnd) as u16;
-                        let value = match code {
-                            TB_THUMBTRACK => ((wparam.0 >> 16) & 0xFFFF) as i32,
-                            TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP
-                            | TB_BOTTOM | TB_ENDTRACK => {
-                                SendMessageW(
-                                    trackbar_hwnd,
-                                    TBM_GETPOS_VAL,
-                                    Some(WPARAM(0)),
-                                    Some(LPARAM(0)),
-                                )
-                                .0 as i32
-                            }
-                            _ => return LRESULT(0),
-                        };
-
-                        dialog.borrow_mut().handle_trackbar(id, value);
-                        return LRESULT(0);
-                    }
-
-                    WM_CLOSE => {
-                        let _ = DestroyWindow(hwnd);
-                        return LRESULT(0);
-                    }
-
-                    WM_DESTROY => {
-                        SETTINGS_INSTANCE.with(|cell| {
-                            *cell.borrow_mut() = None;
-                        });
-                        return LRESULT(0);
-                    }
-
-                    WM_LBUTTONDOWN => {
-                        let _ = SendMessageW(
-                            hwnd,
-                            WM_NCLBUTTONDOWN,
-                            Some(WPARAM(HTCAPTION as usize)),
-                            Some(LPARAM(0)),
-                        );
-                        return LRESULT(0);
-                    }
-
-                    _ => {}
+                    self.handle_trackbar(id, value);
                 }
+                Some(LRESULT(0))
             }
-
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+            _ => None,
         }
     }
 }

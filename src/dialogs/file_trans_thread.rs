@@ -13,8 +13,13 @@ use windows::Win32::{
     UI::WindowsAndMessaging::PostMessageW,
 };
 
+use crate::constants::{
+    WM_PROGRESS_COMPLETE, WM_PROGRESS_CURRENT, WM_PROGRESS_ERROR, WM_PROGRESS_INDEX,
+    WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
+    WM_PROGRESS_UPDATE,
+};
+use crate::util::to_wide;
 use super::file_trans::{FileTransJobData, WriteType};
-use super::file_trans_progress::*;
 
 /// 파일 번역 스레드 메인 함수
 pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
@@ -102,7 +107,10 @@ fn calculate_total_lines(files: &[PathBuf]) -> i32 {
                 let reader = BufReader::new(file);
                 total += reader.lines().count() as i32;
             }
-            Err(_) => return -1,
+            Err(e) => {
+                tracing::error!("Failed to open file {}: {e}", path.display());
+                return -1;
+            }
         }
     }
 
@@ -143,7 +151,9 @@ fn process_single_file(
         .map_err(|e| e.to_string())?;
 
     // 라인 읽기
-    let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+    let lines: Vec<String> = reader.lines().filter_map(|l| {
+        l.inspect_err(|e| tracing::warn!("Failed to read line: {e}")).ok()
+    }).collect();
 
     let line_count = lines.len();
 
@@ -239,6 +249,8 @@ fn write_output(
 
 /// 진행률 메시지 전송
 fn send_progress_message(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) {
+    // SAFETY: hwnd was reconstructed from a valid isize stored in FileTransJobData.
+    // PostMessageW is safe to call from any thread.
     unsafe {
         let _ = PostMessageW(Some(hwnd), msg, WPARAM(wparam), LPARAM(lparam));
     }
@@ -251,10 +263,12 @@ fn send_filename(hwnd: HWND, path: &PathBuf) {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let wide: Vec<u16> = filename.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide = to_wide(&filename);
 
     // 정적 버퍼에 복사 (PostMessage 후에도 유효하도록)
     static mut FILENAME_BUFFER: [u16; 260] = [0; 260];
+    // SAFETY: FILENAME_BUFFER is a static mut accessed only from the file translation thread.
+    // The buffer outlives the PostMessageW call. The copy length is bounded to 259 elements.
     unsafe {
         let buffer_ptr = std::ptr::addr_of_mut!(FILENAME_BUFFER);
         let copy_len = wide.len().min(259);
@@ -272,10 +286,12 @@ fn send_filename(hwnd: HWND, path: &PathBuf) {
 
 /// 에러 메시지 전송
 fn send_error(hwnd: HWND, message: &str) {
-    let wide: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide = to_wide(message);
 
     // 정적 버퍼에 복사
     static mut ERROR_BUFFER: [u16; 512] = [0; 512];
+    // SAFETY: ERROR_BUFFER is a static mut accessed only from the file translation thread.
+    // The buffer outlives the PostMessageW call. The copy length is bounded to 511 elements.
     unsafe {
         let buffer_ptr = std::ptr::addr_of_mut!(ERROR_BUFFER);
         let copy_len = wide.len().min(511);

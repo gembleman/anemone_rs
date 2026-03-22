@@ -14,17 +14,12 @@ use windows::{
     core::*,
 };
 
-// 표준 CHOOSECOLOR 다이얼로그의 RGB 입력 필드 ID (Windows 내부 ID)
-const COLOR_RED_EDIT: u16 = 0x2C2;
-const COLOR_GREEN_EDIT: u16 = 0x2C3;
-const COLOR_BLUE_EDIT: u16 = 0x2C4;
+use crate::constants::{COLOR_BLUE_EDIT, COLOR_GREEN_EDIT, COLOR_RED_EDIT, TBM_GETPOS_VAL};
+use crate::util::to_wide;
 
 // 알파 채널 컨트롤 ID
 const IDC_ALPHA_TRACKBAR: u16 = 10001;
 const IDC_ALPHA_EDIT: u16 = 10002;
-
-// TrackBar 메시지 상수 (windows crate 0.62에서 누락)
-const TBM_GETPOS_VAL: u32 = 1024;
 
 /// 색상 대화상자 결과 (ARGB)
 #[derive(Debug, Clone, Copy)]
@@ -46,7 +41,6 @@ impl ColorResult {
         (self.argb & 0xFF) as u8
     }
 
-    #[allow(dead_code)]
     pub fn to_colorref(&self) -> u32 {
         // COLORREF는 BGR 순서
         ((self.blue() as u32) << 16) | ((self.green() as u32) << 8) | (self.red() as u32)
@@ -63,11 +57,9 @@ impl ColorResult {
 }
 
 /// 색상 변경 콜백 타입
-#[allow(dead_code)]
 pub type ColorChangeCallback = Box<dyn Fn(u32)>;
 
 /// 색상 대화상자 설정
-#[allow(dead_code)]
 pub struct ColorDialogConfig {
     /// 초기 색상 (ARGB)
     pub initial_color: u32,
@@ -77,7 +69,6 @@ pub struct ColorDialogConfig {
     pub no_activate: bool,
 }
 
-#[allow(dead_code)]
 impl Default for ColorDialogConfig {
     fn default() -> Self {
         Self {
@@ -104,8 +95,9 @@ pub struct ColorDialog;
 
 impl ColorDialog {
     /// 색상 선택 대화상자 표시
-    #[allow(dead_code)]
     pub fn show(hwnd: HWND, config: ColorDialogConfig) -> Option<ColorResult> {
+        // SAFETY: hwnd is a valid window handle from the caller. show_impl handles all
+        // Win32 dialog setup with valid parameters.
         unsafe { Self::show_impl(hwnd, config) }
     }
 
@@ -122,6 +114,10 @@ impl ColorDialog {
     }
 
     unsafe fn show_impl(hwnd: HWND, config: ColorDialogConfig) -> Option<ColorResult> {
+        // SAFETY: hwnd is a valid window handle from the caller. CHOOSECOLORW is initialized
+        // with correct lStructSize, valid owner handle, and valid custom colors pointer.
+        // The hook procedure pointer is a valid extern "system" fn. zeroed() produces a
+        // valid default state for the CHOOSECOLORW struct.
         unsafe {
             let alpha = ((config.initial_color >> 24) & 0xFF) as i32;
             let r = ((config.initial_color >> 16) & 0xFF) as u8;
@@ -131,14 +127,18 @@ impl ColorDialog {
 
             // 훅 컨텍스트 설정
             HOOK_CONTEXT.with(|ctx| {
-                *ctx.borrow_mut() = Some(HookContext {
-                    alpha,
-                    callback: config.on_color_change,
-                    no_activate: config.no_activate,
-                });
+                if let Ok(mut guard) = ctx.try_borrow_mut() {
+                    *guard = Some(HookContext {
+                        alpha,
+                        callback: config.on_color_change,
+                        no_activate: config.no_activate,
+                    });
+                }
             });
 
-            let mut custom_colors = CUSTOM_COLORS.with(|c| *c.borrow());
+            let mut custom_colors = CUSTOM_COLORS.with(|c| {
+                c.try_borrow().map(|g| *g).unwrap_or([COLORREF(0xFFFFFF); 16])
+            });
 
             let mut cc: CHOOSECOLORW = zeroed();
             cc.lStructSize = std::mem::size_of::<CHOOSECOLORW>() as u32;
@@ -153,20 +153,24 @@ impl ColorDialog {
 
             // 커스텀 색상 저장
             CUSTOM_COLORS.with(|c| {
-                *c.borrow_mut() = custom_colors;
+                if let Ok(mut guard) = c.try_borrow_mut() {
+                    *guard = custom_colors;
+                }
             });
 
             // 컨텍스트에서 최종 알파값 가져오기
             let final_alpha = HOOK_CONTEXT.with(|ctx| {
-                ctx.borrow()
-                    .as_ref()
-                    .map(|c| c.alpha as u8)
+                ctx.try_borrow()
+                    .ok()
+                    .and_then(|g| g.as_ref().map(|c| c.alpha as u8))
                     .unwrap_or(alpha as u8)
             });
 
             // 컨텍스트 정리
             HOOK_CONTEXT.with(|ctx| {
-                *ctx.borrow_mut() = None;
+                if let Ok(mut guard) = ctx.try_borrow_mut() {
+                    *guard = None;
+                }
             });
 
             if result.as_bool() {
@@ -185,6 +189,9 @@ impl ColorDialog {
 
     /// 다이얼로그에서 ARGB 색상 읽기
     fn read_dialog_argb(hdlg: HWND) -> u32 {
+        // SAFETY: hdlg is a valid dialog handle provided by the CHOOSECOLOR hook. The
+        // control IDs (COLOR_RED/GREEN/BLUE_EDIT, IDC_ALPHA_EDIT) are valid dialog item
+        // IDs within this dialog. The buffer is stack-allocated with sufficient size.
         unsafe {
             let mut buf = [0u16; 32];
 
@@ -213,6 +220,11 @@ impl ColorDialog {
     }
 
     /// CHOOSECOLOR 훅 프로시저
+    // SAFETY: This is a CHOOSECOLOR hook procedure called by the system. hdlg is a valid
+    // dialog handle provided by Windows. All child window creation uses valid parent handle
+    // and module instance. Pointer casts for HMENU IDs and RECT* from lparam are valid per
+    // the Win32 hook contract. Thread-local HOOK_CONTEXT access is safe because the dialog
+    // runs on the same thread that set it up.
     unsafe extern "system" fn hook_proc(
         hdlg: HWND,
         msg: u32,
@@ -301,7 +313,11 @@ impl ColorDialog {
 
                     // lCustData에서 초기 알파값 가져오기
                     let initial_alpha = HOOK_CONTEXT
-                        .with(|ctx| ctx.borrow().as_ref().map(|c| c.alpha).unwrap_or(255));
+                        .with(|ctx| {
+                            ctx.try_borrow().ok()
+                                .and_then(|g| g.as_ref().map(|c| c.alpha))
+                                .unwrap_or(255)
+                        });
 
                     // 트랙바 범위 설정 (0-255)
                     let _ = SendDlgItemMessageW(
@@ -322,11 +338,10 @@ impl ColorDialog {
                     );
 
                     // 에디트 초기값
-                    let alpha_str: Vec<u16> = format!("{}", initial_alpha)
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
-                    SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, PCWSTR(alpha_str.as_ptr())).ok();
+                    let alpha_str = to_wide(&format!("{}", initial_alpha));
+                    if let Err(e) = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, PCWSTR(alpha_str.as_ptr())) {
+                        tracing::warn!("SetDlgItemTextW failed: {e}");
+                    }
 
                     // 폰트 적용
                     if let Ok(trackbar) = trackbar {
@@ -356,7 +371,11 @@ impl ColorDialog {
 
                     // WS_EX_NOACTIVATE 설정
                     let no_activate = HOOK_CONTEXT
-                        .with(|ctx| ctx.borrow().as_ref().map(|c| c.no_activate).unwrap_or(true));
+                        .with(|ctx| {
+                            ctx.try_borrow().ok()
+                                .and_then(|g| g.as_ref().map(|c| c.no_activate))
+                                .unwrap_or(true)
+                        });
 
                     if no_activate {
                         let ex_style = GetWindowLongW(hdlg, GWL_EXSTYLE);
@@ -386,26 +405,27 @@ impl ColorDialog {
                     };
 
                     // 에디트 업데이트
-                    let alpha_str: Vec<u16> = format!("{}", alpha)
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
+                    let alpha_str = to_wide(&format!("{}", alpha));
                     let _ =
                         SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, PCWSTR(alpha_str.as_ptr()));
 
                     // 컨텍스트에 알파값 저장
                     HOOK_CONTEXT.with(|ctx| {
-                        if let Some(ref mut c) = *ctx.borrow_mut() {
-                            c.alpha = alpha;
+                        if let Ok(mut guard) = ctx.try_borrow_mut() {
+                            if let Some(ref mut c) = *guard {
+                                c.alpha = alpha;
+                            }
                         }
                     });
 
                     // 콜백 호출
                     let color = Self::read_dialog_argb(hdlg);
                     HOOK_CONTEXT.with(|ctx| {
-                        if let Some(ref c) = *ctx.borrow() {
-                            if let Some(ref cb) = c.callback {
-                                cb(color);
+                        if let Ok(guard) = ctx.try_borrow() {
+                            if let Some(ref c) = *guard {
+                                if let Some(ref cb) = c.callback {
+                                    cb(color);
+                                }
                             }
                         }
                     });
@@ -416,9 +436,11 @@ impl ColorDialog {
                     // 색상 변경 시 콜백 호출
                     let color = Self::read_dialog_argb(hdlg);
                     HOOK_CONTEXT.with(|ctx| {
-                        if let Some(ref c) = *ctx.borrow() {
-                            if let Some(ref cb) = c.callback {
-                                cb(color);
+                        if let Ok(guard) = ctx.try_borrow() {
+                            if let Some(ref c) = *guard {
+                                if let Some(ref cb) = c.callback {
+                                    cb(color);
+                                }
                             }
                         }
                     });

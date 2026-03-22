@@ -8,17 +8,26 @@ use windows::{
 };
 
 use super::ctrl_id;
-use super::{CB_GETCURSEL, SettingsDialog};
-use crate::config::{ColorType, Config, TextAlign, TextType};
+use super::SettingsDialog;
+use crate::constants::{CB_GETCURSEL, CBN_SELCHANGE};
+use crate::config::{ColorType, TextAlign, TextType};
+use crate::util::to_wide;
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
 
 impl SettingsDialog {
     /// 명령 처리
-    pub(super) fn handle_command(&mut self, cmd: u16) {
+    pub(super) fn handle_command(&mut self, cmd: u16, notify_code: u32) {
+        // ComboBox 선택 변경은 별도 처리
+        if notify_code == CBN_SELCHANGE {
+            self.handle_combobox(cmd);
+            return;
+        }
+
         use ctrl_id::*;
 
         match cmd {
+            // SAFETY: self.hwnd is a valid window handle from dialog creation.
             CLOSE => unsafe {
                 let _ = DestroyWindow(self.hwnd);
             },
@@ -120,12 +129,12 @@ impl SettingsDialog {
                 let new_mode = cfg.repeat_text_mode;
                 drop(cfg);
                 // 버튼 텍스트 업데이트
+                // SAFETY: self.hwnd is valid; GetDlgItem returns a valid control handle.
                 unsafe {
                     if let Ok(btn) = GetDlgItem(Some(self.hwnd), REPEAT_TEXT as i32) {
                         if !btn.is_invalid() {
                             let text = format!("반복:{}", new_mode);
-                            let text_wide: Vec<u16> =
-                                text.encode_utf16().chain(std::iter::once(0)).collect();
+                            let text_wide = to_wide(&text);
                             let _ = SetWindowTextW(btn, PCWSTR(text_wide.as_ptr()));
                         }
                     }
@@ -261,11 +270,11 @@ impl SettingsDialog {
             EZTRANS_DLL_BROWSE => {
                 if let Some(path) = self.browse_dll_file("J2KEngine.dll 선택") {
                     self.config.borrow_mut().translation.eztrans_dll_path = path.clone();
+                    // SAFETY: self.hwnd is valid; GetDlgItem returns a valid edit control.
                     unsafe {
                         if let Ok(edit) = GetDlgItem(Some(self.hwnd), EZTRANS_DLL_EDIT as i32) {
                             if !edit.is_invalid() {
-                                let text_wide: Vec<u16> =
-                                    path.encode_utf16().chain(std::iter::once(0)).collect();
+                                let text_wide = to_wide(&path);
                                 let _ = SetWindowTextW(edit, PCWSTR(text_wide.as_ptr()));
                             }
                         }
@@ -279,11 +288,11 @@ impl SettingsDialog {
             EZTRANS_DAT_BROWSE => {
                 if let Some(path) = self.browse_folder_with_title("EzTrans Dat 폴더 선택") {
                     self.config.borrow_mut().translation.eztrans_dat_path = path.clone();
+                    // SAFETY: self.hwnd is valid; GetDlgItem returns a valid edit control.
                     unsafe {
                         if let Ok(edit) = GetDlgItem(Some(self.hwnd), EZTRANS_DAT_EDIT as i32) {
                             if !edit.is_invalid() {
-                                let text_wide: Vec<u16> =
-                                    path.encode_utf16().chain(std::iter::once(0)).collect();
+                                let text_wide = to_wide(&path);
                                 let _ = SetWindowTextW(edit, PCWSTR(text_wide.as_ptr()));
                             }
                         }
@@ -350,12 +359,12 @@ impl SettingsDialog {
                     .borrow_mut()
                     .set_all_text_size(ColorType::Primary, value);
                 // 크기 레이블 업데이트
+                // SAFETY: self.hwnd is valid; GetDlgItem returns a valid label control.
                 unsafe {
                     if let Ok(label) = GetDlgItem(Some(self.hwnd), TEXTSIZE_TEXT as i32) {
                         if !label.is_invalid() {
                             let text = format!("크기: {}", value);
-                            let text_wide: Vec<u16> =
-                                text.encode_utf16().chain(std::iter::once(0)).collect();
+                            let text_wide = to_wide(&text);
                             let _ = SetWindowTextW(label, PCWSTR(text_wide.as_ptr()));
                         }
                     }
@@ -406,6 +415,7 @@ impl SettingsDialog {
     pub(super) fn handle_combobox(&mut self, id: u16) {
         use ctrl_id::*;
 
+        // SAFETY: self.hwnd is valid; GetDlgItem and SendMessageW use valid handles.
         unsafe {
             let combo = match GetDlgItem(Some(self.hwnd), id as i32) {
                 Ok(h) if !h.is_invalid() => h,
@@ -459,10 +469,12 @@ impl SettingsDialog {
             if !config.translation.eztrans_dll_path.is_empty()
                 && !config.translation.eztrans_dat_path.is_empty()
             {
-                let _ = mgr.init_eztrans(
+                if let Err(e) = mgr.init_eztrans(
                     &config.translation.eztrans_dll_path,
                     &config.translation.eztrans_dat_path,
-                );
+                ) {
+                    tracing::warn!("EzTrans init failed in sync: {e}");
+                }
             }
 
             // DeepL API 키 설정
@@ -470,12 +482,6 @@ impl SettingsDialog {
                 mgr.set_deepl_api_key(config.translation.deepl_api_key.clone());
             }
         }
-    }
-
-    /// 폴더 브라우저 열기
-    #[allow(dead_code)]
-    fn browse_folder(&self) -> Option<String> {
-        self.browse_folder_with_title("스크린샷 저장 경로 선택")
     }
 
     /// 제목 지정 폴더 브라우저 열기
@@ -487,6 +493,8 @@ impl SettingsDialog {
             FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem, SIGDN_FILESYSPATH,
         };
 
+        // SAFETY: COM is initialized for this thread. IFileOpenDialog and IShellItem are
+        // valid COM objects. CoTaskMemFree frees memory allocated by GetDisplayName.
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
@@ -494,13 +502,19 @@ impl SettingsDialog {
                 let dialog: IFileOpenDialog =
                     match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL) {
                         Ok(d) => d,
-                        Err(_) => return None,
+                        Err(e) => {
+                            tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}");
+                            return None;
+                        }
                     };
 
-                let _ = dialog.SetOptions(FOS_PICKFOLDERS);
-                let title_wide: Vec<u16> =
-                    title.encode_utf16().chain(std::iter::once(0)).collect();
-                let _ = dialog.SetTitle(PCWSTR(title_wide.as_ptr()));
+                if let Err(e) = dialog.SetOptions(FOS_PICKFOLDERS) {
+                    tracing::warn!("SetOptions failed: {e}");
+                }
+                let title_wide = to_wide(title);
+                if let Err(e) = dialog.SetTitle(PCWSTR(title_wide.as_ptr())) {
+                    tracing::warn!("SetTitle failed: {e}");
+                }
 
                 if dialog.Show(Some(self.hwnd)).is_err() {
                     return None;
@@ -516,7 +530,7 @@ impl SettingsDialog {
                     Err(_) => return None,
                 };
 
-                let path = path_ptr.to_string().ok();
+                let path = path_ptr.to_string().inspect_err(|e| tracing::warn!("Path conversion failed: {e}")).ok();
                 windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
                 path
             };
@@ -536,6 +550,9 @@ impl SettingsDialog {
         };
         use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 
+        // SAFETY: COM is initialized for this thread. IFileOpenDialog and IShellItem are
+        // valid COM objects. Filter strings are valid null-terminated UTF-16.
+        // CoTaskMemFree frees memory allocated by GetDisplayName.
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
@@ -543,22 +560,26 @@ impl SettingsDialog {
                 let dialog: IFileOpenDialog =
                     match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL) {
                         Ok(d) => d,
-                        Err(_) => return None,
+                        Err(e) => {
+                            tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}");
+                            return None;
+                        }
                     };
 
-                let title_wide: Vec<u16> =
-                    title.encode_utf16().chain(std::iter::once(0)).collect();
-                let _ = dialog.SetTitle(PCWSTR(title_wide.as_ptr()));
+                let title_wide = to_wide(title);
+                if let Err(e) = dialog.SetTitle(PCWSTR(title_wide.as_ptr())) {
+                    tracing::warn!("SetTitle failed: {e}");
+                }
 
-                let filter_name: Vec<u16> =
-                    "DLL 파일".encode_utf16().chain(std::iter::once(0)).collect();
-                let filter_spec: Vec<u16> =
-                    "*.dll".encode_utf16().chain(std::iter::once(0)).collect();
+                let filter_name = to_wide("DLL 파일");
+                let filter_spec = to_wide("*.dll");
                 let filters = [COMDLG_FILTERSPEC {
                     pszName: PCWSTR(filter_name.as_ptr()),
                     pszSpec: PCWSTR(filter_spec.as_ptr()),
                 }];
-                let _ = dialog.SetFileTypes(&filters);
+                if let Err(e) = dialog.SetFileTypes(&filters) {
+                    tracing::warn!("SetFileTypes failed: {e}");
+                }
 
                 if dialog.Show(Some(self.hwnd)).is_err() {
                     return None;
@@ -574,7 +595,7 @@ impl SettingsDialog {
                     Err(_) => return None,
                 };
 
-                let path = path_ptr.to_string().ok();
+                let path = path_ptr.to_string().inspect_err(|e| tracing::warn!("Path conversion failed: {e}")).ok();
                 windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
                 path
             };
@@ -586,6 +607,7 @@ impl SettingsDialog {
 
     /// 텍스트 크기 UI 업데이트 (트랙바 위치 및 레이블)
     fn update_textsize_ui(&self, size: i32) {
+        // SAFETY: self.hwnd is valid; GetDlgItem returns valid control handles.
         unsafe {
             if let Ok(trackbar) = GetDlgItem(Some(self.hwnd), ctrl_id::TEXTSIZE_TRACKBAR as i32) {
                 if !trackbar.is_invalid() {
@@ -600,8 +622,7 @@ impl SettingsDialog {
             if let Ok(label) = GetDlgItem(Some(self.hwnd), ctrl_id::TEXTSIZE_TEXT as i32) {
                 if !label.is_invalid() {
                     let text = format!("크기: {}", size);
-                    let text_wide: Vec<u16> =
-                        text.encode_utf16().chain(std::iter::once(0)).collect();
+                    let text_wide = to_wide(&text);
                     let _ = SetWindowTextW(label, PCWSTR(text_wide.as_ptr()));
                 }
             }
@@ -618,6 +639,7 @@ impl SettingsDialog {
             tracing::error!("설정 저장 실패: {}", e);
         }
 
+        // SAFETY: self.main_hwnd is a valid window handle passed during dialog creation.
         unsafe {
             let _ = PostMessageW(Some(self.main_hwnd), WM_PAINT, WPARAM(0), LPARAM(1));
         }

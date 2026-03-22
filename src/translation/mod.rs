@@ -20,9 +20,7 @@ pub use detect::is_source_language;
 pub use eztrans::EzTransTranslator;
 pub use google::GoogleTranslator;
 pub use isolang::Language;
-pub use worker::{
-    TranslationWorker, WM_TRANSLATION_COMPLETE, take_all_responses,
-};
+pub use worker::{TranslationWorker, take_all_responses};
 
 use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;

@@ -3,6 +3,7 @@
 mod app;
 mod clipboard;
 mod config;
+mod constants;
 mod d2d;
 mod dialogs;
 mod hotkey;
@@ -10,6 +11,7 @@ mod magnetic;
 mod menu;
 mod translation;
 mod tray;
+mod util;
 mod window;
 
 use app::App;

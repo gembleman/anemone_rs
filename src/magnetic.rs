@@ -14,14 +14,10 @@ use windows::{
 };
 
 use crate::config::Config;
-
-// WinEvent 상수 (windows crate에서 누락될 수 있음)
-const EVENT_SYSTEM_MINIMIZESTART: u32 = 0x0016;
-const EVENT_SYSTEM_MINIMIZEEND: u32 = 0x0017;
-const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
-const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800B;
-const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
-const WINEVENT_SKIPOWNPROCESS: u32 = 0x0002;
+use crate::constants::{
+    EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
+    EVENT_SYSTEM_MINIMIZESTART, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+};
 
 /// 자석 상태
 pub struct MagnetState {
@@ -60,7 +56,6 @@ pub struct MagneticManager {
     main_hwnd: HWND,
     state: Rc<RefCell<MagnetState>>,
     event_hook: HWINEVENTHOOK,
-    #[allow(dead_code)]
     config: Rc<RefCell<Config>>,
 }
 
@@ -100,6 +95,7 @@ impl MagneticManager {
         }
 
         // 포그라운드 윈도우를 타겟으로 설정
+        // SAFETY: GetForegroundWindow returns a valid HWND or null (checked below).
         let target = unsafe { GetForegroundWindow() };
         if target.is_invalid() || target == self.main_hwnd {
             return Err(Error::from_hresult(HRESULT::from_win32(
@@ -123,20 +119,23 @@ impl MagneticManager {
         // thread_local 데이터 설정
         let minimize_with_target = self.config.borrow().magnetic_minimize;
         MAGNETIC_INSTANCE.with(|cell| {
-            *cell.borrow_mut() = Some(MagneticManagerData {
-                main_hwnd: self.main_hwnd,
-                target_hwnd: target,
-                is_attached: true,
-                is_minimized: false,
-                offset_x,
-                offset_y,
-                saved_x: 0,
-                saved_y: 0,
-                minimize_with_target,
-            });
+            if let Ok(mut guard) = cell.try_borrow_mut() {
+                *guard = Some(MagneticManagerData {
+                    main_hwnd: self.main_hwnd,
+                    target_hwnd: target,
+                    is_attached: true,
+                    is_minimized: false,
+                    offset_x,
+                    offset_y,
+                    saved_x: 0,
+                    saved_y: 0,
+                    minimize_with_target,
+                });
+            }
         });
 
-        // WinEvent 훅 설정
+        // SAFETY: SetWinEventHook is called with valid event range and a valid callback function
+        // pointer. WINEVENT_OUTOFCONTEXT means the callback runs in our thread context.
         unsafe {
             self.event_hook = SetWinEventHook(
                 EVENT_SYSTEM_MINIMIZESTART,
@@ -150,6 +149,7 @@ impl MagneticManager {
         }
 
         if self.event_hook.0.is_null() {
+            // SAFETY: GetLastError returns the last Win32 error code for the current thread.
             return Err(Error::from_hresult(HRESULT::from_win32(unsafe {
                 GetLastError().0
             })));
@@ -161,6 +161,7 @@ impl MagneticManager {
     /// 자석 모드 중지
     pub fn stop(&mut self) {
         if !self.event_hook.0.is_null() {
+            // SAFETY: self.event_hook is a valid hook handle from SetWinEventHook.
             unsafe {
                 let _ = UnhookWinEvent(self.event_hook);
             }
@@ -176,10 +177,12 @@ impl MagneticManager {
 
         // thread_local 데이터 정리
         MAGNETIC_INSTANCE.with(|cell| {
-            *cell.borrow_mut() = None;
+            if let Ok(mut guard) = cell.try_borrow_mut() {
+                *guard = None;
+            }
         });
 
-        // 윈도우 다시 표시 (숨겨져 있었다면)
+        // SAFETY: self.main_hwnd is a valid window handle provided during construction.
         unsafe {
             let _ = ShowWindow(self.main_hwnd, SW_SHOW);
         }
@@ -191,13 +194,14 @@ impl MagneticManager {
     }
 
     /// 타겟 윈도우 핸들
-    #[allow(dead_code)]
     pub fn target_hwnd(&self) -> HWND {
         self.state.borrow().target_hwnd
     }
 
     /// 현재 위치로 오프셋 계산
     fn calculate_offset(&self, target: HWND) -> Result<(i32, i32)> {
+        // SAFETY: target and self.main_hwnd are valid window handles. GetWindowRect writes
+        // to properly initialized RECT structs.
         unsafe {
             let mut target_rect = RECT::default();
             let mut main_rect = RECT::default();
@@ -219,6 +223,8 @@ impl MagneticManager {
             return;
         }
 
+        // SAFETY: state.target_hwnd and self.main_hwnd are valid window handles stored
+        // during start(). GetWindowRect and SetWindowPos use valid parameters.
         unsafe {
             let mut target_rect = RECT::default();
             if GetWindowRect(state.target_hwnd, &mut target_rect).is_ok() {
@@ -239,6 +245,9 @@ impl MagneticManager {
     }
 
     /// WinEvent 콜백
+    // SAFETY: This is a WinEvent callback registered via SetWinEventHook. The system
+    // guarantees valid parameters. Thread-local data is accessed only from the registering
+    // thread (WINEVENT_OUTOFCONTEXT).
     unsafe extern "system" fn win_event_proc(
         _hook: HWINEVENTHOOK,
         event: u32,
@@ -254,7 +263,7 @@ impl MagneticManager {
         }
 
         MAGNETIC_INSTANCE.with(|cell| {
-            let mut data = cell.borrow_mut();
+            let Ok(mut data) = cell.try_borrow_mut() else { return; };
             let data = match data.as_mut() {
                 Some(d) => d,
                 None => return,

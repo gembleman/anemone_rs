@@ -12,10 +12,9 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows::Win32::Foundation::{WPARAM, LPARAM};
 
-use super::{TranslationEngine, TranslationError, TranslationResult};
+use crate::constants::{MAX_RESPONSE_STORAGE, WM_TRANSLATION_COMPLETE};
 
-/// 번역 완료 메시지 ID
-pub const WM_TRANSLATION_COMPLETE: u32 = 0x0400 + 100; // WM_USER + 100
+use super::{TranslationEngine, TranslationError, TranslationResult};
 
 /// 번역 요청
 #[derive(Debug, Clone)]
@@ -53,10 +52,19 @@ fn get_response_storage() -> Arc<Mutex<Vec<TranslationResponse>>> {
         .clone()
 }
 
-/// 응답 저장
+/// 응답 저장 (MAX_RESPONSE_STORAGE 초과 시 오래된 항목 제거)
 pub fn store_response(response: TranslationResponse) {
     if let Ok(mut storage) = get_response_storage().lock() {
         storage.push(response);
+        if storage.len() > MAX_RESPONSE_STORAGE {
+            let excess = storage.len() - MAX_RESPONSE_STORAGE;
+            tracing::warn!(
+                "응답 저장소가 최대 크기({})를 초과하여 {}개의 오래된 항목을 제거합니다",
+                MAX_RESPONSE_STORAGE,
+                excess
+            );
+            storage.drain(..excess);
+        }
     }
 }
 
@@ -82,7 +90,6 @@ pub fn take_all_responses() -> Vec<TranslationResponse> {
 /// 번역 워커
 pub struct TranslationWorker {
     sender: Sender<TranslationRequest>,
-    #[allow(dead_code)]
     handle: JoinHandle<()>,
     next_id: u64,
 }
@@ -132,6 +139,10 @@ impl TranslationWorker {
                 store_response(response);
 
                 // UI 스레드에 완료 알림
+                // SAFETY: hwnd was reconstructed from a usize that was originally a valid
+                // HWND from the UI thread. PostMessageW is safe to call from any thread
+                // and only posts the message to the target window's message queue.
+                // WM_TRANSLATION_COMPLETE is a custom message with the request ID as WPARAM.
                 unsafe {
                     let _ = PostMessageW(
                         Some(hwnd),

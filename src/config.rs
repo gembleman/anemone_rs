@@ -269,7 +269,6 @@ impl Default for TranslationConfig {
 
 /// 애플리케이션 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct Config {
     // 윈도우 표시
     pub window_visible: bool,
@@ -349,7 +348,6 @@ pub struct Config {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub enum TextAlign {
     Left = 0,
     Center = 1,

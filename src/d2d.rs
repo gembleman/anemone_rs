@@ -3,6 +3,7 @@
 //! ID2D1DCRenderTarget을 사용하여 레이어드 윈도우와 호환되는
 //! Direct2D 렌더링을 제공합니다.
 
+use crate::util::to_wide;
 use windows::{
     Win32::{
         Foundation::*,
@@ -17,6 +18,40 @@ use windows::{
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::window::TextRenderStyle;
+
+// ── ARGB 컬러 변환 헬퍼 ─────────────────────────────────
+
+/// ARGB u32를 D2D1_COLOR_F로 변환
+#[inline]
+fn argb_to_color_f(color: u32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        a: ((color >> 24) & 0xFF) as f32 / 255.0,
+        r: ((color >> 16) & 0xFF) as f32 / 255.0,
+        g: ((color >> 8) & 0xFF) as f32 / 255.0,
+        b: (color & 0xFF) as f32 / 255.0,
+    }
+}
+
+// ── font_style 비트 → DirectWrite 변환 ──────────────────
+
+/// font_style 비트플래그(0: normal, 1: bold, 2: italic, 3: bold+italic)를
+/// DirectWrite의 weight/style 쌍으로 변환
+#[inline]
+fn font_style_to_dwrite(bits: u8) -> (DWRITE_FONT_WEIGHT, DWRITE_FONT_STYLE) {
+    let weight = if bits & 1 != 0 {
+        DWRITE_FONT_WEIGHT_BOLD
+    } else {
+        DWRITE_FONT_WEIGHT_NORMAL
+    };
+    let style = if bits & 2 != 0 {
+        DWRITE_FONT_STYLE_ITALIC
+    } else {
+        DWRITE_FONT_STYLE_NORMAL
+    };
+    (weight, style)
+}
+
+// ── OutlineTextRenderer ─────────────────────────────────
 
 /// IDWriteTextRenderer 구현체 - 글리프를 ID2D1GeometrySink로 출력
 #[windows::core::implement(IDWriteTextRenderer, IDWritePixelSnapping)]
@@ -44,6 +79,8 @@ impl IDWritePixelSnapping_Impl for OutlineTextRenderer_Impl {
         _clientdrawingcontext: *const std::ffi::c_void,
         transform: *mut DWRITE_MATRIX,
     ) -> windows::core::Result<()> {
+        // SAFETY: transform is a valid out-pointer provided by DirectWrite. Writing an
+        // identity matrix is the expected behavior for pixel snapping.
         unsafe {
             *transform = DWRITE_MATRIX {
                 m11: 1.0,
@@ -76,6 +113,9 @@ impl IDWriteTextRenderer_Impl for OutlineTextRenderer_Impl {
         _glyphrundescription: *const DWRITE_GLYPH_RUN_DESCRIPTION,
         _clientdrawingeffect: windows::core::Ref<'_, windows::core::IUnknown>,
     ) -> windows::core::Result<()> {
+        // SAFETY: glyphrun is a valid pointer provided by DirectWrite's text layout engine.
+        // The glyph data (indices, advances, offsets) are valid for the duration of this call.
+        // D2D factory operations create valid COM objects.
         unsafe {
             let glyph_run = &*glyphrun;
 
@@ -156,6 +196,8 @@ impl IDWriteTextRenderer_Impl for OutlineTextRenderer_Impl {
     }
 }
 
+// ── D2DRenderer ─────────────────────────────────────────
+
 /// Direct2D 기반 렌더러
 pub struct D2DRenderer {
     d2d_factory: ID2D1Factory,
@@ -168,12 +210,11 @@ pub struct D2DRenderer {
 impl D2DRenderer {
     /// D2DRenderer 생성
     pub fn new() -> Result<Self> {
+        // SAFETY: D2D1CreateFactory and DWriteCreateFactory are COM factory functions that
+        // return valid COM interface pointers on success.
         unsafe {
-            // D2D Factory 생성
             let d2d_factory: ID2D1Factory =
                 D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-
-            // DirectWrite Factory 생성
             let dwrite_factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
 
             Ok(Self {
@@ -186,8 +227,71 @@ impl D2DRenderer {
         }
     }
 
+    /// 활성 render target 참조를 반환. 없으면 None.
+    #[inline]
+    fn target(&self) -> Option<&ID2D1DCRenderTarget> {
+        self.render_target.as_ref()
+    }
+
+    /// ARGB 색상으로 SolidColorBrush 생성
+    fn create_solid_brush(
+        &self,
+        target: &ID2D1DCRenderTarget,
+        color: u32,
+    ) -> Result<ID2D1SolidColorBrush> {
+        // SAFETY: target is a valid render target. CreateSolidColorBrush is called with
+        // valid color and brush properties.
+        unsafe {
+            target.CreateSolidColorBrush(
+                &argb_to_color_f(color),
+                Some(&D2D1_BRUSH_PROPERTIES {
+                    opacity: 1.0,
+                    transform: Matrix3x2::identity(),
+                }),
+            )
+        }
+    }
+
+    /// TextRenderStyle에서 IDWriteTextLayout 생성
+    fn create_text_layout(
+        &self,
+        text: &str,
+        style: &TextRenderStyle,
+        max_width: f32,
+        max_height: f32,
+    ) -> Result<IDWriteTextLayout> {
+        // SAFETY: DirectWrite factory creates valid text format and layout objects.
+        // font_face_wide is a valid null-terminated UTF-16 string.
+        unsafe {
+            let font_face_wide = to_wide(&style.font_face);
+            let (font_weight, font_style_dw) = font_style_to_dwrite(style.font_style);
+
+            let text_format = self.dwrite_factory.CreateTextFormat(
+                PCWSTR(font_face_wide.as_ptr()),
+                None,
+                font_weight,
+                font_style_dw,
+                DWRITE_FONT_STRETCH_NORMAL,
+                style.font_size as f32,
+                w!(""),
+            )?;
+
+            let text_wide: Vec<u16> = text.encode_utf16().collect();
+            self.dwrite_factory.CreateTextLayout(
+                &text_wide,
+                &text_format,
+                max_width,
+                max_height,
+            )
+        }
+    }
+
+    // ── 퍼블릭 렌더링 API ───────────────────────────────
+
     /// DC에 렌더 타겟 바인딩
     pub fn bind_dc(&mut self, hdc: HDC, width: i32, height: i32) -> Result<()> {
+        // SAFETY: hdc is a valid device context from the caller. The render target is
+        // created with valid D2D properties and bound to the DC with correct dimensions.
         unsafe {
             // 렌더 타겟이 없으면 생성
             if self.render_target.is_none() {
@@ -207,7 +311,6 @@ impl D2DRenderer {
                 self.render_target = Some(target);
             }
 
-            // DC 바인딩
             let rect = RECT {
                 left: 0,
                 top: 0,
@@ -228,10 +331,10 @@ impl D2DRenderer {
 
     /// 렌더링 시작
     pub fn begin_draw(&self) {
-        if let Some(ref target) = self.render_target {
+        if let Some(target) = self.target() {
+            // SAFETY: render_target is a valid ID2D1DCRenderTarget initialized in bind_dc.
             unsafe {
                 target.BeginDraw();
-                // 안티앨리어싱 설정 (투명 배경에서는 Grayscale AA 사용)
                 target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             }
         }
@@ -239,7 +342,8 @@ impl D2DRenderer {
 
     /// 렌더링 종료
     pub fn end_draw(&self) -> Result<()> {
-        if let Some(ref target) = self.render_target {
+        if let Some(target) = self.target() {
+            // SAFETY: render_target is valid and EndDraw is called after a matching BeginDraw.
             unsafe {
                 target.EndDraw(None, None)?;
             }
@@ -249,25 +353,22 @@ impl D2DRenderer {
 
     /// 배경 클리어 (ARGB)
     pub fn clear(&self, color: u32) {
-        if let Some(ref target) = self.render_target {
-            let a = ((color >> 24) & 0xFF) as f32 / 255.0;
-            let r = ((color >> 16) & 0xFF) as f32 / 255.0;
-            let g = ((color >> 8) & 0xFF) as f32 / 255.0;
-            let b = (color & 0xFF) as f32 / 255.0;
-
+        if let Some(target) = self.target() {
+            // SAFETY: render_target is valid and we are between BeginDraw/EndDraw.
             unsafe {
-                target.Clear(Some(&D2D1_COLOR_F { r, g, b, a }));
+                target.Clear(Some(&argb_to_color_f(color)));
             }
         }
     }
 
     /// 사각형 채우기 (ARGB)
     pub fn fill_rect(&self, x: f32, y: f32, w: f32, h: f32, color: u32) -> Result<()> {
-        let target = match &self.render_target {
+        let target = match self.target() {
             Some(t) => t,
             None => return Ok(()),
         };
 
+        // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
             let brush = self.create_solid_brush(target, color)?;
             let rect = D2D_RECT_F {
@@ -284,7 +385,7 @@ impl D2DRenderer {
 
     /// 테두리 그리기 (ARGB)
     pub fn draw_border(&self, thickness: i32, color: u32) -> Result<()> {
-        let target = match &self.render_target {
+        let target = match self.target() {
             Some(t) => t,
             None => return Ok(()),
         };
@@ -293,47 +394,28 @@ impl D2DRenderer {
         let h = self.bound_height as f32;
         let t = thickness as f32;
 
+        // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
             let brush = self.create_solid_brush(target, color)?;
 
             // 상단
             target.FillRectangle(
-                &D2D_RECT_F {
-                    left: 0.0,
-                    top: 0.0,
-                    right: w,
-                    bottom: t,
-                },
+                &D2D_RECT_F { left: 0.0, top: 0.0, right: w, bottom: t },
                 &brush,
             );
             // 하단
             target.FillRectangle(
-                &D2D_RECT_F {
-                    left: 0.0,
-                    top: h - t,
-                    right: w,
-                    bottom: h,
-                },
+                &D2D_RECT_F { left: 0.0, top: h - t, right: w, bottom: h },
                 &brush,
             );
             // 좌측
             target.FillRectangle(
-                &D2D_RECT_F {
-                    left: 0.0,
-                    top: 0.0,
-                    right: t,
-                    bottom: h,
-                },
+                &D2D_RECT_F { left: 0.0, top: 0.0, right: t, bottom: h },
                 &brush,
             );
             // 우측
             target.FillRectangle(
-                &D2D_RECT_F {
-                    left: w - t,
-                    top: 0.0,
-                    right: w,
-                    bottom: h,
-                },
+                &D2D_RECT_F { left: w - t, top: 0.0, right: w, bottom: h },
                 &brush,
             );
         }
@@ -351,11 +433,12 @@ impl D2DRenderer {
         radius: f32,
         color: u32,
     ) -> Result<()> {
-        let target = match &self.render_target {
+        let target = match self.target() {
             Some(t) => t,
             None => return Ok(()),
         };
 
+        // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
             let brush = self.create_solid_brush(target, color)?;
             let rounded_rect = D2D1_ROUNDED_RECT {
@@ -385,11 +468,12 @@ impl D2DRenderer {
         stroke_width: f32,
         color: u32,
     ) -> Result<()> {
-        let target = match &self.render_target {
+        let target = match self.target() {
             Some(t) => t,
             None => return Ok(()),
         };
 
+        // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
             let brush = self.create_solid_brush(target, color)?;
             let rounded_rect = D2D1_ROUNDED_RECT {
@@ -419,50 +503,16 @@ impl D2DRenderer {
         max_height: f32,
         style: &TextRenderStyle,
     ) -> Result<()> {
-        let target = match &self.render_target {
+        let target = match self.target() {
             Some(t) => t,
             None => return Err(Error::from_hresult(HRESULT(-1))),
         };
 
+        let text_layout = self.create_text_layout(text, style, max_width, max_height)?;
+        let outline_total = style.outline1_size + style.outline2_size;
+
+        // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
-            // 텍스트 포맷 생성
-            let font_face_wide: Vec<u16> = style
-                .font_face
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect();
-            let font_weight = if style.font_style & 1 != 0 {
-                DWRITE_FONT_WEIGHT_BOLD
-            } else {
-                DWRITE_FONT_WEIGHT_NORMAL
-            };
-            let font_style_dw = if style.font_style & 2 != 0 {
-                DWRITE_FONT_STYLE_ITALIC
-            } else {
-                DWRITE_FONT_STYLE_NORMAL
-            };
-
-            let text_format = self.dwrite_factory.CreateTextFormat(
-                PCWSTR(font_face_wide.as_ptr()),
-                None,
-                font_weight,
-                font_style_dw,
-                DWRITE_FONT_STRETCH_NORMAL,
-                style.font_size as f32,
-                w!(""),
-            )?;
-
-            // 텍스트 레이아웃 생성
-            let text_wide: Vec<u16> = text.encode_utf16().collect();
-            let text_layout = self.dwrite_factory.CreateTextLayout(
-                &text_wide,
-                &text_format,
-                max_width,
-                max_height,
-            )?;
-
-            let outline_total = style.outline1_size + style.outline2_size;
-
             // 1. 그림자 그리기
             if style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0) {
                 let shadow_x = x + style.shadow_offset_x as f32;
@@ -536,6 +586,9 @@ impl D2DRenderer {
         thickness: i32,
         color: u32,
     ) -> Result<()> {
+        // SAFETY: D2D factory and render target are valid COM objects. text_layout is a valid
+        // DirectWrite layout. The geometry, stroke style, and brush are created and used
+        // within this scope with valid parameters.
         unsafe {
             // 1. PathGeometry 생성
             let path_geometry: ID2D1PathGeometry = self.d2d_factory.CreatePathGeometry()?;
@@ -579,28 +632,6 @@ impl D2DRenderer {
         Ok(())
     }
 
-    /// ARGB 색상으로 SolidColorBrush 생성
-    fn create_solid_brush(
-        &self,
-        target: &ID2D1DCRenderTarget,
-        color: u32,
-    ) -> Result<ID2D1SolidColorBrush> {
-        let a = ((color >> 24) & 0xFF) as f32 / 255.0;
-        let r = ((color >> 16) & 0xFF) as f32 / 255.0;
-        let g = ((color >> 8) & 0xFF) as f32 / 255.0;
-        let b = (color & 0xFF) as f32 / 255.0;
-
-        unsafe {
-            target.CreateSolidColorBrush(
-                &D2D1_COLOR_F { r, g, b, a },
-                Some(&D2D1_BRUSH_PROPERTIES {
-                    opacity: 1.0,
-                    transform: Matrix3x2::identity(),
-                }),
-            )
-        }
-    }
-
     /// 텍스트 메트릭스 가져오기
     pub fn get_text_metrics(
         &self,
@@ -609,44 +640,12 @@ impl D2DRenderer {
         max_width: f32,
         max_height: f32,
     ) -> Result<(f32, f32)> {
+        let text_layout = self.create_text_layout(text, style, max_width, max_height)?;
+
+        // SAFETY: DWRITE_TEXT_METRICS is zeroed before use and filled by GetMetrics.
         unsafe {
-            let font_face_wide: Vec<u16> = style
-                .font_face
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect();
-            let font_weight = if style.font_style & 1 != 0 {
-                DWRITE_FONT_WEIGHT_BOLD
-            } else {
-                DWRITE_FONT_WEIGHT_NORMAL
-            };
-            let font_style_dw = if style.font_style & 2 != 0 {
-                DWRITE_FONT_STYLE_ITALIC
-            } else {
-                DWRITE_FONT_STYLE_NORMAL
-            };
-
-            let text_format = self.dwrite_factory.CreateTextFormat(
-                PCWSTR(font_face_wide.as_ptr()),
-                None,
-                font_weight,
-                font_style_dw,
-                DWRITE_FONT_STRETCH_NORMAL,
-                style.font_size as f32,
-                w!(""),
-            )?;
-
-            let text_wide: Vec<u16> = text.encode_utf16().collect();
-            let text_layout = self.dwrite_factory.CreateTextLayout(
-                &text_wide,
-                &text_format,
-                max_width,
-                max_height,
-            )?;
-
             let mut metrics: DWRITE_TEXT_METRICS = std::mem::zeroed();
             text_layout.GetMetrics(&mut metrics)?;
-
             Ok((metrics.width, metrics.height))
         }
     }

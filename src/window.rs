@@ -35,6 +35,9 @@ pub struct DoubleBuffer {
 
 impl Drop for DoubleBuffer {
     fn drop(&mut self) {
+        // SAFETY: hdc_mem, hbitmap, and hbitmap_old were created in new() and are valid GDI
+        // objects. They are cleaned up in the correct order: restore old bitmap, delete bitmap,
+        // delete DC.
         unsafe {
             SelectObject(self.hdc_mem, self.hbitmap_old);
             let _ = DeleteObject(self.hbitmap.into());
@@ -45,6 +48,9 @@ impl Drop for DoubleBuffer {
 
 impl DoubleBuffer {
     pub fn new(hdc: HDC, width: i32, height: i32) -> Result<Self> {
+        // SAFETY: hdc is a valid device context from the caller. CreateCompatibleDC,
+        // CreateDIBSection, and SelectObject are standard GDI calls with valid parameters.
+        // The bits pointer is valid for width*height*4 bytes as long as hbitmap is alive.
         unsafe {
             let hdc_mem = CreateCompatibleDC(Some(hdc));
             if hdc_mem.is_invalid() {
@@ -76,6 +82,8 @@ impl DoubleBuffer {
     }
 
     pub fn clear(&mut self, r: u8, g: u8, b: u8, a: u8) {
+        // SAFETY: self.bits points to valid DIB section memory of width*height pixels.
+        // The slice is bounded by pixel_count which matches the allocated size.
         unsafe {
             let pixel_count = (self.width * self.height) as usize;
             let pixels = std::slice::from_raw_parts_mut(self.bits as *mut u32, pixel_count);
@@ -100,6 +108,8 @@ impl DoubleBuffer {
         let width = self.width;
         let height = self.height;
 
+        // SAFETY: self.bits points to valid DIB section memory of width*height pixels.
+        // Pixel indices are bounds-checked before access.
         unsafe {
             let pixel_count = (width * height) as usize;
             let pixels = std::slice::from_raw_parts_mut(self.bits as *mut u32, pixel_count);
@@ -133,6 +143,8 @@ impl DoubleBuffer {
 
 /// 레이어드 윈도우 업데이트
 pub fn update_layered_window(hwnd: HWND, buffer: &DoubleBuffer) -> Result<()> {
+    // SAFETY: hwnd is a valid layered window handle. buffer.hdc() returns a valid memory DC
+    // with a selected DIB section. GetDC(None)/ReleaseDC are called in matched pairs.
     unsafe {
         let hdc_screen = GetDC(None);
         let size = SIZE {
@@ -166,14 +178,15 @@ pub fn update_layered_window(hwnd: HWND, buffer: &DoubleBuffer) -> Result<()> {
 
 /// 윈도우 표시/숨김
 pub fn set_window_visible(hwnd: HWND, visible: bool) {
+    // SAFETY: hwnd is a valid window handle from the caller.
     unsafe {
         let _ = ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
     }
 }
 
 /// 최상위 설정
-#[allow(dead_code)]
 pub fn set_topmost(hwnd: HWND, topmost: bool) {
+    // SAFETY: hwnd is a valid window handle from the caller.
     unsafe {
         let hwnd_insert = if topmost {
             HWND_TOPMOST
@@ -194,6 +207,8 @@ pub fn set_topmost(hwnd: HWND, topmost: bool) {
 
 /// 클릭 통과 설정
 pub fn set_click_through(hwnd: HWND, click_through: bool) {
+    // SAFETY: hwnd is a valid window handle. GetWindowLongW/SetWindowLongW modify the
+    // extended window style which is a safe operation on a valid window.
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         let new_style = if click_through {
@@ -207,6 +222,8 @@ pub fn set_click_through(hwnd: HWND, click_through: bool) {
 
 /// WM_NCHITTEST 처리 - 테두리 크기 조절 영역 판정
 pub fn hit_test_resize_border(hwnd: HWND, x: i32, y: i32, border_width: i32) -> Option<i32> {
+    // SAFETY: hwnd is a valid window handle. GetClientRect and ScreenToClient are standard
+    // Win32 coordinate conversion calls with valid parameters.
     unsafe {
         let mut rc: RECT = zeroed();
         GetClientRect(hwnd, &mut rc).ok()?;

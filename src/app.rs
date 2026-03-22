@@ -13,14 +13,17 @@ use windows::{
 
 use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
+use crate::constants::{
+    INITIAL_WINDOW_HEIGHT, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_X, INITIAL_WINDOW_Y,
+    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, TRANSPARENT_ALPHA,
+    WM_DEFERRED_CLIPBOARD, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
+};
 use crate::d2d::D2DRenderer;
 use crate::dialogs::{BacklogDialog, LogEntry, SettingsDialog, TranslateDialog, add_to_backlog};
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
-use crate::translation::{
-    TranslationWorker, WM_TRANSLATION_COMPLETE, take_all_responses,
-};
+use crate::translation::{TranslationWorker, take_all_responses};
 use crate::tray::{self, TrayIcon};
 use crate::window::{self, DoubleBuffer, TextRenderStyle};
 
@@ -28,15 +31,8 @@ const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
 const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
 const WINDOW_TITLE: PCWSTR = w!("아네모네");
 
-const MIN_WINDOW_SIZE: i32 = 100;
-const RESIZE_BORDER_WIDTH: i32 = 8;
-
-// 지연된 클립보드 처리를 위한 사용자 정의 메시지
-const WM_DEFERRED_CLIPBOARD: u32 = WM_USER + 200;
-
 pub struct App {
     hwnd: HWND,
-    #[allow(dead_code)]
     hwnd_parent: HWND,
     width: i32,
     height: i32,
@@ -66,6 +62,9 @@ thread_local! {
 
 impl App {
     pub fn run() -> Result<()> {
+        // SAFETY: All Win32 API calls use valid parameters; GetModuleHandleW(None) returns the
+        // current process handle, CreateWindowExW creates windows with valid class/instance,
+        // and the message loop runs on the main thread as required by Win32.
         unsafe {
             let instance = GetModuleHandleW(None)?;
 
@@ -95,10 +94,10 @@ impl App {
                 CLASS_NAME,
                 WINDOW_TITLE,
                 WS_POPUP,
-                100,
-                100,
-                400,
-                200,
+                INITIAL_WINDOW_X,
+                INITIAL_WINDOW_Y,
+                INITIAL_WINDOW_WIDTH,
+                INITIAL_WINDOW_HEIGHT,
                 Some(hwnd_parent),
                 None,
                 Some(instance.into()),
@@ -121,8 +120,8 @@ impl App {
             let app = Rc::new(RefCell::new(App {
                 hwnd,
                 hwnd_parent,
-                width: 400,
-                height: 200,
+                width: INITIAL_WINDOW_WIDTH,
+                height: INITIAL_WINDOW_HEIGHT,
                 buffer: None,
                 config,
                 tray: TrayIcon::new(),
@@ -151,7 +150,7 @@ impl App {
 
                 // 더블 버퍼 초기화
                 let hdc = GetDC(Some(hwnd));
-                app_ref.buffer = Some(DoubleBuffer::new(hdc, 400, 200)?);
+                app_ref.buffer = Some(DoubleBuffer::new(hdc, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)?);
                 ReleaseDC(Some(hwnd), hdc);
 
                 // 트레이 아이콘 생성
@@ -199,6 +198,9 @@ impl App {
     }
 
     fn register_class(instance: HMODULE, class_name: PCWSTR, wndproc: WNDPROC) -> Result<()> {
+        // SAFETY: instance is a valid module handle from GetModuleHandleW, class_name is a
+        // static wide string, and wndproc is a valid function pointer. RegisterClassExW is
+        // called with a properly initialized WNDCLASSEXW struct.
         unsafe {
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -274,7 +276,7 @@ impl App {
             if background_visible {
                 renderer.clear(background_color);
             } else {
-                renderer.clear(0x01000000); // 거의 투명 (alpha=1)
+                renderer.clear(TRANSPARENT_ALPHA);
             }
 
             // 테두리 그리기
@@ -320,6 +322,8 @@ impl App {
         self.width = width;
         self.height = height;
 
+        // SAFETY: self.hwnd is a valid window handle created during App initialization.
+        // GetDC/ReleaseDC are called in matched pairs with the same hwnd.
         unsafe {
             let hdc = GetDC(Some(self.hwnd));
             self.buffer = Some(DoubleBuffer::new(hdc, width, height)?);
@@ -375,8 +379,11 @@ impl App {
             menu::id::BACKLOG => {
                 self.open_backlog_dialog();
             }
+            // SAFETY: self.hwnd is a valid window handle created during App initialization.
             menu::id::EXIT => unsafe {
-                DestroyWindow(self.hwnd).ok();
+                if let Err(e) = DestroyWindow(self.hwnd) {
+                    tracing::error!("DestroyWindow failed: {e}");
+                }
             },
             _ => {}
         }
@@ -396,6 +403,8 @@ impl App {
     {
         // 이미 열려있으면 포커스
         if let Some(hwnd) = *hwnd_storage {
+            // SAFETY: hwnd was previously returned by a successful dialog creation call.
+            // IsWindow validates it is still a valid window before use.
             unsafe {
                 if IsWindow(Some(hwnd)).as_bool() {
                     let _ = SetForegroundWindow(hwnd);
@@ -497,7 +506,9 @@ impl App {
         if !config.translation.auto_detect {
             drop(config);
             self.current_text = text.to_string();
-            let _ = self.paint();
+            if let Err(e) = self.paint() {
+                tracing::warn!("paint failed after clipboard text: {e}");
+            }
 
             // 백로그에 추가
             let entry = LogEntry::new(text.to_string());
@@ -511,7 +522,9 @@ impl App {
         // 소스 언어가 아니면 번역하지 않음
         if !crate::translation::is_source_language(text, source_lang) {
             self.current_text = text.to_string();
-            let _ = self.paint();
+            if let Err(e) = self.paint() {
+                tracing::warn!("paint failed after non-source text: {e}");
+            }
 
             // 백로그에 추가
             let entry = LogEntry::new(text.to_string());
@@ -542,10 +555,12 @@ impl App {
             if !config.translation.eztrans_dll_path.is_empty() {
                 let manager = get_translation_manager();
                 if let Ok(mut mgr) = manager.lock() {
-                    let _ = mgr.init_eztrans(
+                    if let Err(e) = mgr.init_eztrans(
                         &config.translation.eztrans_dll_path,
                         &config.translation.eztrans_dat_path,
-                    );
+                    ) {
+                        tracing::warn!("EzTrans init failed: {e}");
+                    }
                 }
             }
         }
@@ -557,7 +572,9 @@ impl App {
 
         // 번역 중 표시
         self.current_text = format!("[번역 중...]\n{}", text);
-        let _ = self.paint();
+        if let Err(e) = self.paint() {
+            tracing::warn!("paint failed during translation: {e}");
+        }
 
         // 워커에 번역 요청
         if let Some(ref mut worker) = self.translation_worker {
@@ -597,57 +614,25 @@ impl App {
             }
         }
 
-        let _ = self.paint();
-    }
-
-    /// 동기 텍스트 번역 (하위 호환용)
-    #[allow(dead_code)]
-    fn translate_text_sync(&self, text: &str) -> String {
-        use crate::translation::get_translation_manager;
-
-        let config = self.config.borrow();
-        let manager = get_translation_manager();
-
-        if let Ok(mut mgr) = manager.lock() {
-            // 설정 동기화
-            mgr.set_engine(config.translation.get_engine());
-            mgr.set_source_language(config.translation.get_source_language());
-            mgr.set_target_language(config.translation.get_target_language());
-
-            // EzTrans/DeepL 초기화 (필요시)
-            if !config.translation.eztrans_dll_path.is_empty() {
-                let _ = mgr.init_eztrans(
-                    &config.translation.eztrans_dll_path,
-                    &config.translation.eztrans_dat_path,
-                );
-            }
-            if !config.translation.deepl_api_key.is_empty() {
-                mgr.set_deepl_api_key(config.translation.deepl_api_key.clone());
-            }
-
-            drop(config);
-
-            match mgr.translate(text) {
-                Ok(translated) => translated,
-                Err(err) => {
-                    tracing::error!("Translation error: {}", err);
-                    text.to_string()
-                }
-            }
-        } else {
-            text.to_string()
+        if let Err(e) = self.paint() {
+            tracing::warn!("paint failed after translation complete: {e}");
         }
     }
 
+    // SAFETY: This is a Win32 window procedure callback. The system guarantees hwnd is valid
+    // and msg/wparam/lparam contain valid message data when called.
     unsafe extern "system" fn parent_wndproc(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        // SAFETY: Forwarding valid parameters directly to DefWindowProcW.
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 
+    // SAFETY: This is a Win32 window procedure callback. The system guarantees hwnd is valid
+    // and msg/wparam/lparam contain valid message data when called.
     unsafe extern "system" fn wndproc(
         hwnd: HWND,
         msg: u32,
@@ -655,7 +640,9 @@ impl App {
         lparam: LPARAM,
     ) -> LRESULT {
         // 앱 인스턴스 가져오기
-        let app = APP.with(|cell| cell.borrow().clone());
+        let app = APP.with(|cell| {
+            cell.try_borrow().ok().and_then(|g| g.clone())
+        });
 
         if let Some(app) = app {
             // TaskbarCreated 메시지 체크 (try_borrow 사용: 재진입 방지)
@@ -670,6 +657,9 @@ impl App {
                 }
             }
 
+            // SAFETY: All Win32 API calls in the message handler use valid parameters from the
+            // system-provided hwnd/wparam/lparam. Pointer casts (e.g., MINMAXINFO) are valid
+            // because the system guarantees the correct struct is passed for each message type.
             unsafe {
                 match msg {
                     WM_DESTROY => {
@@ -707,13 +697,21 @@ impl App {
                     WM_SIZE => {
                         let width = (lparam.0 & 0xFFFF) as i32;
                         let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
-                        let _ = app.borrow_mut().resize(width, height);
+                        if let Ok(mut app_ref) = app.try_borrow_mut() {
+                            if let Err(e) = app_ref.resize(width, height) {
+                                tracing::warn!("resize failed: {e}");
+                            }
+                        }
                         return LRESULT(0);
                     }
 
                     WM_DISPLAYCHANGE => {
                         // 해상도 변경 시 다시 그리기
-                        let _ = app.borrow_mut().paint();
+                        if let Ok(mut app_ref) = app.try_borrow_mut() {
+                            if let Err(e) = app_ref.paint() {
+                                tracing::warn!("paint failed on display change: {e}");
+                            }
+                        }
                         return LRESULT(0);
                     }
 
@@ -725,36 +723,53 @@ impl App {
                         if msg == WM_RBUTTONUP {
                             let _ = ClientToScreen(hwnd, &mut pt);
                         }
-                        let _ = app.borrow_mut().show_context_menu(pt.x, pt.y);
+                        if let Ok(mut app_ref) = app.try_borrow_mut() {
+                            if let Err(e) = app_ref.show_context_menu(pt.x, pt.y) {
+                                tracing::warn!("show_context_menu failed: {e}");
+                            }
+                        }
                         return LRESULT(0);
                     }
 
                     WM_COMMAND => {
                         let cmd = (wparam.0 & 0xFFFF) as u16;
-                        let _ = app.borrow_mut().handle_menu_command(cmd);
+                        if let Ok(mut app_ref) = app.try_borrow_mut() {
+                            if let Err(e) = app_ref.handle_menu_command(cmd) {
+                                tracing::warn!("handle_menu_command failed: {e}");
+                            }
+                        }
                         return LRESULT(0);
                     }
 
                     WM_HOTKEY => {
                         let id = wparam.0 as i32;
-                        let _ = app.borrow_mut().handle_hotkey(id);
+                        if let Ok(mut app_ref) = app.try_borrow_mut() {
+                            if let Err(e) = app_ref.handle_hotkey(id) {
+                                tracing::warn!("handle_hotkey failed: {e}");
+                            }
+                        }
                         return LRESULT(0);
                     }
 
                     // 트레이 아이콘 이벤트
-                    tray::WM_TRAY_ICON => {
+                    WM_TRAY_ICON => {
                         match lparam.0 as u32 {
                             WM_LBUTTONUP => {
                                 // 좌클릭: 윈도우 표시 토글
-                                let app_ref = app.borrow_mut();
-                                app_ref.config.borrow_mut().window_visible = true;
-                                window::set_window_visible(app_ref.hwnd, true);
+                                if let Ok(app_ref) = app.try_borrow_mut() {
+                                    app_ref.config.borrow_mut().window_visible = true;
+                                    window::set_window_visible(app_ref.hwnd, true);
+                                }
                             }
                             WM_RBUTTONUP => {
                                 // 우클릭: 컨텍스트 메뉴
                                 let mut pt: POINT = zeroed();
                                 GetCursorPos(&mut pt).ok();
-                                let _ = app.borrow_mut().show_context_menu(pt.x, pt.y);
+                                if let Ok(mut app_ref) = app.try_borrow_mut() {
+                                    if let Err(e) = app_ref.show_context_menu(pt.x, pt.y) {
+                                        tracing::warn!("tray show_context_menu failed: {e}");
+                                    }
+                                }
                             }
                             _ => {}
                         }
@@ -764,7 +779,11 @@ impl App {
                     // WM_PAINT - 설정 대화상자에서 변경 시 다시 그리기
                     WM_PAINT => {
                         if lparam.0 == 1 {
-                            let _ = app.borrow_mut().paint();
+                            if let Ok(mut app_ref) = app.try_borrow_mut() {
+                                if let Err(e) = app_ref.paint() {
+                                    tracing::warn!("paint failed on WM_PAINT: {e}");
+                                }
+                            }
                         }
                         return LRESULT(0);
                     }
@@ -815,6 +834,7 @@ impl App {
             }
         }
 
+        // SAFETY: Forwarding valid system-provided parameters to DefWindowProcW.
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 }

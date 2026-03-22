@@ -14,8 +14,14 @@ use windows::{
     core::*,
 };
 
-// STATIC 컨트롤 스타일
-const SS_LEFT: u32 = 0x00000000;
+use crate::constants::{
+    WM_PROGRESS_COMPLETE, WM_PROGRESS_CURRENT, WM_PROGRESS_ERROR, WM_PROGRESS_INDEX,
+    WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
+    WM_PROGRESS_UPDATE,
+};
+use crate::constants::SS_LEFT;
+use crate::util::to_wide;
+use super::helpers::{self, DialogWindowOptions};
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -26,17 +32,6 @@ mod ctrl_id {
     pub const TOTAL_TEXT: u16 = 5005; // 전체 진행
     pub const BTN_CANCEL: u16 = 5010; // 취소 버튼
 }
-
-// 진행률 업데이트 메시지
-pub const WM_PROGRESS_TOTAL_SIZE: u32 = WM_USER + 100;
-pub const WM_PROGRESS_TOTAL_COUNT: u32 = WM_USER + 101;
-pub const WM_PROGRESS_INDEX: u32 = WM_USER + 102;
-pub const WM_PROGRESS_NAME: u32 = WM_USER + 103;
-pub const WM_PROGRESS_LIST_SIZE: u32 = WM_USER + 104;
-pub const WM_PROGRESS_UPDATE: u32 = WM_USER + 105;
-pub const WM_PROGRESS_CURRENT: u32 = WM_USER + 106;
-pub const WM_PROGRESS_COMPLETE: u32 = WM_USER + 107;
-pub const WM_PROGRESS_ERROR: u32 = WM_USER + 108;
 
 const PROGRESS_CLASS_NAME: PCWSTR = w!("AnemoneFileTransProgressClass");
 const PROGRESS_WIDTH: i32 = 450;
@@ -54,7 +49,6 @@ struct ProgressState {
 /// 파일 번역 진행률 대화상자
 pub struct FileTransProgressDialog {
     hwnd: HWND,
-    #[allow(dead_code)]
     parent_hwnd: HWND,
     cancel_token: Arc<AtomicBool>,
     name_text: HWND,
@@ -77,54 +71,19 @@ impl FileTransProgressDialog {
     }
 
     unsafe fn show_impl(parent_hwnd: HWND, cancel_token: Arc<AtomicBool>) -> Result<HWND> {
+        // SAFETY: parent_hwnd is a valid window handle from the caller. Window class
+        // registration and window creation use valid Win32 parameters.
         unsafe {
-            let instance = GetModuleHandleW(None)?;
+            helpers::register_dialog_class(PROGRESS_CLASS_NAME, Self::wndproc)?;
 
-            // 윈도우 클래스 등록
-            let wc = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(Self::wndproc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: instance.into(),
-                hIcon: LoadIconW(None, IDI_APPLICATION)?,
-                hCursor: LoadCursorW(None, IDC_ARROW)?,
-                hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as *mut _),
-                lpszMenuName: PCWSTR::null(),
-                lpszClassName: PROGRESS_CLASS_NAME,
-                hIconSm: HICON::default(),
-            };
-
-            let atom = RegisterClassExW(&wc);
-            if atom == 0 {
-                let err = GetLastError();
-                if err != ERROR_CLASS_ALREADY_EXISTS {
-                    return Err(Error::from_hresult(HRESULT::from_win32(err.0)));
-                }
-            }
-
-            // 부모 창 중앙에 위치
-            let mut parent_rect = RECT::default();
-            let _ = GetWindowRect(parent_hwnd, &mut parent_rect);
-            let x = parent_rect.left + (parent_rect.right - parent_rect.left - PROGRESS_WIDTH) / 2;
-            let y = parent_rect.top + (parent_rect.bottom - parent_rect.top - PROGRESS_HEIGHT) / 2;
-
-            // 윈도우 생성
-            let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW,
-                PROGRESS_CLASS_NAME,
-                w!("파일 번역 진행 중"),
-                WS_POPUP | WS_CAPTION,
-                x,
-                y,
-                PROGRESS_WIDTH,
-                PROGRESS_HEIGHT,
-                Some(parent_hwnd),
-                None,
-                Some(instance.into()),
-                None,
-            )?;
+            let hwnd = helpers::create_dialog_window_centered_on_parent(&DialogWindowOptions {
+                class_name: PROGRESS_CLASS_NAME,
+                title: w!("파일 번역 진행 중"),
+                width: PROGRESS_WIDTH,
+                height: PROGRESS_HEIGHT,
+                parent: parent_hwnd,
+                extra_style: WINDOW_STYLE::default(),
+            })?;
 
             // 인스턴스 생성
             let mut dialog = Box::new(FileTransProgressDialog {
@@ -151,12 +110,12 @@ impl FileTransProgressDialog {
 
             // 전역 인스턴스 설정
             PROGRESS_INSTANCE.with(|cell| {
-                *cell.borrow_mut() = Some(dialog);
+                if let Ok(mut guard) = cell.try_borrow_mut() {
+                    *guard = Some(dialog);
+                }
             });
 
-            // 윈도우 표시
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = UpdateWindow(hwnd);
+            helpers::show_dialog_window(hwnd);
 
             Ok(hwnd)
         }
@@ -164,6 +123,8 @@ impl FileTransProgressDialog {
 
     /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
+        // SAFETY: self.hwnd is a valid window handle from show_impl. All CreateWindowExW
+        // calls use valid parent handle and instance. SendMessageW uses valid control handles.
         unsafe {
             let hinst = GetModuleHandleW(None)?;
             let hfont = GetStockObject(DEFAULT_GUI_FONT);
@@ -305,47 +266,24 @@ impl FileTransProgressDialog {
     }
 
     unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
-        unsafe {
-            let hinst = GetModuleHandleW(None)?;
-            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-
-            let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                w!("BUTTON"),
-                PCWSTR(text_wide.as_ptr()),
-                WINDOW_STYLE(BS_GROUPBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-                x,
-                y,
-                w,
-                h,
-                Some(self.hwnd),
-                None,
-                Some(hinst.into()),
-                None,
-            )?;
-
-            let hfont = GetStockObject(DEFAULT_GUI_FONT);
-            let _ = SendMessageW(
-                hwnd,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(0)),
-            );
-
-            Ok(hwnd)
-        }
+        // SAFETY: self.hwnd is a valid window handle; delegating to helpers with valid params.
+        unsafe { helpers::create_group_box(self.hwnd, x, y, w, h, text) }
     }
 
     /// 텍스트 설정
     unsafe fn set_text(hwnd: HWND, text: &str) {
+        // SAFETY: hwnd is a valid control handle. wide string is valid for the call duration.
         unsafe {
-            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let wide = to_wide(text);
             let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
         }
     }
 
     /// 진행률 메시지 처리
     fn handle_progress_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) {
+        // SAFETY: All control handles were created in create_controls and are valid.
+        // lparam pointers for WM_PROGRESS_NAME/WM_PROGRESS_ERROR point to static buffers
+        // in file_trans_thread that outlive the message processing.
         unsafe {
             match msg {
                 WM_PROGRESS_TOTAL_SIZE => {
@@ -459,8 +397,7 @@ impl FileTransProgressDialog {
                     Self::set_text(self.name_text, "오류 발생");
                     let _ = EnableWindow(self.cancel_btn, false);
 
-                    let msg_wide: Vec<u16> =
-                        error_msg.encode_utf16().chain(std::iter::once(0)).collect();
+                    let msg_wide = to_wide(&error_msg);
                     let _ = MessageBoxW(
                         Some(self.hwnd),
                         PCWSTR(msg_wide.as_ptr()),
@@ -478,6 +415,7 @@ impl FileTransProgressDialog {
     /// 취소 처리
     fn handle_cancel(&mut self) {
         self.cancel_token.store(true, Ordering::SeqCst);
+        // SAFETY: self.cancel_btn is a valid control handle from create_controls.
         unsafe {
             let _ = EnableWindow(self.cancel_btn, false);
             Self::set_text(self.progress_text, "취소 중...");
@@ -485,18 +423,22 @@ impl FileTransProgressDialog {
     }
 
     /// WndProc
+    // SAFETY: This is a Win32 window procedure callback. The system guarantees valid parameters.
     unsafe extern "system" fn wndproc(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        // SAFETY: All Win32 API calls use valid system-provided parameters.
         unsafe {
             // 진행률 메시지 범위 체크
             if msg >= WM_PROGRESS_TOTAL_SIZE && msg <= WM_PROGRESS_ERROR {
                 PROGRESS_INSTANCE.with(|cell| {
-                    if let Some(ref mut dialog) = *cell.borrow_mut() {
-                        dialog.handle_progress_message(msg, wparam, lparam);
+                    if let Ok(mut guard) = cell.try_borrow_mut() {
+                        if let Some(ref mut dialog) = *guard {
+                            dialog.handle_progress_message(msg, wparam, lparam);
+                        }
                     }
                 });
                 return LRESULT(0);
@@ -507,8 +449,10 @@ impl FileTransProgressDialog {
                     let id = (wparam.0 & 0xFFFF) as u16;
                     if id == ctrl_id::BTN_CANCEL {
                         PROGRESS_INSTANCE.with(|cell| {
-                            if let Some(ref mut dialog) = *cell.borrow_mut() {
-                                dialog.handle_cancel();
+                            if let Ok(mut guard) = cell.try_borrow_mut() {
+                                if let Some(ref mut dialog) = *guard {
+                                    dialog.handle_cancel();
+                                }
                             }
                         });
                     }
@@ -522,7 +466,9 @@ impl FileTransProgressDialog {
 
                 WM_DESTROY => {
                     PROGRESS_INSTANCE.with(|cell| {
-                        *cell.borrow_mut() = None;
+                        if let Ok(mut guard) = cell.try_borrow_mut() {
+                            *guard = None;
+                        }
                     });
                     return LRESULT(0);
                 }

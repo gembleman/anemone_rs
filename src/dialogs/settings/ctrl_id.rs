@@ -15,33 +15,19 @@ pub const TEXTSIZE_TEXT: u16 = 1013;
 pub const OUTLINE1_TRACKBAR: u16 = 1020;
 pub const OUTLINE1_MINUS: u16 = 1021;
 pub const OUTLINE1_PLUS: u16 = 1022;
-#[allow(dead_code)]
-pub const OUTLINE1_TEXT: u16 = 1023;
 
 pub const OUTLINE2_TRACKBAR: u16 = 1030;
 pub const OUTLINE2_MINUS: u16 = 1031;
 pub const OUTLINE2_PLUS: u16 = 1032;
-#[allow(dead_code)]
-pub const OUTLINE2_TEXT: u16 = 1033;
 
 // 그림자 오프셋
 pub const SHADOW_X_TRACKBAR: u16 = 1040;
-#[allow(dead_code)]
-pub const SHADOW_X_TEXT: u16 = 1041;
 pub const SHADOW_Y_TRACKBAR: u16 = 1042;
-#[allow(dead_code)]
-pub const SHADOW_Y_TEXT: u16 = 1043;
 
 // 텍스트 여백
 pub const MARGIN_X_TRACKBAR: u16 = 1050;
-#[allow(dead_code)]
-pub const MARGIN_X_TEXT: u16 = 1051;
 pub const MARGIN_Y_TRACKBAR: u16 = 1052;
-#[allow(dead_code)]
-pub const MARGIN_Y_TEXT: u16 = 1053;
 pub const MARGIN_NAME_TRACKBAR: u16 = 1054;
-#[allow(dead_code)]
-pub const MARGIN_NAME_TEXT: u16 = 1055;
 
 // NAME 설정
 pub const NAME_COLOR: u16 = 1100;
@@ -71,8 +57,6 @@ pub const TRANS_SHADOW: u16 = 1125;
 pub const BORDER_MODE: u16 = 1130;
 pub const BORDER_COLOR: u16 = 1131;
 pub const BORDER_SIZE_TRACKBAR: u16 = 1132;
-#[allow(dead_code)]
-pub const BORDER_SIZE_TEXT: u16 = 1133;
 
 // 표시 옵션
 pub const PRINT_ORGTEXT: u16 = 1200;

@@ -43,6 +43,8 @@ impl HotkeyManager {
     }
 
     pub fn register(&mut self, id: i32, modifiers: HOT_KEY_MODIFIERS, vk: u32) -> Result<()> {
+        // SAFETY: self.hwnd is a valid window handle. RegisterHotKey associates the hotkey
+        // with this window using a unique id provided by the caller.
         unsafe {
             RegisterHotKey(Some(self.hwnd), id, modifiers, vk)?;
             self.registered.push(id);
@@ -51,6 +53,8 @@ impl HotkeyManager {
     }
 
     pub fn unregister(&mut self, id: i32) {
+        // SAFETY: self.hwnd is a valid window handle. UnregisterHotKey removes a hotkey
+        // previously registered with RegisterHotKey using the same hwnd and id.
         unsafe {
             let _ = UnregisterHotKey(Some(self.hwnd), id);
             self.registered.retain(|&x| x != id);

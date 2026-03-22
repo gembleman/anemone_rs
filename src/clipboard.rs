@@ -5,7 +5,7 @@ use windows::Win32::{
     UI::WindowsAndMessaging::*,
 };
 
-const CF_UNICODETEXT: u32 = 13;
+use crate::constants::CF_UNICODETEXT;
 
 pub struct ClipboardWatcher {
     hwnd: HWND,
@@ -26,8 +26,12 @@ impl ClipboardWatcher {
 
     pub fn start(&mut self) {
         if !self.watching {
+            // SAFETY: self.hwnd is a valid window handle. SetClipboardViewer registers this
+            // window in the clipboard viewer chain.
             unsafe {
-                self.next_viewer = SetClipboardViewer(self.hwnd).unwrap_or_default();
+                self.next_viewer = SetClipboardViewer(self.hwnd)
+                    .inspect_err(|e| tracing::warn!("SetClipboardViewer failed: {e}"))
+                    .unwrap_or_default();
             }
             self.watching = true;
             self.ignore_next = true; // 초기 알림 무시
@@ -36,6 +40,7 @@ impl ClipboardWatcher {
 
     pub fn stop(&mut self) {
         if self.watching {
+            // SAFETY: self.hwnd and self.next_viewer are valid handles from SetClipboardViewer.
             unsafe {
                 let _ = ChangeClipboardChain(self.hwnd, self.next_viewer);
             }
@@ -44,13 +49,11 @@ impl ClipboardWatcher {
         }
     }
 
-    #[allow(dead_code)]
     pub fn restart(&mut self) {
         self.stop();
         self.start();
     }
 
-    #[allow(dead_code)]
     pub fn is_watching(&self) -> bool {
         self.watching
     }
@@ -59,6 +62,7 @@ impl ClipboardWatcher {
     pub fn on_draw_clipboard(&mut self) -> Option<String> {
         // 다음 뷰어에게 전달
         if !self.next_viewer.is_invalid() {
+            // SAFETY: self.next_viewer is a valid window handle from the clipboard chain.
             unsafe {
                 let _ = SendMessageW(
                     self.next_viewer,
@@ -87,6 +91,7 @@ impl ClipboardWatcher {
         if removed == self.next_viewer {
             self.next_viewer = next;
         } else if !self.next_viewer.is_invalid() {
+            // SAFETY: self.next_viewer is a valid window handle. Forwarding chain message.
             unsafe {
                 let _ = SendMessageW(
                     self.next_viewer,
@@ -100,6 +105,10 @@ impl ClipboardWatcher {
 
     /// 클립보드에서 텍스트 읽기
     pub fn get_text(&self) -> Option<String> {
+        // SAFETY: OpenClipboard/CloseClipboard are called in matched pairs. GetClipboardData
+        // returns a valid handle when CF_UNICODETEXT is available. GlobalLock/GlobalUnlock
+        // are called in pairs. The transmute converts HANDLE to HGLOBAL which have the same
+        // representation. The pointer from GlobalLock is valid until GlobalUnlock.
         unsafe {
             if OpenClipboard(Some(self.hwnd)).is_err() {
                 return None;
@@ -135,7 +144,6 @@ impl ClipboardWatcher {
     }
 
     /// 다음 클립보드 변경 무시
-    #[allow(dead_code)]
     pub fn ignore_next_change(&mut self) {
         self.ignore_next = true;
     }

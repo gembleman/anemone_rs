@@ -7,29 +7,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use windows::{
-    Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::*,
-    },
+    Win32::{Foundation::*, UI::WindowsAndMessaging::*},
     core::*,
 };
 
 use crate::config::Config;
-
-// ListBox 메시지 상수
-const LB_ADDSTRING: u32 = 0x0180;
-const LB_DELETESTRING: u32 = 0x0182;
-const LB_INSERTSTRING: u32 = 0x0181;
-const LB_GETCURSEL: u32 = 0x0188;
-const LB_SETCURSEL: u32 = 0x0186;
-const LB_GETCOUNT: u32 = 0x018B;
-const LB_GETTEXT: u32 = 0x0189;
-const LB_GETTEXTLEN: u32 = 0x018A;
-const LB_ERR: i32 = -1;
-
-// ListBox 스타일 상수
-const LBS_NOTIFY: u32 = 0x0001;
-const LBS_NOINTEGRALHEIGHT: u32 = 0x0100;
+use crate::constants::{
+    LB_ADDSTRING, LB_DELETESTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT,
+    LB_GETTEXTLEN, LB_INSERTSTRING, LB_SETCURSEL,
+};
+use crate::impl_dialog;
+use crate::util::to_wide;
+use super::helpers::DialogControls;
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -43,10 +32,6 @@ mod ctrl_id {
     pub const BTN_CLOSE: u16 = 6031;
 }
 
-const HOOK_SETTINGS_CLASS_NAME: PCWSTR = w!("AnemoneHookSettingsClass");
-const DIALOG_WIDTH: i32 = 450;
-const DIALOG_HEIGHT: i32 = 350;
-
 /// 후크 설정 대화상자
 pub struct HookSettingsDialog {
     hwnd: HWND,
@@ -57,101 +42,34 @@ pub struct HookSettingsDialog {
     inactive_hooks: Vec<String>,
 }
 
-thread_local! {
-    static HOOK_SETTINGS_INSTANCE: RefCell<Option<Rc<RefCell<HookSettingsDialog>>>> = const { RefCell::new(None) };
+impl DialogControls for HookSettingsDialog {
+    fn dialog_hwnd(&self) -> HWND { self.hwnd }
+}
+
+impl_dialog! {
+    dialog: HookSettingsDialog,
+    instance: HOOK_SETTINGS_INSTANCE,
+    class_name: w!("AnemoneHookSettingsClass"),
+    title: w!("후크 설정"),
+    width: 450,
+    height: 350,
+    extra_style: WINDOW_STYLE::default(),
+    params: (parent: HWND, config: Rc<RefCell<Config>>),
+    init: |hwnd, parent, config| {
+        let (active, inactive) = {
+            let cfg = config.borrow();
+            (cfg.hook.active_hooks.clone(), cfg.hook.inactive_hooks.clone())
+        };
+        HookSettingsDialog { hwnd, config, active_hooks: active, inactive_hooks: inactive }
+    },
 }
 
 impl HookSettingsDialog {
-    /// 후크 설정 대화상자 생성 및 표시
-    pub fn show(parent: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> {
-        unsafe { Self::show_impl(parent, config) }
-    }
-
-    unsafe fn show_impl(parent: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> {
-        unsafe {
-            let instance = GetModuleHandleW(None)?;
-
-            // 윈도우 클래스 등록
-            let wc = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(Self::wndproc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: instance.into(),
-                hIcon: LoadIconW(None, IDI_APPLICATION)?,
-                hCursor: LoadCursorW(None, IDC_ARROW)?,
-                hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as *mut _),
-                lpszMenuName: PCWSTR::null(),
-                lpszClassName: HOOK_SETTINGS_CLASS_NAME,
-                hIconSm: HICON::default(),
-            };
-
-            let atom = RegisterClassExW(&wc);
-            if atom == 0 {
-                let err = GetLastError();
-                if err != ERROR_CLASS_ALREADY_EXISTS {
-                    return Err(Error::from_hresult(HRESULT::from_win32((err.0))));
-                }
-            }
-
-            // 화면 중앙에 위치
-            let cx = GetSystemMetrics(SM_CXSCREEN);
-            let cy = GetSystemMetrics(SM_CYSCREEN);
-            let x = (cx - DIALOG_WIDTH) / 2;
-            let y = (cy - DIALOG_HEIGHT) / 2;
-
-            // 윈도우 생성
-            let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW,
-                HOOK_SETTINGS_CLASS_NAME,
-                w!("후크 설정"),
-                WS_POPUP | WS_CAPTION | WS_SYSMENU,
-                x,
-                y,
-                DIALOG_WIDTH,
-                DIALOG_HEIGHT,
-                Some(parent),
-                None,
-                Some(instance.into()),
-                None,
-            )?;
-
-            // Config에서 후크 목록 복사
-            let (active, inactive) = {
-                let cfg = config.borrow();
-                (
-                    cfg.hook.active_hooks.clone(),
-                    cfg.hook.inactive_hooks.clone(),
-                )
-            };
-
-            // 인스턴스 생성
-            let dialog = Rc::new(RefCell::new(HookSettingsDialog {
-                hwnd,
-                config,
-                active_hooks: active,
-                inactive_hooks: inactive,
-            }));
-
-            // 전역 인스턴스 설정
-            HOOK_SETTINGS_INSTANCE.with(|cell| {
-                *cell.borrow_mut() = Some(dialog.clone());
-            });
-
-            // 컨트롤 생성
-            dialog.borrow_mut().create_controls()?;
-
-            // 윈도우 표시
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = UpdateWindow(hwnd);
-
-            Ok(hwnd)
-        }
-    }
-
     /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
+        // SAFETY: self.hwnd is a valid dialog window handle. All helper methods
+        // (create_group_box, create_listbox, create_button) use valid parent handle
+        // and control IDs.
         unsafe {
             // ====== 활성 후크 그룹 ======
             self.create_group_box(10, 10, 180, 240, "활성 후크")?;
@@ -180,8 +98,15 @@ impl HookSettingsDialog {
         }
     }
 
+    /// 커스텀 메시지 핸들러 (없음)
+    fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
+        None
+    }
+
     /// ListBox에 데이터 채우기
     fn populate_listboxes(&self) {
+        // SAFETY: self.hwnd is a valid dialog window handle. GetDlgItem returns valid
+        // listbox handles for the known control IDs created in create_controls.
         unsafe {
             if let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::ACTIVE_LIST as i32) {
                 for hook in &self.active_hooks {
@@ -197,122 +122,13 @@ impl HookSettingsDialog {
         }
     }
 
-    // ====== 헬퍼 함수들 ======
+    // ====== ListBox 헬퍼 함수들 ======
 
-    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
-        unsafe {
-            let hinst = GetModuleHandleW(None)?;
-            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-
-            let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                w!("BUTTON"),
-                PCWSTR(text_wide.as_ptr()),
-                WINDOW_STYLE(BS_GROUPBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-                x,
-                y,
-                w,
-                h,
-                Some(self.hwnd),
-                None,
-                Some(hinst.into()),
-                None,
-            )?;
-
-            let hfont = GetStockObject(DEFAULT_GUI_FONT);
-            let _ = SendMessageW(
-                hwnd,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(0)),
-            );
-
-            Ok(hwnd)
-        }
-    }
-
-    unsafe fn create_button(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        text: &str,
-    ) -> Result<HWND> {
-        unsafe {
-            let hinst = GetModuleHandleW(None)?;
-            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-
-            let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                w!("BUTTON"),
-                PCWSTR(text_wide.as_ptr()),
-                WINDOW_STYLE(BS_PUSHBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-                x,
-                y,
-                w,
-                h,
-                Some(self.hwnd),
-                Some(HMENU(id as isize as *mut _)),
-                Some(hinst.into()),
-                None,
-            )?;
-
-            let hfont = GetStockObject(DEFAULT_GUI_FONT);
-            let _ = SendMessageW(
-                hwnd,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(0)),
-            );
-
-            Ok(hwnd)
-        }
-    }
-
-    unsafe fn create_listbox(&self, x: i32, y: i32, w: i32, h: i32, id: u16) -> Result<HWND> {
-        unsafe {
-            let hinst = GetModuleHandleW(None)?;
-
-            let hwnd = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                w!("LISTBOX"),
-                w!(""),
-                WINDOW_STYLE(
-                    LBS_NOTIFY
-                        | LBS_NOINTEGRALHEIGHT
-                        | WS_CHILD.0
-                        | WS_VISIBLE.0
-                        | WS_VSCROLL.0
-                        | WS_TABSTOP.0,
-                ),
-                x,
-                y,
-                w,
-                h,
-                Some(self.hwnd),
-                Some(HMENU(id as isize as *mut _)),
-                Some(hinst.into()),
-                None,
-            )?;
-
-            let hfont = GetStockObject(DEFAULT_GUI_FONT);
-            let _ = SendMessageW(
-                hwnd,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(0)),
-            );
-
-            Ok(hwnd)
-        }
-    }
-
-    /// ListBox에 아이템 추가
     unsafe fn listbox_add_item(&self, hwnd: HWND, text: &str) {
+        // SAFETY: hwnd is a valid listbox handle. The wide string pointer is valid for
+        // the duration of SendMessageW. LB_ADDSTRING copies the string internally.
         unsafe {
-            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let text_wide = to_wide(text);
             let _ = SendMessageW(
                 hwnd,
                 LB_ADDSTRING,
@@ -322,10 +138,11 @@ impl HookSettingsDialog {
         }
     }
 
-    /// ListBox 아이템 삽입
     unsafe fn listbox_insert_item(&self, hwnd: HWND, index: i32, text: &str) {
+        // SAFETY: hwnd is a valid listbox handle. index is a valid position within the
+        // listbox. The wide string pointer is valid for the duration of SendMessageW.
         unsafe {
-            let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let text_wide = to_wide(text);
             let _ = SendMessageW(
                 hwnd,
                 LB_INSERTSTRING,
@@ -335,8 +152,9 @@ impl HookSettingsDialog {
         }
     }
 
-    /// ListBox 아이템 삭제
     unsafe fn listbox_delete_item(&self, hwnd: HWND, index: i32) {
+        // SAFETY: hwnd is a valid listbox handle. index is a valid item position
+        // verified by the caller before deletion.
         unsafe {
             let _ = SendMessageW(
                 hwnd,
@@ -347,13 +165,13 @@ impl HookSettingsDialog {
         }
     }
 
-    /// ListBox 선택된 인덱스 가져오기
     unsafe fn listbox_get_sel(&self, hwnd: HWND) -> i32 {
+        // SAFETY: hwnd is a valid listbox handle. LB_GETCURSEL requires no pointers.
         unsafe { SendMessageW(hwnd, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
     }
 
-    /// ListBox 선택 설정
     unsafe fn listbox_set_sel(&self, hwnd: HWND, index: i32) {
+        // SAFETY: hwnd is a valid listbox handle. index is within the valid range.
         unsafe {
             let _ = SendMessageW(
                 hwnd,
@@ -364,13 +182,15 @@ impl HookSettingsDialog {
         }
     }
 
-    /// ListBox 아이템 개수 가져오기
     unsafe fn listbox_get_count(&self, hwnd: HWND) -> i32 {
+        // SAFETY: hwnd is a valid listbox handle. LB_GETCOUNT requires no pointers.
         unsafe { SendMessageW(hwnd, LB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
     }
 
-    /// ListBox 아이템 텍스트 가져오기
     unsafe fn listbox_get_text(&self, hwnd: HWND, index: i32) -> Option<String> {
+        // SAFETY: hwnd is a valid listbox handle. index is checked via LB_GETTEXTLEN
+        // before reading. The buffer is allocated with len+1 capacity based on the
+        // reported text length. LB_GETTEXT writes into the buffer up to the reported length.
         unsafe {
             let len = SendMessageW(
                 hwnd,
@@ -401,6 +221,8 @@ impl HookSettingsDialog {
 
     /// 내부 후크 목록 동기화 (ListBox -> 내부 Vec)
     fn sync_from_listboxes(&mut self) {
+        // SAFETY: self.hwnd is a valid dialog window handle. GetDlgItem returns valid
+        // listbox handles. All listbox helper calls use these valid handles.
         unsafe {
             if let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::ACTIVE_LIST as i32) {
                 self.active_hooks.clear();
@@ -425,19 +247,17 @@ impl HookSettingsDialog {
     }
 
     /// 명령 처리
-    fn handle_command(&mut self, cmd: u16) {
+    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
         use ctrl_id::*;
 
         match cmd {
+            // SAFETY: self.hwnd is a valid dialog window handle.
             BTN_CLOSE => unsafe {
                 let _ = DestroyWindow(self.hwnd);
             },
 
             BTN_APPLY => {
-                // 내부 목록 동기화
                 self.sync_from_listboxes();
-
-                // Config에 반영
                 {
                     let mut cfg = self.config.borrow_mut();
                     cfg.hook.active_hooks = self.active_hooks.clone();
@@ -446,27 +266,21 @@ impl HookSettingsDialog {
             }
 
             BTN_TO_INACTIVE => {
-                // 활성 -> 비활성
+                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns valid
+                // listbox handles for known control IDs. All listbox operations use these
+                // valid handles with indices verified against LB_ERR before use.
                 unsafe {
                     let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
+                        Ok(h) => h, Err(_) => return,
                     };
                     let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
+                        Ok(h) => h, Err(_) => return,
                     };
-
                     let sel = self.listbox_get_sel(active_lb);
-                    if sel == LB_ERR {
-                        return;
-                    }
-
+                    if sel == LB_ERR { return; }
                     if let Some(text) = self.listbox_get_text(active_lb, sel) {
                         self.listbox_delete_item(active_lb, sel);
                         self.listbox_add_item(inactive_lb, &text);
-
-                        // 선택 유지
                         let count = self.listbox_get_count(active_lb);
                         if count > 0 {
                             let new_sel = if sel >= count { count - 1 } else { sel };
@@ -477,27 +291,21 @@ impl HookSettingsDialog {
             }
 
             BTN_TO_ACTIVE => {
-                // 비활성 -> 활성
+                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns valid
+                // listbox handles. All listbox operations use valid handles with indices
+                // verified against LB_ERR before use.
                 unsafe {
                     let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
+                        Ok(h) => h, Err(_) => return,
                     };
                     let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
+                        Ok(h) => h, Err(_) => return,
                     };
-
                     let sel = self.listbox_get_sel(inactive_lb);
-                    if sel == LB_ERR {
-                        return;
-                    }
-
+                    if sel == LB_ERR { return; }
                     if let Some(text) = self.listbox_get_text(inactive_lb, sel) {
                         self.listbox_delete_item(inactive_lb, sel);
                         self.listbox_add_item(active_lb, &text);
-
-                        // 선택 유지
                         let count = self.listbox_get_count(inactive_lb);
                         if count > 0 {
                             let new_sel = if sel >= count { count - 1 } else { sel };
@@ -508,17 +316,14 @@ impl HookSettingsDialog {
             }
 
             BTN_UP => {
-                // 활성 목록에서 위로
+                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns a valid
+                // listbox handle. Selection index is verified > 0 before moving up.
                 unsafe {
                     let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
+                        Ok(h) => h, Err(_) => return,
                     };
                     let sel = self.listbox_get_sel(active_lb);
-                    if sel == LB_ERR || sel == 0 {
-                        return;
-                    }
-
+                    if sel == LB_ERR || sel == 0 { return; }
                     if let Some(text) = self.listbox_get_text(active_lb, sel) {
                         self.listbox_delete_item(active_lb, sel);
                         self.listbox_insert_item(active_lb, sel - 1, &text);
@@ -528,19 +333,15 @@ impl HookSettingsDialog {
             }
 
             BTN_DOWN => {
-                // 활성 목록에서 아래로
+                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns a valid
+                // listbox handle. Selection index is verified < count-1 before moving down.
                 unsafe {
                     let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
+                        Ok(h) => h, Err(_) => return,
                     };
                     let sel = self.listbox_get_sel(active_lb);
                     let count = self.listbox_get_count(active_lb);
-
-                    if sel == LB_ERR || sel >= count - 1 {
-                        return;
-                    }
-
+                    if sel == LB_ERR || sel >= count - 1 { return; }
                     if let Some(text) = self.listbox_get_text(active_lb, sel) {
                         self.listbox_delete_item(active_lb, sel);
                         self.listbox_insert_item(active_lb, sel + 1, &text);
@@ -550,55 +351,6 @@ impl HookSettingsDialog {
             }
 
             _ => {}
-        }
-    }
-
-    /// WndProc
-    unsafe extern "system" fn wndproc(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
-        unsafe {
-            let instance = HOOK_SETTINGS_INSTANCE.with(|cell| cell.borrow().clone());
-
-            if let Some(dialog) = instance {
-                match msg {
-                    WM_COMMAND => {
-                        let id = (wparam.0 & 0xFFFF) as u16;
-                        dialog.borrow_mut().handle_command(id);
-                        return LRESULT(0);
-                    }
-
-                    WM_CLOSE => {
-                        let _ = DestroyWindow(hwnd);
-                        return LRESULT(0);
-                    }
-
-                    WM_DESTROY => {
-                        HOOK_SETTINGS_INSTANCE.with(|cell| {
-                            *cell.borrow_mut() = None;
-                        });
-                        return LRESULT(0);
-                    }
-
-                    WM_LBUTTONDOWN => {
-                        // 창 드래그
-                        let _ = SendMessageW(
-                            hwnd,
-                            WM_NCLBUTTONDOWN,
-                            Some(WPARAM(HTCAPTION as usize)),
-                            Some(LPARAM(0)),
-                        );
-                        return LRESULT(0);
-                    }
-
-                    _ => {}
-                }
-            }
-
-            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
     }
 }

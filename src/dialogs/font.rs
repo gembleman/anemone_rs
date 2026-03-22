@@ -71,8 +71,8 @@ impl FontResult {
     }
 
     /// LOGFONT로 변환
-    #[allow(dead_code)]
     pub fn to_logfont(&self, hdc: HDC) -> LOGFONTW {
+        // SAFETY: LOGFONTW is a plain data struct; zeroed memory is a valid representation.
         let mut lf: LOGFONTW = unsafe { zeroed() };
 
         // 폰트 이름 복사
@@ -85,6 +85,8 @@ impl FontResult {
         lf.lfItalic = if self.style.italic { 1 } else { 0 };
 
         // 높이 (포인트 크기 -> 픽셀)
+        // SAFETY: hdc is a valid device context obtained from the caller's HDC parameter.
+        // GetDeviceCaps with LOGPIXELSY returns the vertical DPI.
         lf.lfHeight = unsafe {
             let dpi = GetDeviceCaps(Some(hdc), LOGPIXELSY);
             -((self.point_size * dpi) / 72)
@@ -113,16 +115,21 @@ pub struct FontDialog;
 impl FontDialog {
     /// 폰트 선택 대화상자 표시
     pub fn show(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> {
+        // SAFETY: hwnd is a valid window handle from the caller. show_impl handles all
+        // Win32 dialog setup with valid parameters.
         unsafe { Self::show_impl(hwnd, config) }
     }
 
     /// 간단한 폰트 선택
-    #[allow(dead_code)]
     pub fn show_simple(hwnd: HWND) -> Option<FontResult> {
         Self::show(hwnd, FontDialogConfig::default())
     }
 
     unsafe fn show_impl(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> {
+        // SAFETY: hwnd is a valid window handle. CHOOSEFONTW is initialized with correct
+        // lStructSize, valid owner handle, and valid lpLogFont pointer to stack-allocated
+        // LOGFONTW. zeroed() produces valid default state. GetDC/ReleaseDC pair uses valid
+        // hwnd. The hook procedure pointer (if set) is a valid extern "system" fn.
         unsafe {
             let mut lf: LOGFONTW = zeroed();
 
@@ -175,6 +182,10 @@ impl FontDialog {
     }
 
     /// WS_EX_NOACTIVATE 훅 프로시저
+    // SAFETY: This is a CHOOSEFONT hook procedure called by the system. hdlg is a valid
+    // dialog handle provided by Windows. GetWindowLongW/SetWindowLongW use the valid hdlg.
+    // The RECT pointer from lparam in WM_MOVING/WM_SIZING is valid per the Win32 contract.
+    // Null check is performed before dereferencing.
     unsafe extern "system" fn hook_proc_noactivate(
         hdlg: HWND,
         msg: u32,

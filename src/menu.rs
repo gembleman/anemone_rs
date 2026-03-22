@@ -8,8 +8,6 @@ use crate::config::Config;
 // 메뉴 ID 정의
 pub mod id {
     pub const WINDOW_SHOW: u16 = 101;
-    #[allow(dead_code)]
-    pub const WINDOW_HIDE: u16 = 102;
     pub const CLICK_THROUGH: u16 = 103;
     pub const CLIPBOARD_WATCH: u16 = 104;
     pub const BACKGROUND_TOGGLE: u16 = 105;
@@ -31,6 +29,7 @@ pub struct ContextMenu {
 
 impl ContextMenu {
     pub fn new() -> Result<Self> {
+        // SAFETY: CreatePopupMenu requires no preconditions and returns a new valid menu handle.
         unsafe {
             let hmenu = CreatePopupMenu()?;
             Ok(Self { hmenu })
@@ -38,6 +37,9 @@ impl ContextMenu {
     }
 
     pub fn build(&self, config: &Config) -> Result<()> {
+        // SAFETY: self.hmenu is a valid menu handle created by CreatePopupMenu. All
+        // AppendMenuW calls use valid menu item IDs and static string literals (w! macro).
+        // DeleteMenu with MF_BYPOSITION and index 0 removes items from the front.
         unsafe {
             // 메뉴 초기화 (기존 항목 제거)
             while GetMenuItemCount(Some(self.hmenu)) > 0 {
@@ -142,6 +144,9 @@ impl ContextMenu {
     }
 
     pub fn show(&self, hwnd: HWND, x: i32, y: i32) -> Result<()> {
+        // SAFETY: hwnd is a valid window handle from the caller. self.hmenu is a valid
+        // popup menu handle. SetForegroundWindow and TrackPopupMenu use valid handles.
+        // PostMessageW with WM_NULL is the standard pattern to dismiss the menu properly.
         unsafe {
             let _ = SetForegroundWindow(hwnd);
             let _ = TrackPopupMenu(
@@ -158,7 +163,6 @@ impl ContextMenu {
         }
     }
 
-    #[allow(dead_code)]
     pub fn handle(&self) -> HMENU {
         self.hmenu
     }
@@ -166,6 +170,8 @@ impl ContextMenu {
 
 impl Drop for ContextMenu {
     fn drop(&mut self) {
+        // SAFETY: self.hmenu is a valid menu handle created by CreatePopupMenu in new().
+        // DestroyMenu is the correct cleanup for popup menus and is idempotent.
         unsafe {
             let _ = DestroyMenu(self.hmenu);
         }
