@@ -15,7 +15,12 @@ mod window;
 use app::App;
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
+
     if let Err(e) = App::run() {
-        eprintln!("Error: {e}");
+        tracing::error!("Error: {e}");
     }
 }

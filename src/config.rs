@@ -530,10 +530,10 @@ impl Config {
 
         // 파일이 존재하는지 확인
         if !path.exists() {
-            println!("설정 파일 없음, 기본 설정 생성: {}", path.display());
+            tracing::info!("설정 파일 없음, 기본 설정 생성: {}", path.display());
             let config = Self::default();
             if let Err(e) = config.save() {
-                eprintln!("기본 설정 파일 생성 실패: {}", e);
+                tracing::error!("기본 설정 파일 생성 실패: {}", e);
             }
             return config;
         }
@@ -541,25 +541,25 @@ impl Config {
         // 파일 로드 시도
         match Self::load_from_file(&path) {
             Ok(config) => {
-                println!("설정 로드됨: {}", path.display());
+                tracing::info!("설정 로드됨: {}", path.display());
                 config
             }
             Err(e) => {
-                eprintln!("설정 파일 파싱 에러: {}", e);
-                eprintln!("기본 설정으로 시작합니다.");
+                tracing::error!("설정 파일 파싱 에러: {}", e);
+                tracing::warn!("기본 설정으로 시작합니다.");
 
                 // 손상된 설정 파일 백업
                 let backup_path = path.with_extension("toml.bak");
                 if let Err(backup_err) = std::fs::copy(&path, &backup_path) {
-                    eprintln!("설정 파일 백업 실패: {}", backup_err);
+                    tracing::error!("설정 파일 백업 실패: {}", backup_err);
                 } else {
-                    println!("기존 설정 파일 백업됨: {}", backup_path.display());
+                    tracing::info!("기존 설정 파일 백업됨: {}", backup_path.display());
                 }
 
                 // 기본 설정으로 덮어쓰기
                 let config = Self::default();
                 if let Err(save_err) = config.save() {
-                    eprintln!("기본 설정 파일 생성 실패: {}", save_err);
+                    tracing::error!("기본 설정 파일 생성 실패: {}", save_err);
                 }
                 config
             }
@@ -570,7 +570,7 @@ impl Config {
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::default_config_path();
         self.save_to_file(&path)?;
-        println!("설정 저장됨: {}", path.display());
+        tracing::debug!("설정 저장됨: {}", path.display());
         Ok(())
     }
 }

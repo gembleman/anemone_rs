@@ -18,7 +18,7 @@ use windows::{
 
 use crate::config::Config;
 use crate::translation::{
-    get_translation_manager, Language, TranslationEngine, TranslationResult,
+    get_translation_manager, Language, TranslationEngine,
     TranslationWorker, WM_TRANSLATION_COMPLETE, take_all_responses,
 };
 
@@ -888,7 +888,7 @@ impl TranslateDialog {
 
         for response in responses {
             let result = match response.result {
-                TranslationResult::Success(translated) => {
+                Ok(translated) => {
                     // 출력 형식 적용
                     match self.output_format {
                         OutputFormat::Normal => translated,
@@ -903,7 +903,7 @@ impl TranslateDialog {
                         }
                     }
                 }
-                TranslationResult::Error(err) => {
+                Err(err) => {
                     format!("[오류] {}", err)
                 }
             };

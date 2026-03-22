@@ -3,7 +3,7 @@
 //! Google Translate 비공식 웹 API를 사용한 번역
 //! 비동기 HTTPS 요청으로 UI 블로킹 없이 번역 수행
 
-use super::{lang_utils, TranslationResult, Translator};
+use super::{TranslationError, TranslationResult, Translator, lang_utils};
 use isolang::Language;
 
 /// Google 번역기
@@ -24,15 +24,13 @@ impl Default for GoogleTranslator {
 impl Translator for GoogleTranslator {
     fn translate(&self, text: &str, source: Language, target: Language) -> TranslationResult {
         if text.is_empty() {
-            return TranslationResult::Error("빈 텍스트입니다.".to_string());
+            return Err(TranslationError::EmptyText);
         }
 
         // 동기 번역은 blocking으로 수행 (하위 호환용)
         // 실제 사용은 translate_async 권장
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => return TranslationResult::Error(format!("런타임 생성 실패: {}", e)),
-        };
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| TranslationError::Engine(format!("런타임 생성 실패: {}", e)))?;
 
         rt.block_on(translate_async(text, source, target))
     }
@@ -55,16 +53,13 @@ pub async fn translate_async(
     target: Language,
 ) -> TranslationResult {
     if text.is_empty() {
-        return TranslationResult::Error("빈 텍스트입니다.".to_string());
+        return Err(TranslationError::EmptyText);
     }
 
     let source_code = lang_utils::to_google_code(source);
     let target_code = lang_utils::to_google_code(target);
 
-    match call_google_api(text, source_code, target_code).await {
-        Ok(result) => TranslationResult::Success(result),
-        Err(e) => TranslationResult::Error(format!("Google 번역 실패: {}", e)),
-    }
+    call_google_api(text, source_code, target_code).await
 }
 
 /// Google Translate API 호출 (HTTPS)
@@ -72,7 +67,7 @@ async fn call_google_api(
     text: &str,
     source_lang: &str,
     target_lang: &str,
-) -> Result<String, String> {
+) -> TranslationResult {
     // URL 인코딩
     let encoded_text = url_encode(text);
 
@@ -89,16 +84,19 @@ async fn call_google_api(
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .send()
         .await
-        .map_err(|e| format!("요청 전송 실패: {}", e))?;
+        .map_err(|e| TranslationError::Network(e.to_string()))?;
 
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|e| format!("응답 읽기 실패: {}", e))?;
+        .map_err(|e| TranslationError::Network(e.to_string()))?;
 
     if !status.is_success() {
-        return Err(format!("Google API 오류 ({})", status.as_u16()));
+        return Err(TranslationError::Api {
+            code: status.as_u16(),
+            message: body,
+        });
     }
 
     // 응답 파싱
@@ -125,13 +123,11 @@ fn url_encode(s: &str) -> String {
 }
 
 /// Google API 응답 파싱
-fn parse_google_response(json: &str) -> Result<String, String> {
+fn parse_google_response(json: &str) -> TranslationResult {
     // Google Translate API 응답 형식:
     // [[["번역결과","원문",null,null,10],...],...]
-    //
-    // serde_json으로 파싱
     let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("JSON 파싱 실패: {}", e))?;
+        serde_json::from_str(json).map_err(|e| TranslationError::Parse(e.to_string()))?;
 
     let mut result = String::new();
 
@@ -153,7 +149,9 @@ fn parse_google_response(json: &str) -> Result<String, String> {
     }
 
     if result.is_empty() {
-        Err("번역 결과를 찾을 수 없습니다.".to_string())
+        Err(TranslationError::Parse(
+            "번역 결과를 찾을 수 없습니다.".to_string(),
+        ))
     } else {
         Ok(result)
     }

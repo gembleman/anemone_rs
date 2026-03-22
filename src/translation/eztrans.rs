@@ -2,7 +2,7 @@
 //!
 //! eztrans-rs 라이브러리를 사용하여 일본어-한국어 번역 수행
 
-use super::{TranslationResult, Translator};
+use super::{TranslationError, TranslationResult, Translator};
 use eztrans_rs::EzTransEngine;
 use isolang::Language;
 use std::sync::Mutex;
@@ -42,20 +42,17 @@ impl Translator for EzTransTranslator {
     fn translate(&self, text: &str, source: Language, target: Language) -> TranslationResult {
         // EzTrans는 일본어→한국어만 지원
         if source != Language::Jpn || target != Language::Kor {
-            return TranslationResult::Error(
-                "EzTrans는 일본어→한국어 번역만 지원합니다.".to_string(),
-            );
+            return Err(TranslationError::UnsupportedLanguagePair);
         }
 
-        let engine = match self.engine.lock() {
-            Ok(e) => e,
-            Err(e) => return TranslationResult::Error(format!("엔진 잠금 실패: {}", e)),
-        };
+        let engine = self
+            .engine
+            .lock()
+            .map_err(|e| TranslationError::Engine(format!("엔진 잠금 실패: {}", e)))?;
 
-        match engine.default_translate(text) {
-            Ok(result) => TranslationResult::Success(result),
-            Err(e) => TranslationResult::Error(format!("번역 실패: {:?}", e)),
-        }
+        engine
+            .default_translate(text)
+            .map_err(|e| TranslationError::Engine(format!("번역 실패: {:?}", e)))
     }
 
     fn engine_name(&self) -> &'static str {

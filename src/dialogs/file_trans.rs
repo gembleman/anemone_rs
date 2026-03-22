@@ -740,7 +740,7 @@ impl FileTransDialog {
             match FileTransProgressDialog::show(self.hwnd, self.cancel_token.clone()) {
                 Ok(hwnd) => hwnd,
                 Err(e) => {
-                    eprintln!("Failed to create progress dialog: {:?}", e);
+                    tracing::error!("Failed to create progress dialog: {:?}", e);
                     return;
                 }
             };

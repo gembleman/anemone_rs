@@ -36,6 +36,11 @@ eztrans-rs = { path = "../eztrans-rs" }
 whatlang = "0.18"
 isolang = { version = "2.4", features = ["serde", "english_names"] }
 
+# Error handling & logging
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
 # Async translation support
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 reqwest = { version = "0.13", features = ["json", "native-tls", "form"], default-features = false }

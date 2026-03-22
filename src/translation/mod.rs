@@ -25,6 +25,46 @@ pub use worker::{
 };
 
 use std::sync::{Arc, Mutex, OnceLock};
+use thiserror::Error;
+
+/// 번역 에러 타입
+#[derive(Debug, Clone, Error)]
+pub enum TranslationError {
+    #[error("빈 텍스트입니다.")]
+    EmptyText,
+
+    #[error("엔진이 초기화되지 않았습니다: {0}")]
+    EngineNotInitialized(&'static str),
+
+    #[error("지원하지 않는 언어 쌍입니다.")]
+    UnsupportedLanguagePair,
+
+    #[error("API 키가 설정되지 않았습니다.")]
+    MissingApiKey,
+
+    #[error("네트워크 오류: {0}")]
+    Network(String),
+
+    #[error("API 오류 ({code}): {message}")]
+    Api { code: u16, message: String },
+
+    #[error("응답 파싱 실패: {0}")]
+    Parse(String),
+
+    #[error("엔진 오류: {0}")]
+    Engine(String),
+}
+
+impl TranslationError {
+    /// 재시도 가능한 에러인지 판별
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Network(_) => true,
+            Self::Api { code, .. } => matches!(code, 429 | 500 | 502 | 503 | 504),
+            _ => false,
+        }
+    }
+}
 
 /// 번역 엔진 종류
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -231,12 +271,8 @@ pub mod lang_utils {
     }
 }
 
-/// 번역 결과
-#[derive(Debug, Clone)]
-pub enum TranslationResult {
-    Success(String),
-    Error(String),
-}
+/// 번역 결과 타입
+pub type TranslationResult = Result<String, TranslationError>;
 
 /// 번역 인터페이스
 pub trait Translator: Send + Sync {
@@ -326,7 +362,7 @@ impl TranslationManager {
                 if let Some(ref engine) = self.eztrans {
                     engine.translate(text, self.source_lang, self.target_lang)
                 } else {
-                    TranslationResult::Error("EzTrans 엔진이 초기화되지 않았습니다.".to_string())
+                    Err(TranslationError::EngineNotInitialized("EzTrans"))
                 }
             }
             TranslationEngine::Google => {
@@ -376,5 +412,5 @@ pub fn translate_with_eztrans(text: &str, source: Language, target: Language) ->
             return engine.translate(text, source, target);
         }
     }
-    TranslationResult::Error("EzTrans 엔진이 초기화되지 않았습니다.".to_string())
+    Err(TranslationError::EngineNotInitialized("EzTrans"))
 }

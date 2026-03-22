@@ -110,7 +110,7 @@ impl App {
 
             // D2D 렌더러 초기화
             let d2d_renderer = D2DRenderer::new()?;
-            println!("Direct2D renderer initialized");
+            tracing::info!("Direct2D renderer initialized");
 
             // 설정 로드 (파일이 없으면 기본값)
             let config = Rc::new(RefCell::new(Config::load_or_default()));
@@ -160,7 +160,7 @@ impl App {
                 // 핫키 등록
                 let mut hotkey = HotkeyManager::new(hwnd);
                 if let Err(e) = hotkey.register_defaults() {
-                    eprintln!("Failed to register hotkeys: {e}");
+                    tracing::warn!("Failed to register hotkeys: {e}");
                 }
                 app_ref.hotkey = Some(hotkey);
 
@@ -263,7 +263,7 @@ impl App {
         if let Some(ref mut renderer) = self.d2d_renderer {
             // DC 바인딩
             if let Err(e) = renderer.bind_dc(buffer.hdc(), buffer.width, buffer.height) {
-                eprintln!("D2D bind_dc failed: {e}");
+                tracing::error!("D2D bind_dc failed: {e}");
                 return Ok(());
             }
 
@@ -280,7 +280,7 @@ impl App {
             // 테두리 그리기
             if border_visible {
                 if let Err(e) = renderer.draw_border(border_width, border_color) {
-                    eprintln!("D2D draw_border failed: {e}");
+                    tracing::error!("D2D draw_border failed: {e}");
                 }
             }
 
@@ -296,13 +296,13 @@ impl App {
                     max_height,
                     &render_style,
                 ) {
-                    eprintln!("D2D draw_text failed: {e}");
+                    tracing::error!("D2D draw_text failed: {e}");
                 }
             }
 
             // 렌더링 종료
             if let Err(e) = renderer.end_draw() {
-                eprintln!("D2D end_draw failed: {e}");
+                tracing::error!("D2D end_draw failed: {e}");
             }
         }
 
@@ -410,7 +410,7 @@ impl App {
                 *hwnd_storage = Some(hwnd);
             }
             Err(e) => {
-                eprintln!("Failed to open {} dialog: {}", dialog_name, e);
+                tracing::error!("Failed to open {} dialog: {}", dialog_name, e);
             }
         }
     }
@@ -458,7 +458,7 @@ impl App {
             // 자석 모드 시작
             let mut magnetic = MagneticManager::new(self.hwnd, self.config.clone());
             if let Err(e) = magnetic.start() {
-                eprintln!("Failed to start magnetic mode: {e}");
+                tracing::error!("Failed to start magnetic mode: {e}");
                 self.config.borrow_mut().toggle_magnetic_mode(); // 롤백
                 return;
             }
@@ -482,7 +482,7 @@ impl App {
     fn handle_clipboard_change(&mut self) {
         if let Some(text) = self.clipboard.on_draw_clipboard() {
             // 클립보드 텍스트 처리
-            println!("Clipboard: {}", text);
+            tracing::debug!("Clipboard: {}", text);
 
             // 자동 번역 처리 (비동기)
             self.process_clipboard_text_async(&text);
@@ -573,18 +573,16 @@ impl App {
 
     /// 번역 완료 처리
     fn handle_translation_complete(&mut self) {
-        use crate::translation::TranslationResult;
-
         // 모든 완료된 번역 결과 가져오기
         let responses = take_all_responses();
 
         for response in responses {
             match response.result {
-                TranslationResult::Success(translated) => {
+                Ok(translated) => {
                     self.current_text = translated;
                 }
-                TranslationResult::Error(err) => {
-                    eprintln!("Translation error: {}", err);
+                Err(err) => {
+                    tracing::error!("Translation error: {}", err);
                     // 오류 시 원문 표시
                     if let Some(ref original) = self.pending_original_text {
                         self.current_text = original.clone();
@@ -605,7 +603,7 @@ impl App {
     /// 동기 텍스트 번역 (하위 호환용)
     #[allow(dead_code)]
     fn translate_text_sync(&self, text: &str) -> String {
-        use crate::translation::{get_translation_manager, TranslationResult};
+        use crate::translation::get_translation_manager;
 
         let config = self.config.borrow();
         let manager = get_translation_manager();
@@ -630,9 +628,9 @@ impl App {
             drop(config);
 
             match mgr.translate(text) {
-                TranslationResult::Success(translated) => translated,
-                TranslationResult::Error(err) => {
-                    eprintln!("Translation error: {}", err);
+                Ok(translated) => translated,
+                Err(err) => {
+                    tracing::error!("Translation error: {}", err);
                     text.to_string()
                 }
             }
@@ -678,7 +676,7 @@ impl App {
                         // 종료 시 설정 저장
                         if let Ok(app_ref) = app.try_borrow() {
                             if let Err(e) = app_ref.config.borrow().save() {
-                                eprintln!("설정 저장 실패: {}", e);
+                                tracing::error!("설정 저장 실패: {}", e);
                             }
                         }
                         PostQuitMessage(0);

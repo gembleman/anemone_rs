@@ -3,7 +3,7 @@
 //! DeepL 공식 API를 사용한 번역 (API 키 필요)
 //! 비동기 HTTP 요청으로 UI 블로킹 없이 번역 수행
 
-use super::{lang_utils, TranslationResult, Translator};
+use super::{TranslationError, TranslationResult, Translator, lang_utils};
 use isolang::Language;
 
 /// DeepL 번역기
@@ -30,19 +30,17 @@ impl DeepLTranslator {
 impl Translator for DeepLTranslator {
     fn translate(&self, text: &str, source: Language, target: Language) -> TranslationResult {
         if text.is_empty() {
-            return TranslationResult::Error("빈 텍스트입니다.".to_string());
+            return Err(TranslationError::EmptyText);
         }
 
         if self.api_key.is_empty() {
-            return TranslationResult::Error("DeepL API 키가 설정되지 않았습니다.".to_string());
+            return Err(TranslationError::MissingApiKey);
         }
 
         // 동기 번역은 blocking으로 수행 (하위 호환용)
         // 실제 사용은 translate_async 권장
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => return TranslationResult::Error(format!("런타임 생성 실패: {}", e)),
-        };
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| TranslationError::Engine(format!("런타임 생성 실패: {}", e)))?;
 
         rt.block_on(translate_async(text, source, target, &self.api_key))
     }
@@ -64,20 +62,17 @@ pub async fn translate_async(
     api_key: &str,
 ) -> TranslationResult {
     if text.is_empty() {
-        return TranslationResult::Error("빈 텍스트입니다.".to_string());
+        return Err(TranslationError::EmptyText);
     }
 
     if api_key.is_empty() {
-        return TranslationResult::Error("DeepL API 키가 설정되지 않았습니다.".to_string());
+        return Err(TranslationError::MissingApiKey);
     }
 
     let source_code = lang_utils::to_deepl_code(source);
     let target_code = lang_utils::to_deepl_code(target);
 
-    match call_deepl_api(text, source_code, target_code, api_key).await {
-        Ok(result) => TranslationResult::Success(result),
-        Err(e) => TranslationResult::Error(e),
-    }
+    call_deepl_api(text, source_code, target_code, api_key).await
 }
 
 /// DeepL API 호출 (HTTPS)
@@ -86,7 +81,7 @@ async fn call_deepl_api(
     source_lang: &str,
     target_lang: &str,
     api_key: &str,
-) -> Result<String, String> {
+) -> TranslationResult {
     // API 엔드포인트 결정 (Free API vs Pro API)
     let base_url = if api_key.ends_with(":fx") {
         "https://api-free.deepl.com"
@@ -112,16 +107,19 @@ async fn call_deepl_api(
         .header("User-Agent", "AnemoneRS/1.0")
         .send()
         .await
-        .map_err(|e| format!("요청 전송 실패: {}", e))?;
+        .map_err(|e| TranslationError::Network(e.to_string()))?;
 
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|e| format!("응답 읽기 실패: {}", e))?;
+        .map_err(|e| TranslationError::Network(e.to_string()))?;
 
     if !status.is_success() {
-        return Err(format!("DeepL API 오류 ({}): {}", status.as_u16(), body));
+        return Err(TranslationError::Api {
+            code: status.as_u16(),
+            message: body,
+        });
     }
 
     // JSON 응답 파싱
@@ -129,10 +127,9 @@ async fn call_deepl_api(
 }
 
 /// DeepL API 응답 파싱
-fn parse_deepl_response(json: &str) -> Result<String, String> {
-    // JSON 파싱
+fn parse_deepl_response(json: &str) -> TranslationResult {
     let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("JSON 파싱 실패: {}", e))?;
+        serde_json::from_str(json).map_err(|e| TranslationError::Parse(e.to_string()))?;
 
     // translations[0].text 추출
     if let Some(translations) = value.get("translations") {
@@ -148,9 +145,14 @@ fn parse_deepl_response(json: &str) -> Result<String, String> {
     // 에러 메시지 확인
     if let Some(message) = value.get("message") {
         if let Some(s) = message.as_str() {
-            return Err(format!("DeepL 에러: {}", s));
+            return Err(TranslationError::Api {
+                code: 0,
+                message: s.to_string(),
+            });
         }
     }
 
-    Err("번역 결과를 찾을 수 없습니다.".to_string())
+    Err(TranslationError::Parse(
+        "번역 결과를 찾을 수 없습니다.".to_string(),
+    ))
 }

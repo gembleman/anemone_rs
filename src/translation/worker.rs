@@ -12,7 +12,7 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows::Win32::Foundation::{WPARAM, LPARAM};
 
-use super::{TranslationEngine, TranslationResult};
+use super::{TranslationEngine, TranslationError, TranslationResult};
 
 /// 번역 완료 메시지 ID
 pub const WM_TRANSLATION_COMPLETE: u32 = 0x0400 + 100; // WM_USER + 100
@@ -114,7 +114,7 @@ impl TranslationWorker {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
-                eprintln!("Failed to create tokio runtime: {}", e);
+                tracing::error!("Failed to create tokio runtime: {}", e);
                 return;
             }
         };
@@ -144,12 +144,47 @@ impl TranslationWorker {
         });
     }
 
-    /// 비동기 번역 수행
+    /// 최대 재시도 횟수
+    const MAX_RETRIES: u32 = 3;
+    /// 초기 재시도 대기 시간 (밀리초)
+    const INITIAL_BACKOFF_MS: u64 = 500;
+
+    /// 비동기 번역 수행 (재시도 포함)
     async fn translate_async(req: &TranslationRequest) -> TranslationResult {
+        let mut last_err = None;
+
+        for attempt in 0..=Self::MAX_RETRIES {
+            if attempt > 0 {
+                let delay = Self::INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1);
+                tracing::warn!(
+                    "번역 재시도 ({}/{}), {}ms 후...",
+                    attempt,
+                    Self::MAX_RETRIES,
+                    delay
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+
+            match Self::translate_once(req).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    if e.is_retryable() && attempt < Self::MAX_RETRIES {
+                        tracing::warn!("재시도 가능한 에러: {}", e);
+                        last_err = Some(e);
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| TranslationError::Engine("알 수 없는 오류".to_string())))
+    }
+
+    /// 단일 번역 시도
+    async fn translate_once(req: &TranslationRequest) -> TranslationResult {
         match req.engine {
             TranslationEngine::EzTrans => {
-                // EzTrans는 동기 함수이므로 별도 처리
-                // tokio::task::spawn_blocking 사용
                 let text = req.text.clone();
                 let source = req.source_lang;
                 let target = req.target_lang;
@@ -160,7 +195,7 @@ impl TranslationWorker {
                 .await
                 {
                     Ok(result) => result,
-                    Err(e) => TranslationResult::Error(format!("EzTrans 실행 오류: {}", e)),
+                    Err(e) => Err(TranslationError::Engine(format!("EzTrans 실행 오류: {}", e))),
                 }
             }
             TranslationEngine::Google => {
@@ -183,7 +218,7 @@ impl TranslationWorker {
         request.id = id;
 
         if let Err(e) = self.sender.send(request) {
-            eprintln!("Failed to send translation request: {}", e);
+            tracing::error!("Failed to send translation request: {}", e);
         }
 
         id
