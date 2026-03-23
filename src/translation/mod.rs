@@ -13,6 +13,7 @@ pub mod deepl;
 mod detect;
 mod eztrans;
 pub mod google;
+mod http_common;
 pub mod worker;
 
 pub use deepl::DeepLTranslator;

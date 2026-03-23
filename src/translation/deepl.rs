@@ -4,6 +4,7 @@
 //! 비동기 HTTP 요청으로 UI 블로킹 없이 번역 수행
 
 use super::{TranslationError, TranslationResult, Translator, lang_utils};
+use super::http_common::{block_on_async, send_and_read_body, validate_not_empty};
 use isolang::Language;
 
 /// DeepL 번역기
@@ -29,20 +30,12 @@ impl DeepLTranslator {
 
 impl Translator for DeepLTranslator {
     fn translate(&self, text: &str, source: Language, target: Language) -> TranslationResult {
-        if text.is_empty() {
-            return Err(TranslationError::EmptyText);
-        }
-
+        validate_not_empty(text)?;
         if self.api_key.is_empty() {
             return Err(TranslationError::MissingApiKey);
         }
-
-        // 동기 번역은 blocking으로 수행 (하위 호환용)
-        // 실제 사용은 translate_async 권장
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| TranslationError::Engine(format!("런타임 생성 실패: {}", e)))?;
-
-        rt.block_on(translate_async(text, source, target, &self.api_key))
+        let api_key = self.api_key.clone();
+        block_on_async(|| translate_async(text, source, target, &api_key))
     }
 
     fn engine_name(&self) -> &'static str {
@@ -61,9 +54,7 @@ pub async fn translate_async(
     target: Language,
     api_key: &str,
 ) -> TranslationResult {
-    if text.is_empty() {
-        return Err(TranslationError::EmptyText);
-    }
+    validate_not_empty(text)?;
 
     if api_key.is_empty() {
         return Err(TranslationError::MissingApiKey);
@@ -72,16 +63,6 @@ pub async fn translate_async(
     let source_code = lang_utils::to_deepl_code(source);
     let target_code = lang_utils::to_deepl_code(target);
 
-    call_deepl_api(text, source_code, target_code, api_key).await
-}
-
-/// DeepL API 호출 (HTTPS)
-async fn call_deepl_api(
-    text: &str,
-    source_lang: &str,
-    target_lang: &str,
-    api_key: &str,
-) -> TranslationResult {
     // API 엔드포인트 결정 (Free API vs Pro API)
     let base_url = if api_key.ends_with(":fx") {
         "https://api-free.deepl.com"
@@ -90,18 +71,14 @@ async fn call_deepl_api(
     };
 
     let url = format!("{}/v2/translate", base_url);
-
-    // 요청 본문 구성
     let params = [
         ("auth_key", api_key),
         ("text", text),
-        ("source_lang", source_lang),
-        ("target_lang", target_lang),
+        ("source_lang", source_code),
+        ("target_lang", target_code),
     ];
 
-    // HTTP 요청
-    let client = reqwest::Client::new();
-    let response = client
+    let response = reqwest::Client::new()
         .post(&url)
         .form(&params)
         .header("User-Agent", "AnemoneRS/1.0")
@@ -109,20 +86,7 @@ async fn call_deepl_api(
         .await
         .map_err(|e| TranslationError::Network(e.to_string()))?;
 
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| TranslationError::Network(e.to_string()))?;
-
-    if !status.is_success() {
-        return Err(TranslationError::Api {
-            code: status.as_u16(),
-            message: body,
-        });
-    }
-
-    // JSON 응답 파싱
+    let body = send_and_read_body(response).await?;
     parse_deepl_response(&body)
 }
 

@@ -590,7 +590,6 @@ impl App {
 
     /// 번역 완료 처리
     fn handle_translation_complete(&mut self) {
-        // 모든 완료된 번역 결과 가져오기
         let responses = take_all_responses();
 
         for response in responses {
@@ -600,14 +599,12 @@ impl App {
                 }
                 Err(err) => {
                     tracing::error!("Translation error: {}", err);
-                    // 오류 시 원문 표시
                     if let Some(ref original) = self.pending_original_text {
                         self.current_text = original.clone();
                     }
                 }
             }
 
-            // 백로그에 추가 (원문)
             if let Some(original) = self.pending_original_text.take() {
                 let entry = LogEntry::new(original);
                 add_to_backlog(entry);
@@ -616,6 +613,150 @@ impl App {
 
         if let Err(e) = self.paint() {
             tracing::warn!("paint failed after translation complete: {e}");
+        }
+    }
+
+    /// 트레이 아이콘 이벤트 처리
+    ///
+    /// # Safety
+    /// `hwnd`는 유효한 윈도우 핸들이어야 한다.
+    unsafe fn handle_tray_event(&mut self, lparam: LPARAM) {
+        unsafe {
+            match lparam.0 as u32 {
+                WM_LBUTTONUP => {
+                    self.config.borrow_mut().window_visible = true;
+                    window::set_window_visible(self.hwnd, true);
+                }
+                WM_RBUTTONUP => {
+                    let mut pt: POINT = zeroed();
+                    GetCursorPos(&mut pt).ok();
+                    if let Err(e) = self.show_context_menu(pt.x, pt.y) {
+                        tracing::warn!("tray show_context_menu failed: {e}");
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 우클릭 컨텍스트 메뉴 처리
+    ///
+    /// # Safety
+    /// `hwnd`는 유효한 윈도우 핸들이어야 한다.
+    unsafe fn handle_right_click(&mut self, hwnd: HWND, msg: u32, lparam: LPARAM) {
+        unsafe {
+            let mut pt = POINT {
+                x: (lparam.0 & 0xFFFF) as i16 as i32,
+                y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+            };
+            if msg == WM_RBUTTONUP {
+                let _ = ClientToScreen(hwnd, &mut pt);
+            }
+            if let Err(e) = self.show_context_menu(pt.x, pt.y) {
+                tracing::warn!("show_context_menu failed: {e}");
+            }
+        }
+    }
+
+    /// WndProc에서 호출되는 메시지 디스패처
+    ///
+    /// `Some(LRESULT)`를 반환하면 해당 값을 wndproc 반환값으로 사용.
+    /// `None`을 반환하면 DefWindowProcW로 위임.
+    ///
+    /// # Safety
+    /// Win32 메시지 파라미터가 유효해야 한다.
+    unsafe fn dispatch_message(
+        &mut self,
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<LRESULT> {
+        // SAFETY: All Win32 API calls use valid parameters from the system-provided
+        // hwnd/wparam/lparam. Pointer casts are valid for their respective message types.
+        unsafe {
+            match msg {
+                WM_DESTROY => {
+                    if let Err(e) = self.config.borrow().save() {
+                        tracing::error!("설정 저장 실패: {}", e);
+                    }
+                    PostQuitMessage(0);
+                    Some(LRESULT(0))
+                }
+
+                WM_SIZE => {
+                    let width = (lparam.0 & 0xFFFF) as i32;
+                    let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
+                    if let Err(e) = self.resize(width, height) {
+                        tracing::warn!("resize failed: {e}");
+                    }
+                    Some(LRESULT(0))
+                }
+
+                WM_DISPLAYCHANGE => {
+                    if let Err(e) = self.paint() {
+                        tracing::warn!("paint failed on display change: {e}");
+                    }
+                    Some(LRESULT(0))
+                }
+
+                WM_RBUTTONUP | WM_NCRBUTTONUP => {
+                    self.handle_right_click(hwnd, msg, lparam);
+                    Some(LRESULT(0))
+                }
+
+                WM_COMMAND => {
+                    let cmd = (wparam.0 & 0xFFFF) as u16;
+                    if let Err(e) = self.handle_menu_command(cmd) {
+                        tracing::warn!("handle_menu_command failed: {e}");
+                    }
+                    Some(LRESULT(0))
+                }
+
+                WM_HOTKEY => {
+                    let id = wparam.0 as i32;
+                    if let Err(e) = self.handle_hotkey(id) {
+                        tracing::warn!("handle_hotkey failed: {e}");
+                    }
+                    Some(LRESULT(0))
+                }
+
+                WM_TRAY_ICON => {
+                    self.handle_tray_event(lparam);
+                    Some(LRESULT(0))
+                }
+
+                WM_PAINT => {
+                    if lparam.0 == 1 {
+                        if let Err(e) = self.paint() {
+                            tracing::warn!("paint failed on WM_PAINT: {e}");
+                        }
+                    }
+                    Some(LRESULT(0))
+                }
+
+                WM_DRAWCLIPBOARD => {
+                    self.handle_clipboard_change();
+                    Some(LRESULT(0))
+                }
+
+                WM_CHANGECBCHAIN => {
+                    self.clipboard.on_change_chain(wparam, lparam);
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_DEFERRED_CLIPBOARD => {
+                    self.handle_clipboard_change();
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_TRANSLATION_COMPLETE => {
+                    self.handle_translation_complete();
+                    Some(LRESULT(0))
+                }
+
+                _ => None,
+            }
         }
     }
 
@@ -639,16 +780,15 @@ impl App {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        // 앱 인스턴스 가져오기
         let app = APP.with(|cell| {
             cell.try_borrow().ok().and_then(|g| g.clone())
         });
 
         if let Some(app) = app {
-            // TaskbarCreated 메시지 체크 (try_borrow 사용: 재진입 방지)
+            // TaskbarCreated 메시지 체크
             if let Ok(app_ref) = app.try_borrow() {
                 let taskbar_msg = app_ref.taskbar_created_msg;
-                drop(app_ref); // borrow 해제 후 borrow_mut
+                drop(app_ref);
                 if msg == taskbar_msg {
                     if let Ok(mut app_ref) = app.try_borrow_mut() {
                         app_ref.tray.restore();
@@ -657,179 +797,50 @@ impl App {
                 }
             }
 
-            // SAFETY: All Win32 API calls in the message handler use valid parameters from the
-            // system-provided hwnd/wparam/lparam. Pointer casts (e.g., MINMAXINFO) are valid
-            // because the system guarantees the correct struct is passed for each message type.
+            // App 인스턴스 불필요한 메시지 처리
+            // SAFETY: hwnd/lparam are valid system-provided parameters.
             unsafe {
                 match msg {
-                    WM_DESTROY => {
-                        // 종료 시 설정 저장
-                        if let Ok(app_ref) = app.try_borrow() {
-                            if let Err(e) = app_ref.config.borrow().save() {
-                                tracing::error!("설정 저장 실패: {}", e);
-                            }
-                        }
-                        PostQuitMessage(0);
-                        return LRESULT(0);
-                    }
-
                     WM_NCHITTEST => {
                         let x = (lparam.0 & 0xFFFF) as i16 as i32;
                         let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-
-                        // 테두리 크기 조절 영역 체크
-                        if let Some(hit) =
-                            window::hit_test_resize_border(hwnd, x, y, RESIZE_BORDER_WIDTH)
-                        {
+                        if let Some(hit) = window::hit_test_resize_border(hwnd, x, y, RESIZE_BORDER_WIDTH) {
                             return LRESULT(hit as isize);
                         }
-
-                        // 클라이언트 영역 -> 드래그 가능
                         return LRESULT(HTCAPTION as isize);
                     }
-
                     WM_GETMINMAXINFO => {
                         let mm = &mut *(lparam.0 as *mut MINMAXINFO);
                         window::set_min_track_size(mm, MIN_WINDOW_SIZE, MIN_WINDOW_SIZE);
                         return LRESULT(0);
                     }
-
-                    WM_SIZE => {
-                        let width = (lparam.0 & 0xFFFF) as i32;
-                        let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
-                        if let Ok(mut app_ref) = app.try_borrow_mut() {
-                            if let Err(e) = app_ref.resize(width, height) {
-                                tracing::warn!("resize failed: {e}");
-                            }
-                        }
-                        return LRESULT(0);
-                    }
-
-                    WM_DISPLAYCHANGE => {
-                        // 해상도 변경 시 다시 그리기
-                        if let Ok(mut app_ref) = app.try_borrow_mut() {
-                            if let Err(e) = app_ref.paint() {
-                                tracing::warn!("paint failed on display change: {e}");
-                            }
-                        }
-                        return LRESULT(0);
-                    }
-
-                    WM_RBUTTONUP | WM_NCRBUTTONUP => {
-                        let mut pt = POINT {
-                            x: (lparam.0 & 0xFFFF) as i16 as i32,
-                            y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
-                        };
-                        if msg == WM_RBUTTONUP {
-                            let _ = ClientToScreen(hwnd, &mut pt);
-                        }
-                        if let Ok(mut app_ref) = app.try_borrow_mut() {
-                            if let Err(e) = app_ref.show_context_menu(pt.x, pt.y) {
-                                tracing::warn!("show_context_menu failed: {e}");
-                            }
-                        }
-                        return LRESULT(0);
-                    }
-
-                    WM_COMMAND => {
-                        let cmd = (wparam.0 & 0xFFFF) as u16;
-                        if let Ok(mut app_ref) = app.try_borrow_mut() {
-                            if let Err(e) = app_ref.handle_menu_command(cmd) {
-                                tracing::warn!("handle_menu_command failed: {e}");
-                            }
-                        }
-                        return LRESULT(0);
-                    }
-
-                    WM_HOTKEY => {
-                        let id = wparam.0 as i32;
-                        if let Ok(mut app_ref) = app.try_borrow_mut() {
-                            if let Err(e) = app_ref.handle_hotkey(id) {
-                                tracing::warn!("handle_hotkey failed: {e}");
-                            }
-                        }
-                        return LRESULT(0);
-                    }
-
-                    // 트레이 아이콘 이벤트
-                    WM_TRAY_ICON => {
-                        match lparam.0 as u32 {
-                            WM_LBUTTONUP => {
-                                // 좌클릭: 윈도우 표시 토글
-                                if let Ok(app_ref) = app.try_borrow_mut() {
-                                    app_ref.config.borrow_mut().window_visible = true;
-                                    window::set_window_visible(app_ref.hwnd, true);
-                                }
-                            }
-                            WM_RBUTTONUP => {
-                                // 우클릭: 컨텍스트 메뉴
-                                let mut pt: POINT = zeroed();
-                                GetCursorPos(&mut pt).ok();
-                                if let Ok(mut app_ref) = app.try_borrow_mut() {
-                                    if let Err(e) = app_ref.show_context_menu(pt.x, pt.y) {
-                                        tracing::warn!("tray show_context_menu failed: {e}");
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                        return LRESULT(0);
-                    }
-
-                    // WM_PAINT - 설정 대화상자에서 변경 시 다시 그리기
-                    WM_PAINT => {
-                        if lparam.0 == 1 {
-                            if let Ok(mut app_ref) = app.try_borrow_mut() {
-                                if let Err(e) = app_ref.paint() {
-                                    tracing::warn!("paint failed on WM_PAINT: {e}");
-                                }
-                            }
-                        }
-                        return LRESULT(0);
-                    }
-
-                    // 클립보드 메시지
-                    WM_DRAWCLIPBOARD => {
-                        // try_borrow_mut 사용: SetClipboardViewer 호출 중에는 이미 borrow 상태일 수 있음
-                        if let Ok(mut app_ref) = app.try_borrow_mut() {
-                            app_ref.handle_clipboard_change();
-                        } else {
-                            // borrow 실패 시 메시지를 지연 처리
-                            let _ = PostMessageW(
-                                Some(hwnd),
-                                WM_DEFERRED_CLIPBOARD,
-                                WPARAM(0),
-                                LPARAM(0),
-                            );
-                        }
-                        return LRESULT(0);
-                    }
-
-                    // 지연된 클립보드 처리
-                    msg if msg == WM_DEFERRED_CLIPBOARD => {
-                        if let Ok(mut app_ref) = app.try_borrow_mut() {
-                            app_ref.handle_clipboard_change();
-                        }
-                        return LRESULT(0);
-                    }
-
-                    WM_CHANGECBCHAIN => {
-                        // try_borrow_mut 사용: 재진입 방지
-                        if let Ok(mut app_ref) = app.try_borrow_mut() {
-                            app_ref.clipboard.on_change_chain(wparam, lparam);
-                        }
-                        return LRESULT(0);
-                    }
-
-                    // 번역 완료 메시지
-                    msg if msg == WM_TRANSLATION_COMPLETE => {
-                        if let Ok(mut app_ref) = app.try_borrow_mut() {
-                            app_ref.handle_translation_complete();
-                        }
-                        return LRESULT(0);
-                    }
-
                     _ => {}
+                }
+            }
+
+            // App 인스턴스가 필요한 메시지: dispatch_message로 위임
+            // WM_DRAWCLIPBOARD는 borrow 실패 시 지연 처리
+            if msg == WM_DRAWCLIPBOARD {
+                if let Ok(mut app_ref) = app.try_borrow_mut() {
+                    // SAFETY: Valid system parameters forwarded to dispatch_message.
+                    if let Some(result) = unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) } {
+                        return result;
+                    }
+                } else {
+                    unsafe {
+                        let _ = PostMessageW(
+                            Some(hwnd),
+                            WM_DEFERRED_CLIPBOARD,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    }
+                    return LRESULT(0);
+                }
+            } else if let Ok(mut app_ref) = app.try_borrow_mut() {
+                // SAFETY: Valid system parameters forwarded to dispatch_message.
+                if let Some(result) = unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) } {
+                    return result;
                 }
             }
         }
