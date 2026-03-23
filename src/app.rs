@@ -302,7 +302,7 @@ impl App {
                 }
             }
 
-            // 렌더링 종료
+            // 렌더링 종료 (device loss 시 render target 자동 폐기 → 다음 paint에서 재생성)
             if let Err(e) = renderer.end_draw() {
                 tracing::error!("D2D end_draw failed: {e}");
             }
@@ -341,18 +341,24 @@ impl App {
     fn handle_menu_command(&mut self, cmd: u16) -> Result<()> {
         match cmd {
             menu::id::WINDOW_SHOW => {
-                self.config.borrow_mut().toggle_window_visible();
-                let visible = self.config.borrow().window_visible;
+                let mut cfg = self.config.borrow_mut();
+                cfg.toggle_window_visible();
+                let visible = cfg.window_visible;
+                drop(cfg);
                 window::set_window_visible(self.hwnd, visible);
             }
             menu::id::CLICK_THROUGH => {
-                self.config.borrow_mut().toggle_click_through();
-                let click_through = self.config.borrow().click_through;
+                let mut cfg = self.config.borrow_mut();
+                cfg.toggle_click_through();
+                let click_through = cfg.click_through;
+                drop(cfg);
                 window::set_click_through(self.hwnd, click_through);
             }
             menu::id::CLIPBOARD_WATCH => {
-                self.config.borrow_mut().toggle_clipboard_watch();
-                let watch = self.config.borrow().clipboard_watch;
+                let mut cfg = self.config.borrow_mut();
+                cfg.toggle_clipboard_watch();
+                let watch = cfg.clipboard_watch;
+                drop(cfg);
                 if watch {
                     self.clipboard.start();
                 } else {
@@ -378,6 +384,24 @@ impl App {
             }
             menu::id::BACKLOG => {
                 self.open_backlog_dialog();
+            }
+            menu::id::TEXT_SIZE_UP => {
+                let mut cfg = self.config.borrow_mut();
+                let new_size = (cfg.translation_style.size + 1).min(100);
+                cfg.translation_style.size = new_size;
+                cfg.name_style.size = new_size;
+                cfg.original_style.size = new_size;
+                drop(cfg);
+                self.paint()?;
+            }
+            menu::id::TEXT_SIZE_DOWN => {
+                let mut cfg = self.config.borrow_mut();
+                let new_size = (cfg.translation_style.size - 1).max(6);
+                cfg.translation_style.size = new_size;
+                cfg.name_style.size = new_size;
+                cfg.original_style.size = new_size;
+                drop(cfg);
+                self.paint()?;
             }
             // SAFETY: self.hwnd is a valid window handle created during App initialization.
             menu::id::EXIT => unsafe {
@@ -457,11 +481,33 @@ impl App {
         );
     }
 
+    /// 설정 대화상자에서 변경된 윈도우 상태를 실제 윈도우에 반영
+    fn sync_window_state(&mut self) {
+        let cfg = self.config.borrow();
+        let click_through = cfg.click_through;
+        let topmost = cfg.window_topmost;
+        let visible = cfg.window_visible;
+        let watch = cfg.clipboard_watch;
+        drop(cfg);
+
+        window::set_click_through(self.hwnd, click_through);
+        window::set_topmost(self.hwnd, topmost);
+        window::set_window_visible(self.hwnd, visible);
+
+        if watch && !self.clipboard.is_watching() {
+            self.clipboard.start();
+        } else if !watch && self.clipboard.is_watching() {
+            self.clipboard.stop();
+        }
+    }
+
     /// 자석 모드 토글
     fn toggle_magnetic_mode(&mut self) {
-        let was_enabled = self.config.borrow().magnetic_mode;
-        self.config.borrow_mut().toggle_magnetic_mode();
-        let is_enabled = self.config.borrow().magnetic_mode;
+        let mut cfg = self.config.borrow_mut();
+        let was_enabled = cfg.magnetic_mode;
+        cfg.toggle_magnetic_mode();
+        let is_enabled = cfg.magnetic_mode;
+        drop(cfg);
 
         if is_enabled && !was_enabled {
             // 자석 모드 시작
@@ -593,20 +639,25 @@ impl App {
         let responses = take_all_responses();
 
         for response in responses {
-            match response.result {
+            let translation = match response.result {
                 Ok(translated) => {
-                    self.current_text = translated;
+                    self.current_text = translated.clone();
+                    Some(translated)
                 }
                 Err(err) => {
                     tracing::error!("Translation error: {}", err);
                     if let Some(ref original) = self.pending_original_text {
                         self.current_text = original.clone();
                     }
+                    None
                 }
-            }
+            };
 
             if let Some(original) = self.pending_original_text.take() {
-                let entry = LogEntry::new(original);
+                let mut entry = LogEntry::new(original);
+                if let Some(trans) = translation {
+                    entry = entry.with_translation(trans);
+                }
                 add_to_backlog(entry);
             }
         }
@@ -694,6 +745,10 @@ impl App {
                 }
 
                 WM_DISPLAYCHANGE => {
+                    // 디스플레이 변경 시 render target 재생성 (DPI/해상도 변경 대응)
+                    if let Some(ref mut renderer) = self.d2d_renderer {
+                        renderer.invalidate_target();
+                    }
                     if let Err(e) = self.paint() {
                         tracing::warn!("paint failed on display change: {e}");
                     }
@@ -728,6 +783,8 @@ impl App {
 
                 WM_PAINT => {
                     if lparam.0 == 1 {
+                        // 설정 대화상자에서 보낸 갱신 요청 — 윈도우 상태도 동기화
+                        self.sync_window_state();
                         if let Err(e) = self.paint() {
                             tracing::warn!("paint failed on WM_PAINT: {e}");
                         }

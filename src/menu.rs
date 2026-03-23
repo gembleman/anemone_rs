@@ -37,6 +37,12 @@ impl ContextMenu {
     }
 
     pub fn build(&self, config: &Config) -> Result<()> {
+        /// 체크 상태에 따른 메뉴 플래그
+        #[inline]
+        fn checked_flag(checked: bool) -> MENU_ITEM_FLAGS {
+            if checked { MF_STRING | MF_CHECKED } else { MF_STRING }
+        }
+
         // SAFETY: self.hmenu is a valid menu handle created by CreatePopupMenu. All
         // AppendMenuW calls use valid menu item IDs and static string literals (w! macro).
         // DeleteMenu with MF_BYPOSITION and index 0 removes items from the front.
@@ -47,96 +53,24 @@ impl ContextMenu {
             }
 
             // 윈도우 표시/숨김
-            let show_text = if config.window_visible {
-                w!("윈도우 숨기기")
-            } else {
-                w!("윈도우 표시")
-            };
+            let show_text = if config.window_visible { w!("윈도우 숨기기") } else { w!("윈도우 표시") };
             AppendMenuW(self.hmenu, MF_STRING, id::WINDOW_SHOW as usize, show_text)?;
-
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
-            // 클릭 통과
-            let click_flags = if config.click_through {
-                MF_STRING | MF_CHECKED
-            } else {
-                MF_STRING
-            };
-            AppendMenuW(
-                self.hmenu,
-                click_flags,
-                id::CLICK_THROUGH as usize,
-                w!("클릭 통과"),
-            )?;
-
-            // 클립보드 감시
-            let clip_flags = if config.clipboard_watch {
-                MF_STRING | MF_CHECKED
-            } else {
-                MF_STRING
-            };
-            AppendMenuW(
-                self.hmenu,
-                clip_flags,
-                id::CLIPBOARD_WATCH as usize,
-                w!("클립보드 감시"),
-            )?;
-
-            // 자석 모드
-            let magnet_flags = if config.magnetic_mode {
-                MF_STRING | MF_CHECKED
-            } else {
-                MF_STRING
-            };
-            AppendMenuW(
-                self.hmenu,
-                magnet_flags,
-                id::MAGNETIC_MODE as usize,
-                w!("자석 모드"),
-            )?;
-
+            AppendMenuW(self.hmenu, checked_flag(config.click_through), id::CLICK_THROUGH as usize, w!("클릭 통과"))?;
+            AppendMenuW(self.hmenu, checked_flag(config.clipboard_watch), id::CLIPBOARD_WATCH as usize, w!("클립보드 감시"))?;
+            AppendMenuW(self.hmenu, checked_flag(config.magnetic_mode), id::MAGNETIC_MODE as usize, w!("자석 모드"))?;
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
-            // 배경 표시
-            let bg_flags = if config.background_visible {
-                MF_STRING | MF_CHECKED
-            } else {
-                MF_STRING
-            };
-            AppendMenuW(
-                self.hmenu,
-                bg_flags,
-                id::BACKGROUND_TOGGLE as usize,
-                w!("배경 표시"),
-            )?;
-
-            // 테두리 표시
-            let border_flags = if config.border_visible {
-                MF_STRING | MF_CHECKED
-            } else {
-                MF_STRING
-            };
-            AppendMenuW(
-                self.hmenu,
-                border_flags,
-                id::BORDER_TOGGLE as usize,
-                w!("테두리 표시"),
-            )?;
-
+            AppendMenuW(self.hmenu, checked_flag(config.background_visible), id::BACKGROUND_TOGGLE as usize, w!("배경 표시"))?;
+            AppendMenuW(self.hmenu, checked_flag(config.border_visible), id::BORDER_TOGGLE as usize, w!("테두리 표시"))?;
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
-            // 번역
             AppendMenuW(self.hmenu, MF_STRING, id::TRANSLATE as usize, w!("번역"))?;
-
-            // 백로그
             AppendMenuW(self.hmenu, MF_STRING, id::BACKLOG as usize, w!("백로그"))?;
-
-            // 설정
             AppendMenuW(self.hmenu, MF_STRING, id::SETTINGS as usize, w!("설정"))?;
-
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
-            // 종료
             AppendMenuW(self.hmenu, MF_STRING, id::EXIT as usize, w!("종료"))?;
 
             Ok(())
