@@ -510,16 +510,18 @@ impl Config {
         Ok(())
     }
 
-    /// 기본 설정 파일 경로 가져오기
-    pub fn default_config_path() -> PathBuf {
-        // 실행 파일과 같은 디렉토리에 config.toml 저장
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                return exe_dir.join("config.toml");
+    /// 기본 설정 파일 경로 가져오기 (캐시됨)
+    pub fn default_config_path() -> &'static PathBuf {
+        use std::sync::OnceLock;
+        static CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
+        CONFIG_PATH.get_or_init(|| {
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(exe_dir) = exe_path.parent() {
+                    return exe_dir.join("config.toml");
+                }
             }
-        }
-        // 폴백: 현재 디렉토리
-        PathBuf::from("config.toml")
+            PathBuf::from("config.toml")
+        })
     }
 
     /// 기본 경로에서 설정 로드 (없거나 파싱 에러 시 기본값 사용)

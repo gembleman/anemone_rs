@@ -90,7 +90,8 @@ pub fn take_all_responses() -> Vec<TranslationResponse> {
 /// 번역 워커
 pub struct TranslationWorker {
     sender: Sender<TranslationRequest>,
-    handle: JoinHandle<()>,
+    /// 워커 스레드 핸들 (drop 시 자동 detach)
+    _handle: JoinHandle<()>,
     next_id: u64,
 }
 
@@ -108,7 +109,7 @@ impl TranslationWorker {
 
         Self {
             sender: tx,
-            handle,
+            _handle: handle,
             next_id: 1,
         }
     }
@@ -127,8 +128,9 @@ impl TranslationWorker {
         };
 
         rt.block_on(async {
+            let client = super::http_common::shared_client();
             while let Ok(req) = rx.recv() {
-                let result = Self::translate_async(&req).await;
+                let result = Self::translate_async(&req, &client).await;
 
                 let response = TranslationResponse {
                     id: req.id,
@@ -161,7 +163,7 @@ impl TranslationWorker {
     const INITIAL_BACKOFF_MS: u64 = 500;
 
     /// 비동기 번역 수행 (재시도 포함)
-    async fn translate_async(req: &TranslationRequest) -> TranslationResult {
+    async fn translate_async(req: &TranslationRequest, client: &reqwest::Client) -> TranslationResult {
         let mut last_err = None;
 
         for attempt in 0..=Self::MAX_RETRIES {
@@ -176,7 +178,7 @@ impl TranslationWorker {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            match Self::translate_once(req).await {
+            match Self::translate_once(req, client).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
                     if e.is_retryable() && attempt < Self::MAX_RETRIES {
@@ -193,7 +195,7 @@ impl TranslationWorker {
     }
 
     /// 단일 번역 시도
-    async fn translate_once(req: &TranslationRequest) -> TranslationResult {
+    async fn translate_once(req: &TranslationRequest, client: &reqwest::Client) -> TranslationResult {
         match req.engine {
             TranslationEngine::EzTrans => {
                 let text = req.text.clone();
@@ -210,11 +212,11 @@ impl TranslationWorker {
                 }
             }
             TranslationEngine::Google => {
-                super::google::translate_async(&req.text, req.source_lang, req.target_lang).await
+                super::google::translate_async_with_client(client, &req.text, req.source_lang, req.target_lang).await
             }
             TranslationEngine::DeepL => {
                 let api_key = req.deepl_api_key.as_deref().unwrap_or("");
-                super::deepl::translate_async(&req.text, req.source_lang, req.target_lang, api_key)
+                super::deepl::translate_async_with_client(client, &req.text, req.source_lang, req.target_lang, api_key)
                     .await
             }
         }

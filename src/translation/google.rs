@@ -43,6 +43,16 @@ pub async fn translate_async(
     source: Language,
     target: Language,
 ) -> TranslationResult {
+    translate_async_with_client(&super::http_common::shared_client(), text, source, target).await
+}
+
+/// 공유 Client를 받는 비동기 번역 함수
+pub async fn translate_async_with_client(
+    client: &reqwest::Client,
+    text: &str,
+    source: Language,
+    target: Language,
+) -> TranslationResult {
     validate_not_empty(text)?;
 
     let source_code = lang_utils::to_google_code(source);
@@ -54,7 +64,7 @@ pub async fn translate_async(
         source_code, target_code, encoded_text
     );
 
-    let response = reqwest::Client::new()
+    let response = client
         .get(&url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .send()
@@ -67,7 +77,8 @@ pub async fn translate_async(
 
 /// URL 인코딩
 fn url_encode(s: &str) -> String {
-    let mut result = String::new();
+    use std::fmt::Write;
+    let mut result = String::with_capacity(s.len() * 2);
     for byte in s.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -77,7 +88,7 @@ fn url_encode(s: &str) -> String {
                 result.push_str("%20");
             }
             _ => {
-                result.push_str(&format!("%{:02X}", byte));
+                let _ = write!(result, "%{:02X}", byte);
             }
         }
     }
@@ -89,7 +100,7 @@ fn parse_google_response(json: &str) -> TranslationResult {
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|e| TranslationError::Parse(e.to_string()))?;
 
-    let mut result = String::new();
+    let mut result = String::with_capacity(json.len() / 4);
 
     if let Some(outer) = value.as_array() {
         if let Some(first) = outer.first() {

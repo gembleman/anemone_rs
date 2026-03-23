@@ -3,6 +3,8 @@
 //! ID2D1DCRenderTarget을 사용하여 레이어드 윈도우와 호환되는
 //! Direct2D 렌더링을 제공합니다.
 
+use std::collections::HashMap;
+
 use crate::util::to_wide;
 use windows::{
     Win32::{
@@ -205,6 +207,10 @@ pub struct D2DRenderer {
     render_target: Option<ID2D1DCRenderTarget>,
     bound_width: i32,
     bound_height: i32,
+    /// 프레임 단위 브러시 캐시 (ARGB 색상 → SolidColorBrush)
+    brush_cache: HashMap<u32, ID2D1SolidColorBrush>,
+    /// 외곽선 스트로크 스타일 캐시 (불변이므로 한 번만 생성)
+    stroke_style: Option<ID2D1StrokeStyle>,
 }
 
 impl D2DRenderer {
@@ -217,39 +223,60 @@ impl D2DRenderer {
                 D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dwrite_factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
 
+            let stroke_style = d2d_factory.CreateStrokeStyle(
+                &D2D1_STROKE_STYLE_PROPERTIES {
+                    startCap: D2D1_CAP_STYLE_ROUND,
+                    endCap: D2D1_CAP_STYLE_ROUND,
+                    dashCap: D2D1_CAP_STYLE_ROUND,
+                    lineJoin: D2D1_LINE_JOIN_ROUND,
+                    miterLimit: 1.0,
+                    dashStyle: D2D1_DASH_STYLE_SOLID,
+                    dashOffset: 0.0,
+                },
+                None,
+            )?;
+
             Ok(Self {
                 d2d_factory,
                 dwrite_factory,
                 render_target: None,
                 bound_width: 0,
                 bound_height: 0,
+                brush_cache: HashMap::new(),
+                stroke_style: Some(stroke_style),
             })
         }
     }
 
-    /// 활성 render target 참조를 반환. 없으면 None.
+    /// 활성 render target을 clone하여 반환. 없으면 None.
+    /// COM 객체이므로 clone은 참조 카운트 증가일 뿐이다.
     #[inline]
-    fn target(&self) -> Option<&ID2D1DCRenderTarget> {
-        self.render_target.as_ref()
+    fn target(&self) -> Option<ID2D1DCRenderTarget> {
+        self.render_target.clone()
     }
 
-    /// ARGB 색상으로 SolidColorBrush 생성
-    fn create_solid_brush(
-        &self,
+    /// ARGB 색상으로 SolidColorBrush를 가져온다 (프레임 내 캐시 활용)
+    fn get_or_create_brush(
+        &mut self,
         target: &ID2D1DCRenderTarget,
         color: u32,
     ) -> Result<ID2D1SolidColorBrush> {
+        if let Some(brush) = self.brush_cache.get(&color) {
+            return Ok(brush.clone());
+        }
         // SAFETY: target is a valid render target. CreateSolidColorBrush is called with
         // valid color and brush properties.
-        unsafe {
+        let brush = unsafe {
             target.CreateSolidColorBrush(
                 &argb_to_color_f(color),
                 Some(&D2D1_BRUSH_PROPERTIES {
                     opacity: 1.0,
                     transform: Matrix3x2::identity(),
                 }),
-            )
-        }
+            )?
+        };
+        self.brush_cache.insert(color, brush.clone());
+        Ok(brush)
     }
 
     /// TextRenderStyle에서 IDWriteTextLayout 생성
@@ -330,7 +357,10 @@ impl D2DRenderer {
     }
 
     /// 렌더링 시작
-    pub fn begin_draw(&self) {
+    pub fn begin_draw(&mut self) {
+        // 이전 프레임의 브러시 캐시 폐기
+        self.brush_cache.clear();
+
         if let Some(target) = self.target() {
             // SAFETY: render_target is a valid ID2D1DCRenderTarget initialized in bind_dc.
             unsafe {
@@ -341,11 +371,22 @@ impl D2DRenderer {
     }
 
     /// 렌더링 종료
-    pub fn end_draw(&self) -> Result<()> {
+    ///
+    /// `D2DERR_RECREATE_TARGET` 발생 시 render target을 폐기하고 `Err`를 반환.
+    /// 다음 `bind_dc` 호출에서 자동으로 재생성된다.
+    pub fn end_draw(&mut self) -> Result<()> {
         if let Some(target) = self.target() {
             // SAFETY: render_target is valid and EndDraw is called after a matching BeginDraw.
             unsafe {
-                target.EndDraw(None, None)?;
+                let hr = target.EndDraw(None, None);
+                if let Err(ref e) = hr {
+                    // D2DERR_RECREATE_TARGET (0x8899000C)
+                    if e.code() == HRESULT(0x8899000Cu32 as i32) {
+                        tracing::warn!("D2D device lost — render target will be recreated");
+                        self.render_target = None;
+                    }
+                    return hr;
+                }
             }
         }
         Ok(())
@@ -362,7 +403,7 @@ impl D2DRenderer {
     }
 
     /// 사각형 채우기 (ARGB)
-    pub fn fill_rect(&self, x: f32, y: f32, w: f32, h: f32, color: u32) -> Result<()> {
+    pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) -> Result<()> {
         let target = match self.target() {
             Some(t) => t,
             None => return Ok(()),
@@ -370,7 +411,7 @@ impl D2DRenderer {
 
         // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
-            let brush = self.create_solid_brush(target, color)?;
+            let brush = self.get_or_create_brush(&target, color)?;
             let rect = D2D_RECT_F {
                 left: x,
                 top: y,
@@ -384,7 +425,7 @@ impl D2DRenderer {
     }
 
     /// 테두리 그리기 (ARGB)
-    pub fn draw_border(&self, thickness: i32, color: u32) -> Result<()> {
+    pub fn draw_border(&mut self, thickness: i32, color: u32) -> Result<()> {
         let target = match self.target() {
             Some(t) => t,
             None => return Ok(()),
@@ -396,7 +437,7 @@ impl D2DRenderer {
 
         // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
-            let brush = self.create_solid_brush(target, color)?;
+            let brush = self.get_or_create_brush(&target, color)?;
 
             // 상단
             target.FillRectangle(
@@ -425,7 +466,7 @@ impl D2DRenderer {
 
     /// 둥근 사각형 채우기
     pub fn fill_rounded_rect(
-        &self,
+        &mut self,
         x: f32,
         y: f32,
         w: f32,
@@ -440,7 +481,7 @@ impl D2DRenderer {
 
         // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
-            let brush = self.create_solid_brush(target, color)?;
+            let brush = self.get_or_create_brush(&target, color)?;
             let rounded_rect = D2D1_ROUNDED_RECT {
                 rect: D2D_RECT_F {
                     left: x,
@@ -459,7 +500,7 @@ impl D2DRenderer {
 
     /// 둥근 사각형 테두리 그리기
     pub fn draw_rounded_rect(
-        &self,
+        &mut self,
         x: f32,
         y: f32,
         w: f32,
@@ -475,7 +516,7 @@ impl D2DRenderer {
 
         // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
-            let brush = self.create_solid_brush(target, color)?;
+            let brush = self.get_or_create_brush(&target, color)?;
             let rounded_rect = D2D1_ROUNDED_RECT {
                 rect: D2D_RECT_F {
                     left: x,
@@ -495,7 +536,7 @@ impl D2DRenderer {
     /// 텍스트 그리기 (외곽선, 그림자 포함)
     /// 렌더링 순서: 그림자 -> 외곽선2 -> 외곽선1 -> 주 텍스트
     pub fn draw_text(
-        &self,
+        &mut self,
         text: &str,
         x: f32,
         y: f32,
@@ -520,7 +561,7 @@ impl D2DRenderer {
 
                 if outline_total > 0 {
                     self.draw_text_outline(
-                        target,
+                        &target,
                         &text_layout,
                         shadow_x,
                         shadow_y,
@@ -529,7 +570,7 @@ impl D2DRenderer {
                     )?;
                 }
 
-                let shadow_brush = self.create_solid_brush(target, style.shadow_color)?;
+                let shadow_brush = self.get_or_create_brush(&target, style.shadow_color)?;
                 target.DrawTextLayout(
                     Vector2::new(shadow_x, shadow_y),
                     &text_layout,
@@ -541,7 +582,7 @@ impl D2DRenderer {
             // 2. 외곽선2 그리기 (OutlineOut)
             if style.outline2_size > 0 && outline_total > 0 {
                 self.draw_text_outline(
-                    target,
+                    &target,
                     &text_layout,
                     x,
                     y,
@@ -553,7 +594,7 @@ impl D2DRenderer {
             // 3. 외곽선1 그리기 (OutlineIn)
             if style.outline1_size > 0 {
                 self.draw_text_outline(
-                    target,
+                    &target,
                     &text_layout,
                     x,
                     y,
@@ -563,7 +604,7 @@ impl D2DRenderer {
             }
 
             // 4. 주 텍스트 그리기
-            let text_brush = self.create_solid_brush(target, style.color)?;
+            let text_brush = self.get_or_create_brush(&target, style.color)?;
             target.DrawTextLayout(
                 Vector2::new(x, y),
                 &text_layout,
@@ -578,7 +619,7 @@ impl D2DRenderer {
     /// Geometry 기반 텍스트 외곽선 그리기
     /// IDWriteFontFace::GetGlyphRunOutline을 사용하여 정확한 벡터 외곽선 생성
     fn draw_text_outline(
-        &self,
+        &mut self,
         target: &ID2D1DCRenderTarget,
         text_layout: &IDWriteTextLayout,
         x: f32,
@@ -602,27 +643,13 @@ impl D2DRenderer {
 
             sink.Close()?;
 
-            // 3. 외곽선 스타일 설정 (둥근 조인과 캡)
-            let stroke_style = self.d2d_factory.CreateStrokeStyle(
-                &D2D1_STROKE_STYLE_PROPERTIES {
-                    startCap: D2D1_CAP_STYLE_ROUND,
-                    endCap: D2D1_CAP_STYLE_ROUND,
-                    dashCap: D2D1_CAP_STYLE_ROUND,
-                    lineJoin: D2D1_LINE_JOIN_ROUND,
-                    miterLimit: 1.0,
-                    dashStyle: D2D1_DASH_STYLE_SOLID,
-                    dashOffset: 0.0,
-                },
-                None,
-            )?;
-
-            // 4. 외곽선 그리기
-            let brush = self.create_solid_brush(target, color)?;
+            // 3. 외곽선 그리기 (캐시된 스트로크 스타일 사용)
+            let brush = self.get_or_create_brush(target, color)?;
             target.DrawGeometry(
                 &path_geometry,
                 &brush,
                 thickness as f32 * 2.0, // stroke는 양쪽으로 그려지므로 2배
-                Some(&stroke_style),
+                self.stroke_style.as_ref(),
             );
 
             // 5. 내부 채우기 (외곽선 색상으로)
@@ -648,6 +675,13 @@ impl D2DRenderer {
             text_layout.GetMetrics(&mut metrics)?;
             Ok((metrics.width, metrics.height))
         }
+    }
+
+    /// Render target을 강제 폐기 (디스플레이 변경 등에서 호출)
+    /// 다음 `bind_dc` 호출에서 자동으로 재생성된다.
+    pub fn invalidate_target(&mut self) {
+        self.render_target = None;
+        self.brush_cache.clear();
     }
 
     /// 바인딩된 크기 반환
