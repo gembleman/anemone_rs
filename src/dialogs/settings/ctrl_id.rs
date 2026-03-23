@@ -88,5 +88,8 @@ pub const EZTRANS_DLL_BROWSE: u16 = 1265;
 pub const EZTRANS_DAT_EDIT: u16 = 1266;
 pub const EZTRANS_DAT_BROWSE: u16 = 1267;
 
+// 탭 컨트롤
+pub const TAB_CONTROL: u16 = 1290;
+
 // 닫기 버튼
 pub const CLOSE: u16 = 1300;

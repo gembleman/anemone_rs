@@ -108,6 +108,14 @@ pub const TBM_GETPOS_VAL: u32 = 1024;
 
 pub const SS_LEFT: u32 = 0x00000000;
 
+// ── Win32 누락 상수: Tab Control ────────────────────────
+
+pub const TCM_FIRST: u32 = 0x1300;
+pub const TCM_INSERTITEMW: u32 = TCM_FIRST + 62;
+pub const TCM_GETCURSEL: u32 = TCM_FIRST + 11;
+pub const TCN_FIRST: i32 = -550;
+pub const TCN_SELCHANGE: i32 = TCN_FIRST - 1;
+
 // ── Win32 누락 상수: Clipboard ──────────────────────────
 
 pub const CF_UNICODETEXT: u32 = 13;

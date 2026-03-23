@@ -220,41 +220,61 @@ impl SettingsDialog {
 
             // 외곽선1 +/-
             OUTLINE1_MINUS => {
-                let mut cfg = self.config.borrow_mut();
-                let current = cfg.translation_style.outline1_size;
-                if current > 0 {
-                    cfg.set_all_text_size(ColorType::Outline1, current - 1);
-                }
-                drop(cfg);
+                let new_size = {
+                    let mut cfg = self.config.borrow_mut();
+                    let current = cfg.translation_style.outline1_size;
+                    if current > 0 {
+                        cfg.set_all_text_size(ColorType::Outline1, current - 1);
+                        current - 1
+                    } else {
+                        current
+                    }
+                };
+                self.update_trackbar_pos(OUTLINE1_TRACKBAR, new_size);
                 self.notify_change();
             }
             OUTLINE1_PLUS => {
-                let mut cfg = self.config.borrow_mut();
-                let current = cfg.translation_style.outline1_size;
-                if current < 20 {
-                    cfg.set_all_text_size(ColorType::Outline1, current + 1);
-                }
-                drop(cfg);
+                let new_size = {
+                    let mut cfg = self.config.borrow_mut();
+                    let current = cfg.translation_style.outline1_size;
+                    if current < 20 {
+                        cfg.set_all_text_size(ColorType::Outline1, current + 1);
+                        current + 1
+                    } else {
+                        current
+                    }
+                };
+                self.update_trackbar_pos(OUTLINE1_TRACKBAR, new_size);
                 self.notify_change();
             }
 
             // 외곽선2 +/-
             OUTLINE2_MINUS => {
-                let mut cfg = self.config.borrow_mut();
-                let current = cfg.translation_style.outline2_size;
-                if current > 0 {
-                    cfg.set_all_text_size(ColorType::Outline2, current - 1);
-                }
-                drop(cfg);
+                let new_size = {
+                    let mut cfg = self.config.borrow_mut();
+                    let current = cfg.translation_style.outline2_size;
+                    if current > 0 {
+                        cfg.set_all_text_size(ColorType::Outline2, current - 1);
+                        current - 1
+                    } else {
+                        current
+                    }
+                };
+                self.update_trackbar_pos(OUTLINE2_TRACKBAR, new_size);
                 self.notify_change();
             }
             OUTLINE2_PLUS => {
-                let mut cfg = self.config.borrow_mut();
-                let current = cfg.translation_style.outline2_size;
-                if current < 20 {
-                    cfg.set_all_text_size(ColorType::Outline2, current + 1);
-                }
-                drop(cfg);
+                let new_size = {
+                    let mut cfg = self.config.borrow_mut();
+                    let current = cfg.translation_style.outline2_size;
+                    if current < 20 {
+                        cfg.set_all_text_size(ColorType::Outline2, current + 1);
+                        current + 1
+                    } else {
+                        current
+                    }
+                };
+                self.update_trackbar_pos(OUTLINE2_TRACKBAR, new_size);
                 self.notify_change();
             }
 
@@ -602,6 +622,23 @@ impl SettingsDialog {
 
             CoUninitialize();
             result
+        }
+    }
+
+    /// 트랙바 위치 업데이트
+    fn update_trackbar_pos(&self, trackbar_id: u16, value: i32) {
+        // SAFETY: self.hwnd is valid; GetDlgItem returns a valid control handle.
+        unsafe {
+            if let Ok(trackbar) = GetDlgItem(Some(self.hwnd), trackbar_id as i32) {
+                if !trackbar.is_invalid() {
+                    let _ = SendMessageW(
+                        trackbar,
+                        TBM_SETPOS,
+                        Some(WPARAM(1)),
+                        Some(LPARAM(value as isize)),
+                    );
+                }
+            }
         }
     }
 

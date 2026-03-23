@@ -13,8 +13,25 @@ use windows::{
     core::*,
 };
 
-use crate::constants::{CB_ADDSTRING, CB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY};
+use crate::constants::{CB_ADDSTRING, CB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, TCM_INSERTITEMW};
 use crate::util::to_wide;
+
+// ── Tab Control 구조체 ──────────────────────────────────
+
+/// TCITEMW (Win32 Tab Control item)
+#[repr(C)]
+pub struct TCITEMW {
+    pub mask: u32,
+    pub dw_state: u32,
+    pub dw_state_mask: u32,
+    pub psz_text: *mut u16,
+    pub cch_text_max: i32,
+    pub i_image: i32,
+    pub l_param: isize,
+}
+
+/// TCIF_TEXT mask
+pub const TCIF_TEXT: u32 = 0x0001;
 
 /// 표준 다이얼로그 윈도우 클래스를 등록한다.
 ///
@@ -491,6 +508,10 @@ pub trait DialogControls {
     unsafe fn create_trackbar(&self, x: i32, y: i32, w: i32, h: i32, id: u16, min: i32, max: i32) -> Result<HWND> {
         unsafe { create_trackbar(self.dialog_hwnd(), x, y, w, h, id, min, max) }
     }
+
+    unsafe fn create_tab_control(&self, x: i32, y: i32, w: i32, h: i32, id: u16, tabs: &[&str]) -> Result<HWND> {
+        unsafe { create_tab_control(self.dialog_hwnd(), x, y, w, h, id, tabs) }
+    }
 }
 
 // ============================================================
@@ -620,6 +641,51 @@ macro_rules! impl_dialog {
             }
         }
     };
+}
+
+/// 탭 컨트롤 생성
+// SAFETY: Caller must provide a valid parent HWND.
+pub unsafe fn create_tab_control(
+    parent: HWND,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    id: u16,
+    tabs: &[&str],
+) -> Result<HWND> {
+    // SAFETY: parent is valid. SysTabControl32 is a standard common control class.
+    unsafe {
+        let hwnd = create_child(
+            parent,
+            w!("SysTabControl32"),
+            w!(""),
+            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPSIBLINGS.0),
+            WINDOW_EX_STYLE::default(),
+            x, y, w, h, id,
+        )?;
+
+        for (i, tab_text) in tabs.iter().enumerate() {
+            let mut text_wide = to_wide(tab_text);
+            let item = TCITEMW {
+                mask: TCIF_TEXT,
+                dw_state: 0,
+                dw_state_mask: 0,
+                psz_text: text_wide.as_mut_ptr(),
+                cch_text_max: 0,
+                i_image: -1,
+                l_param: 0,
+            };
+            let _ = SendMessageW(
+                hwnd,
+                TCM_INSERTITEMW,
+                Some(WPARAM(i)),
+                Some(LPARAM(&item as *const TCITEMW as isize)),
+            );
+        }
+
+        Ok(hwnd)
+    }
 }
 
 /// 트랙바(슬라이더) 생성
