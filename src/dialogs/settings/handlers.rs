@@ -200,8 +200,78 @@ impl SettingsDialog {
                 }
             }
 
+            // DeepL 보조 키 추가
+            DEEPL_KEY_ADD_BTN => self.deepl_keys_add(),
+            // DeepL 보조 키 삭제
+            DEEPL_KEY_REMOVE_BTN => self.deepl_keys_remove(),
+
+            // 글로서리 편집 다이얼로그
+            LLM_GLOSSARY_EDIT_BTN => self.open_glossary_editor(),
+
             _ => {}
         }
+    }
+
+    /// DeepL 보조 키 추가 — 입력 Edit 내용을 리스트박스에 추가하고 Config 동기화
+    fn deepl_keys_add(&mut self) {
+        let key = self.get_control_text(ctrl_id::DEEPL_KEY_ADD_EDIT);
+        let key = key.trim().to_string();
+        if key.is_empty() {
+            return;
+        }
+        // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox.
+        unsafe {
+            let listbox = match GetDlgItem(Some(self.hwnd), ctrl_id::DEEPL_KEYS_LIST as i32) {
+                Ok(h) if !h.is_invalid() => h,
+                _ => return,
+            };
+            let key_wide = to_wide(&key);
+            let _ = SendMessageW(
+                listbox,
+                crate::constants::LB_ADDSTRING,
+                Some(WPARAM(0)),
+                Some(LPARAM(key_wide.as_ptr() as isize)),
+            );
+        }
+        self.config.borrow_mut().translation.deepl_keys.push(key);
+        self.set_control_text(ctrl_id::DEEPL_KEY_ADD_EDIT, "");
+        self.notify_change();
+    }
+
+    /// DeepL 보조 키 삭제 — 선택된 항목 제거 및 Config 동기화
+    fn deepl_keys_remove(&mut self) {
+        // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox.
+        let sel = unsafe {
+            let listbox = match GetDlgItem(Some(self.hwnd), ctrl_id::DEEPL_KEYS_LIST as i32) {
+                Ok(h) if !h.is_invalid() => h,
+                _ => return,
+            };
+            let sel = SendMessageW(listbox, crate::constants::LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32;
+            if sel == crate::constants::LB_ERR { return; }
+            let _ = SendMessageW(
+                listbox,
+                crate::constants::LB_DELETESTRING,
+                Some(WPARAM(sel as usize)),
+                Some(LPARAM(0)),
+            );
+            sel
+        };
+        {
+            let mut cfg = self.config.borrow_mut();
+            if (sel as usize) < cfg.translation.deepl_keys.len() {
+                cfg.translation.deepl_keys.remove(sel as usize);
+            }
+        }
+        self.notify_change();
+    }
+
+    /// 글로서리 편집기 다이얼로그 열기
+    fn open_glossary_editor(&mut self) {
+        let config = self.config.clone();
+        let _ = crate::dialogs::glossary::GlossaryDialog::show(self.hwnd, config.clone());
+        // 다이얼로그가 닫힌 후 표시 라벨 갱신
+        let count = config.borrow().translation.llm.glossary.len();
+        self.set_control_text(ctrl_id::LLM_GLOSSARY_COUNT_LABEL, &format!("사전 항목: {}", count));
     }
 
     /// 색상 버튼 처리
@@ -266,6 +336,11 @@ impl SettingsDialog {
             MARGIN_Y_TRACKBAR => { self.config.borrow_mut().text_margin_y = value; }
             MARGIN_NAME_TRACKBAR => { self.config.borrow_mut().name_margin = value; }
             BORDER_SIZE_TRACKBAR => { self.config.borrow_mut().border_width = value; }
+            LLM_TEMPERATURE_TRACKBAR => {
+                let temp = (value as f32 / 100.0).clamp(0.0, 2.0);
+                self.config.borrow_mut().translation.llm.temperature = temp;
+                self.set_control_text(LLM_TEMPERATURE_LABEL, &format!("{:.2}", temp));
+            }
             _ => return,
         }
         self.notify_change();
@@ -302,6 +377,10 @@ impl SettingsDialog {
                     use crate::translation::LlmProvider;
                     let provider = LlmProvider::from_u8(sel as u8);
                     self.config.borrow_mut().translation.llm.set_provider(provider);
+                }
+                DEEPL_STRATEGY_COMBO => {
+                    let strategy = if sel == 1 { "round-robin" } else { "failover" };
+                    self.config.borrow_mut().translation.deepl_strategy = strategy.to_string();
                 }
                 _ => return,
             }
@@ -529,15 +608,15 @@ impl SettingsDialog {
                 self.config.borrow_mut().translation.llm.system_prompt = text;
                 self.notify_change();
             }
-            LLM_TEMPERATURE_EDIT => {
-                if let Ok(v) = text.trim().parse::<f32>() {
-                    self.config.borrow_mut().translation.llm.temperature = v.clamp(0.0, 2.0);
-                    self.notify_change();
-                }
-            }
             LLM_MAX_TOKENS_EDIT => {
                 if let Ok(v) = text.trim().parse::<u32>() {
                     self.config.borrow_mut().translation.llm.max_tokens = v.clamp(1, 32_000);
+                    self.notify_change();
+                }
+            }
+            LLM_DEBOUNCE_EDIT => {
+                if let Ok(v) = text.trim().parse::<u32>() {
+                    self.config.borrow_mut().translation.llm.debounce_ms = v.clamp(0, 10_000);
                     self.notify_change();
                 }
             }

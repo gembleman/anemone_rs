@@ -51,7 +51,7 @@ impl_dialog! {
     class_name: w!("AnemoneSettingsClass"),
     title: w!("아네모네 설정"),
     width: 500,
-    height: 720,
+    height: 780,
     extra_style: WINDOW_STYLE::default(),
     params: (parent: HWND, config: Rc<RefCell<Config>>, on_change: Option<SettingsChangeCallback>),
     init: |hwnd, parent, config, on_change| {
@@ -101,7 +101,7 @@ impl SettingsDialog {
 
             // ====== 탭 컨트롤 ======
             let tabs = ["외관", "표시·윈도우", "번역"];
-            self.create_tab_control(5, 5, 485, 650, ctrl_id::TAB_CONTROL, &tabs)?;
+            self.create_tab_control(5, 5, 485, 710, ctrl_id::TAB_CONTROL, &tabs)?;
 
             // 탭 내부 컨트롤 시작 오프셋 (탭 헤더 아래)
             let tx = 15;  // 탭 영역 내부 x
@@ -131,7 +131,7 @@ impl SettingsDialog {
             }
 
             // ====== 닫기 버튼 (탭 외부, 항상 표시) ======
-            self.create_button(385, 662, 100, 30, ctrl_id::CLOSE, "닫기")?;
+            self.create_button(385, 722, 100, 30, ctrl_id::CLOSE, "닫기")?;
 
             Ok(())
         }
@@ -380,7 +380,8 @@ impl SettingsDialog {
         unsafe {
             let tab = TAB_TRANSLATION;
 
-            let h = self.create_group_box(tx, ty, 460, 190, "번역 설정")?;
+            // ── 공통 엔진/언어 ──
+            let h = self.create_group_box(tx, ty, 460, 130, "번역 설정")?;
             self.register_control(tab, h);
 
             // 엔진 선택
@@ -431,29 +432,71 @@ impl SettingsDialog {
             let h = self.create_button(tx + 380, ty + 88, 70, 22, ctrl_id::EZTRANS_DAT_BROWSE, "찾아보기")?;
             self.register_control(tab, h);
 
-            // DeepL API 키
-            let h = self.create_label(tx + 15, ty + 120, 80, 18, "DeepL API키:")?;
+            // ── DeepL 그룹 ──
+            let dy = ty + 140;
+            let h = self.create_group_box(tx, dy, 460, 135, "DeepL")?;
+            self.register_control(tab, h);
+
+            // 단일 키 (deepl_keys 비어있을 때만 사용)
+            let h = self.create_label(tx + 15, dy + 25, 80, 18, "API 키 (단일):")?;
             self.register_control(tab, h);
             let api_key = self.config.borrow().translation.deepl_api_key.clone();
-            let h = self.create_edit(tx + 95, ty + 118, 355, 22, ctrl_id::DEEPL_API_KEY_EDIT, &api_key)?;
+            let h = self.create_edit(tx + 100, dy + 23, 345, 22, ctrl_id::DEEPL_API_KEY_EDIT, &api_key)?;
             self.register_control(tab, h);
 
-            // Papago Client ID / Secret
-            let h = self.create_label(tx + 15, ty + 150, 80, 18, "Papago ID:")?;
+            // 보조 키 목록 (멀티 키)
+            let h = self.create_label(tx + 15, dy + 53, 100, 18, "보조 키 목록:")?;
+            self.register_control(tab, h);
+            let h = self.create_label(tx + 305, dy + 53, 50, 18, "전략:")?;
+            self.register_control(tab, h);
+            let strategy_items = vec!["failover", "round-robin"];
+            let strategy_sel: usize = match self.config.borrow().translation.deepl_strategy.to_lowercase().as_str() {
+                "round-robin" | "roundrobin" | "rr" => 1,
+                _ => 0,
+            };
+            let h = self.create_combobox(tx + 345, dy + 51, 100, 120, ctrl_id::DEEPL_STRATEGY_COMBO, &strategy_items, strategy_sel)?;
+            self.register_control(tab, h);
+
+            let h = self.create_listbox(tx + 15, dy + 75, 285, 50, ctrl_id::DEEPL_KEYS_LIST)?;
+            self.register_control(tab, h);
+            // 초기 항목 채우기
+            {
+                let cfg = self.config.borrow();
+                use crate::constants::LB_ADDSTRING;
+                use crate::util::to_wide;
+                for k in &cfg.translation.deepl_keys {
+                    let kw = to_wide(k);
+                    let _ = SendMessageW(h, LB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(kw.as_ptr() as isize)));
+                }
+            }
+
+            let h = self.create_edit(tx + 305, dy + 75, 140, 22, ctrl_id::DEEPL_KEY_ADD_EDIT, "")?;
+            self.register_control(tab, h);
+            let h = self.create_button(tx + 305, dy + 100, 65, 22, ctrl_id::DEEPL_KEY_ADD_BTN, "추가")?;
+            self.register_control(tab, h);
+            let h = self.create_button(tx + 380, dy + 100, 65, 22, ctrl_id::DEEPL_KEY_REMOVE_BTN, "삭제")?;
+            self.register_control(tab, h);
+
+            // ── Papago 그룹 ──
+            let py = ty + 285;
+            let h = self.create_group_box(tx, py, 460, 70, "Papago")?;
+            self.register_control(tab, h);
+
+            let h = self.create_label(tx + 15, py + 22, 80, 18, "Client ID:")?;
             self.register_control(tab, h);
             let papago_id = self.config.borrow().translation.papago_client_id.clone();
-            let h = self.create_edit(tx + 95, ty + 148, 355, 22, ctrl_id::PAPAGO_ID_EDIT, &papago_id)?;
+            let h = self.create_edit(tx + 100, py + 20, 345, 22, ctrl_id::PAPAGO_ID_EDIT, &papago_id)?;
             self.register_control(tab, h);
 
-            let h = self.create_label(tx + 15, ty + 180, 80, 18, "Papago Secret:")?;
+            let h = self.create_label(tx + 15, py + 47, 80, 18, "Secret:")?;
             self.register_control(tab, h);
             let papago_secret = self.config.borrow().translation.papago_client_secret.clone();
-            let h = self.create_edit(tx + 95, ty + 178, 355, 22, ctrl_id::PAPAGO_SECRET_EDIT, &papago_secret)?;
+            let h = self.create_edit(tx + 100, py + 45, 345, 22, ctrl_id::PAPAGO_SECRET_EDIT, &papago_secret)?;
             self.register_control(tab, h);
 
             // ── LLM 번역 그룹 ──
-            let ly = ty + 210;
-            let h = self.create_group_box(tx, ly, 460, 245, "LLM 번역")?;
+            let ly = ty + 365;
+            let h = self.create_group_box(tx, ly, 460, 305, "LLM 번역")?;
             self.register_control(tab, h);
 
             // 제공자 + 모델
@@ -491,17 +534,35 @@ impl SettingsDialog {
             let h = self.create_multiline_edit(tx + 15, ly + 135, 435, 60, ctrl_id::LLM_SYSTEM_PROMPT_EDIT, &system_prompt)?;
             self.register_control(tab, h);
 
-            // Temperature + Max Tokens
-            let h = self.create_label(tx + 15, ly + 207, 90, 18, "Temperature:")?;
+            // Temperature 트랙바 (0.00 ~ 2.00, 100 단위 = 0~200)
+            let temperature_value = self.config.borrow().translation.llm.temperature;
+            let h = self.create_label(tx + 15, ly + 205, 90, 18, "Temperature:")?;
             self.register_control(tab, h);
-            let temperature = format!("{}", self.config.borrow().translation.llm.temperature);
-            let h = self.create_edit(tx + 105, ly + 205, 70, 22, ctrl_id::LLM_TEMPERATURE_EDIT, &temperature)?;
+            let temp_tb = self.create_trackbar(tx + 105, ly + 203, 180, 22, ctrl_id::LLM_TEMPERATURE_TRACKBAR, 0, 200)?;
+            self.register_control(tab, temp_tb);
+            let temp_pos = (temperature_value * 100.0).clamp(0.0, 200.0) as isize;
+            let _ = SendMessageW(temp_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(temp_pos)));
+            let h = self.create_label_with_id(tx + 290, ly + 207, 70, 18, ctrl_id::LLM_TEMPERATURE_LABEL, &format!("{:.2}", temperature_value))?;
             self.register_control(tab, h);
 
-            let h = self.create_label(tx + 195, ly + 207, 80, 18, "Max Tokens:")?;
+            // Max Tokens
+            let h = self.create_label(tx + 365, ly + 207, 30, 18, "Max:")?;
             self.register_control(tab, h);
             let max_tokens = format!("{}", self.config.borrow().translation.llm.max_tokens);
-            let h = self.create_edit(tx + 275, ly + 205, 90, 22, ctrl_id::LLM_MAX_TOKENS_EDIT, &max_tokens)?;
+            let h = self.create_edit(tx + 395, ly + 205, 55, 22, ctrl_id::LLM_MAX_TOKENS_EDIT, &max_tokens)?;
+            self.register_control(tab, h);
+
+            // Debounce + Glossary 편집
+            let h = self.create_label(tx + 15, ly + 237, 90, 18, "디바운스(ms):")?;
+            self.register_control(tab, h);
+            let debounce = format!("{}", self.config.borrow().translation.llm.debounce_ms);
+            let h = self.create_edit(tx + 105, ly + 235, 70, 22, ctrl_id::LLM_DEBOUNCE_EDIT, &debounce)?;
+            self.register_control(tab, h);
+
+            let glossary_count = self.config.borrow().translation.llm.glossary.len();
+            let h = self.create_label_with_id(tx + 195, ly + 237, 120, 18, ctrl_id::LLM_GLOSSARY_COUNT_LABEL, &format!("사전 항목: {}", glossary_count))?;
+            self.register_control(tab, h);
+            let h = self.create_button(tx + 325, ly + 235, 125, 22, ctrl_id::LLM_GLOSSARY_EDIT_BTN, "사전 편집...")?;
             self.register_control(tab, h);
 
             Ok(())

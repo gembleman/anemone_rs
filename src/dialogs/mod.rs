@@ -24,6 +24,7 @@ pub mod file_trans;
 pub mod file_trans_progress;
 pub mod file_trans_thread;
 pub mod font;
+pub mod glossary;
 pub mod hook_settings;
 pub mod settings;
 pub mod translate;
