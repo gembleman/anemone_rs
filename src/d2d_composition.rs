@@ -282,6 +282,18 @@ impl CompositionRenderer {
         unsafe { self.d2d_context.EndDraw(None, None) }
     }
 
+    /// 누적된 D2D 명령을 GPU 큐로 flush. `EndDraw` 가 내부적으로 같은 동작을
+    /// 수행하지만, EndDraw 비용을 phase 별로 분리 측정하려고 명시 분리.
+    ///
+    /// `EndDraw` 는 (a) 명령 flush, (b) BeginDraw 짝 닫기 (D2D batch state
+    /// 정리) 두 단계로 동작. `Flush` 만 단독 호출하면 (a) 부분의 비용을
+    /// 측정 가능. 호출 후에도 BeginDraw 상태는 유지되므로 그 뒤 `EndDraw`
+    /// 가 호출돼야 다음 BeginDraw 가 가능.
+    pub fn flush(&self) -> Result<()> {
+        // SAFETY: BeginDraw 와 EndDraw 사이에서 호출. tag 출력은 None.
+        unsafe { self.d2d_context.Flush(None, None) }
+    }
+
     /// swap chain back buffer 를 화면에 제출.
     ///
     /// `end_draw_and_present` 의 Present 단독 호출 버전. 벤치마크에서

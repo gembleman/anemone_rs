@@ -134,7 +134,8 @@ pub fn paint_bench_iters() -> Option<usize> {
 /// - `begin_clear` — BeginDraw + 배경 클리어
 /// - `border` — 테두리 그리기 (border_visible 시)
 /// - `text` — 텍스트 그리기 (DirectWrite + outline geometry)
-/// - `end_draw` — EndDraw (D2D 명령 GPU 큐 flush)
+/// - `flush` — EndDraw 직전 명시 `Flush` (GPU 명령 큐 제출 비용 분리)
+/// - `end_draw` — `Flush` 후의 EndDraw (BeginDraw 짝 닫기 + 잔여 비용)
 /// - `present` — swap chain Present
 /// - `hit_region` — hit-test 사각형 갱신 (`background_visible=false` 시)
 pub struct PhaseRecord {
@@ -145,6 +146,7 @@ pub struct PhaseRecord {
     pub begin_clear: i64,
     pub border: i64,
     pub text: i64,
+    pub flush: i64,
     pub end_draw: i64,
     pub present: i64,
     pub hit_region: i64,
@@ -160,6 +162,7 @@ impl PhaseRecord {
             begin_clear: 0,
             border: 0,
             text: 0,
+            flush: 0,
             end_draw: 0,
             present: 0,
             hit_region: 0,
@@ -178,6 +181,7 @@ impl PhaseRecord {
             PhaseField::BeginClear => self.begin_clear += delta,
             PhaseField::Border => self.border += delta,
             PhaseField::Text => self.text += delta,
+            PhaseField::Flush => self.flush += delta,
             PhaseField::EndDraw => self.end_draw += delta,
             PhaseField::Present => self.present += delta,
             PhaseField::HitRegion => self.hit_region += delta,
@@ -199,6 +203,7 @@ pub enum PhaseField {
     BeginClear,
     Border,
     Text,
+    Flush,
     EndDraw,
     Present,
     HitRegion,
@@ -263,6 +268,7 @@ pub struct PhasedBenchAccumulator {
     pub begin_clear: BenchAccumulator,
     pub border: BenchAccumulator,
     pub text: BenchAccumulator,
+    pub flush: BenchAccumulator,
     pub end_draw: BenchAccumulator,
     pub present: BenchAccumulator,
     pub hit_region: BenchAccumulator,
@@ -278,6 +284,7 @@ impl PhasedBenchAccumulator {
             begin_clear: BenchAccumulator::with_capacity(n),
             border: BenchAccumulator::with_capacity(n),
             text: BenchAccumulator::with_capacity(n),
+            flush: BenchAccumulator::with_capacity(n),
             end_draw: BenchAccumulator::with_capacity(n),
             present: BenchAccumulator::with_capacity(n),
             hit_region: BenchAccumulator::with_capacity(n),
@@ -292,6 +299,7 @@ impl PhasedBenchAccumulator {
         self.begin_clear.push(rec.begin_clear);
         self.border.push(rec.border);
         self.text.push(rec.text);
+        self.flush.push(rec.flush);
         self.end_draw.push(rec.end_draw);
         self.present.push(rec.present);
         self.hit_region.push(rec.hit_region);
@@ -306,6 +314,7 @@ impl PhasedBenchAccumulator {
         self.begin_clear.report("paint_detailed_begin_clear");
         self.border.report("paint_detailed_border");
         self.text.report("paint_detailed_text");
+        self.flush.report("paint_detailed_flush");
         self.end_draw.report("paint_detailed_end_draw");
         self.present.report("paint_detailed_present");
         self.hit_region.report("paint_detailed_hit_region");
@@ -323,4 +332,23 @@ pub fn paint_bench_detailed_iters() -> Option<usize> {
     let raw = std::env::var("ANEMONE_BENCH_PAINT_DETAILED").ok()?;
     let n: usize = raw.trim().parse().ok()?;
     if n == 0 { None } else { Some(n) }
+}
+
+/// 벤치 측정 시 outline/shadow 를 강제 비활성화한다. `Flush` 비용의
+/// 출처가 outline/shadow geometry 인지 텍스트 본문 (`DrawTextLayout`)
+/// 인지 분리 측정하기 위한 토글.
+///
+/// 효과:
+/// - `style.outline1_size = 0`
+/// - `style.outline2_size = 0`
+/// - `style.shadow_enabled = false`
+///
+/// 정상 동작 paint 에는 영향 없음 — bench 함수 내부에서만 임시 override.
+pub fn bench_disable_outline() -> bool {
+    matches!(
+        std::env::var("ANEMONE_BENCH_PAINT_NO_OUTLINE")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("true")
+    )
 }

@@ -363,11 +363,17 @@ impl App {
         }
         let t = phase_record(PhaseField::Text, t);
 
-        // EndDraw + Present 를 분리 호출 — phase 측정용. 정상 동작은
-        // `end_draw_and_present` 와 동일하다.
+        // Flush + EndDraw + Present 를 분리 호출 — phase 측정용. 정상 동작은
+        // `end_draw_and_present` 와 동일하다 (Flush 는 EndDraw 내부에서도
+        // 수행되므로 중복이지만 비용 분리 목적).
         // sync_interval=0: 응답성 우선 (paint 는 이벤트 기반이라 매 프레임 호출되지
         // 않으므로 GPU 큐 백프레셔 위험 낮음). baseline 의 UpdateLayeredWindow 도
         // vsync 미대기였으니 동일 정책.
+        if let Err(e) = composition.flush() {
+            tracing::error!("DComp flush failed: {e}");
+        }
+        let t = phase_record(PhaseField::Flush, t);
+
         if let Err(e) = composition.end_draw() {
             tracing::error!("DComp end_draw failed: {e}");
         }
@@ -456,9 +462,28 @@ impl App {
     /// 자체는 일반 `paint` 벤치보다 약간 더 느릴 수 있다.
     fn run_paint_bench_detailed(&mut self, iters: usize) {
         const WARMUP: usize = 16;
+
+        // `ANEMONE_BENCH_PAINT_NO_OUTLINE=1` 토글 — Flush 비용의 출처가
+        // outline/shadow geometry 인지 텍스트 본문인지 분리 측정. config 를
+        // 임시로 수정하고 측정 후 원복한다 (production paint 경로는 무변경).
+        let no_outline = crate::bench::bench_disable_outline();
+        let saved_style = if no_outline {
+            let mut cfg = self.config.borrow_mut();
+            let original = cfg.translation_style.clone();
+            cfg.translation_style.outline1_size = 0;
+            cfg.translation_style.outline2_size = 0;
+            cfg.translation_style.shadow_enabled = false;
+            Some(original)
+        } else {
+            None
+        };
+
         for _ in 0..WARMUP {
             if let Err(e) = self.paint() {
                 tracing::warn!("bench detailed warmup paint failed: {e}");
+                if let Some(s) = saved_style {
+                    self.config.borrow_mut().translation_style = s;
+                }
                 return;
             }
         }
@@ -471,6 +496,9 @@ impl App {
             if let Err(e) = self.paint() {
                 tracing::warn!("bench detailed paint failed: {e}");
                 crate::bench::phase_end(); // 슬롯 비워서 다음 측정 안전
+                if let Some(s) = saved_style {
+                    self.config.borrow_mut().translation_style = s;
+                }
                 return;
             }
             let t1 = outer_timer.now();
@@ -479,6 +507,10 @@ impl App {
             }
         }
         phased.report();
+
+        if let Some(s) = saved_style {
+            self.config.borrow_mut().translation_style = s;
+        }
     }
 
     fn resize(&mut self, width: i32, height: i32) -> Result<()> {

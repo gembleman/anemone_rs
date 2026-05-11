@@ -18,8 +18,14 @@
 
 #![cfg(windows)]
 
+// d2d_composition 의 일부 API (flush 등) 는 메인 binary 만 사용하므로
+// example 격리 컴파일 시 dead_code 로 잡힌다 — 모듈 단위로 봉합.
+#[allow(dead_code)]
 #[path = "../src/d2d_composition.rs"]
 mod d2d_composition;
+// bench 모듈에는 메인 binary 만 사용하는 phase 측정 인프라가 들어있다.
+// example 격리 컴파일이라 일부 항목이 dead_code 로 잡혀 모듈 단위로 봉합.
+#[allow(dead_code)]
 #[path = "../src/bench.rs"]
 mod bench;
 
@@ -240,10 +246,20 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
 }
 
 fn render_frame_vsync() -> Result<()> {
-    render_frame(1)
+    render_frame(1, RenderMode::Interactive)
 }
 
-fn render_frame(sync_interval: u32) -> Result<()> {
+#[derive(Copy, Clone)]
+enum RenderMode {
+    /// 인터랙티브 — 빨간 배경 + 사각형 + 짧은 텍스트로 시각 검증.
+    Interactive,
+    /// 벤치 — `app.rs::paint` 와 같은 워크로드 (default TextStyle:
+    /// 맑은 고딕 22 / outline1=2 / outline2=4 / shadow_enabled=true,
+    /// 초기 텍스트, 400×200 윈도우, margin 10) 를 재현.
+    BenchMatchApp,
+}
+
+fn render_frame(sync_interval: u32, mode: RenderMode) -> Result<()> {
     RENDERER.with(|r| -> Result<()> {
         // `try_borrow` 로 재진입 (WM_SIZE 처리 중 BeginPaint → WM_PAINT 가
         // 같은 스레드에서 즉시 재호출되는 경로) 시 panic 대신 그리기 스킵.
@@ -251,91 +267,154 @@ fn render_frame(sync_interval: u32) -> Result<()> {
             return Ok(());
         };
         let renderer = borrowed.as_ref().ok_or_else(|| Error::from_hresult(E_FAIL))?;
+
+        // waitable swap chain — 메인 paint 와 동일하게 다음 back buffer 가
+        // 사용 가능해질 때까지 명시 wait. 안 부르면 EndDraw 내부에서 같은
+        // 대기가 발생해 phase 별 비용이 EndDraw 로 합쳐진다.
+        renderer.wait_for_back_buffer(1000);
+
         let ctx = renderer.begin_draw();
 
-        let frame = FRAME_COUNT.with(|c| *c.borrow());
-        let offset = ((frame % 8) as f32) * 6.0;
-
-        // pre-multiplied alpha 이므로 RGB 채널에도 α 를 곱해서 넣어야 한다.
-        // (R, G, B, A) 각각 [0,1].
-        let red_bg = premul(1.0, 0.2, 0.2, 0.85);
-        let blue_box = premul(0.2, 0.4, 1.0, 1.0);
-        let white_translucent = premul(1.0, 1.0, 1.0, 0.4);
-
-        // SAFETY: ctx 는 begin_draw 가 BeginDraw 를 부른 직후의 컨텍스트.
-        // EndDraw 는 end_draw_and_present 가 호출한다.
-        unsafe {
-            ctx.Clear(Some(&red_bg));
-
-            let blue_brush = ctx.CreateSolidColorBrush(&blue_box, None)?;
-            ctx.FillRectangle(
-                &D2D_RECT_F {
-                    left: 40.0 + offset,
-                    top: 40.0,
-                    right: 240.0 + offset,
-                    bottom: 200.0,
-                },
-                &blue_brush,
-            );
-
-            let white_brush = ctx.CreateSolidColorBrush(&white_translucent, None)?;
-            ctx.FillRectangle(
-                &D2D_RECT_F {
-                    left: 120.0,
-                    top: 100.0,
-                    right: 360.0,
-                    bottom: 260.0,
-                },
-                &white_brush,
-            );
+        match mode {
+            RenderMode::Interactive => draw_interactive(ctx)?,
+            RenderMode::BenchMatchApp => draw_bench_match_app(ctx)?,
         }
 
-        // ── D2DRenderer 결합 시연 ─────────────────────────────────
-        //
-        // CompositionRenderer 가 돌려준 `&ID2D1DeviceContext` 를 그대로 — cast
-        // 없이 deref coercion 만으로 — D2DRenderer 의 일반화된 그리기 메서드에
-        // 전달한다. `&ID2D1DeviceContext` → `&ID2D1RenderTarget` 으로 자동 변환
-        // 되는 것이 1 단계 일반화의 핵심.
-        D2D.with(|c| -> Result<()> {
-            let Ok(mut borrowed_d2d) = c.try_borrow_mut() else { return Ok(()); };
-            let Some(d2d) = borrowed_d2d.as_mut() else { return Ok(()); };
-
-            // 한 프레임 시작 — 캐시 reset + AA 모드.
-            d2d.configure_frame(ctx);
-
-            // 노란 외곽선 (10px 두께) — paint 영역 사이즈는 윈도우 클라이언트
-            // 사이즈와 동일하게 사용 (WM_SIZE 시 swap chain 도 같이 resize 됨).
-            let yellow = 0xFFFFD000;
-            d2d.draw_border(ctx, 640, 360, 4, yellow)?;
-
-            // 외곽선/그림자 포함 텍스트 — DC 경로의 paint 와 동일 시그니처.
-            let style = TextRenderStyle {
-                font_size: 28,
-                font_face: "Segoe UI".to_string(),
-                font_style: 1, // bold
-                color: 0xFFFFFFFF,
-                outline1_size: 2,
-                outline1_color: 0xFF000000,
-                outline2_size: 0,
-                outline2_color: 0xFF000000,
-                shadow_enabled: true,
-                shadow_color: 0xC0000000,
-                shadow_offset_x: 2,
-                shadow_offset_y: 2,
-            };
-            d2d.draw_text(
-                ctx,
-                "D2DRenderer ▸ DComp 결합 OK",
-                20.0,
-                300.0,
-                600.0,
-                40.0,
-                &style,
-            )?;
-            Ok(())
-        })?;
-
         renderer.end_draw_and_present(sync_interval)?;
+        Ok(())
+    })
+}
+
+fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
+    let frame = FRAME_COUNT.with(|c| *c.borrow());
+    let offset = ((frame % 8) as f32) * 6.0;
+
+    // pre-multiplied alpha 이므로 RGB 채널에도 α 를 곱해서 넣어야 한다.
+    // (R, G, B, A) 각각 [0,1].
+    let red_bg = premul(1.0, 0.2, 0.2, 0.85);
+    let blue_box = premul(0.2, 0.4, 1.0, 1.0);
+    let white_translucent = premul(1.0, 1.0, 1.0, 0.4);
+
+    // SAFETY: ctx 는 begin_draw 가 BeginDraw 를 부른 직후의 컨텍스트.
+    unsafe {
+        ctx.Clear(Some(&red_bg));
+
+        let blue_brush = ctx.CreateSolidColorBrush(&blue_box, None)?;
+        ctx.FillRectangle(
+            &D2D_RECT_F {
+                left: 40.0 + offset,
+                top: 40.0,
+                right: 240.0 + offset,
+                bottom: 200.0,
+            },
+            &blue_brush,
+        );
+
+        let white_brush = ctx.CreateSolidColorBrush(&white_translucent, None)?;
+        ctx.FillRectangle(
+            &D2D_RECT_F {
+                left: 120.0,
+                top: 100.0,
+                right: 360.0,
+                bottom: 260.0,
+            },
+            &white_brush,
+        );
+    }
+
+    // ── D2DRenderer 결합 시연 ─────────────────────────────────
+    //
+    // CompositionRenderer 가 돌려준 `&ID2D1DeviceContext` 를 그대로 — cast
+    // 없이 deref coercion 만으로 — D2DRenderer 의 일반화된 그리기 메서드에
+    // 전달한다. `&ID2D1DeviceContext` → `&ID2D1RenderTarget` 으로 자동 변환
+    // 되는 것이 1 단계 일반화의 핵심.
+    D2D.with(|c| -> Result<()> {
+        let Ok(mut borrowed_d2d) = c.try_borrow_mut() else {
+            return Ok(());
+        };
+        let Some(d2d) = borrowed_d2d.as_mut() else { return Ok(()); };
+
+        // 한 프레임 시작 — 캐시 reset + AA 모드.
+        d2d.configure_frame(ctx);
+
+        // 노란 외곽선 (4px 두께)
+        let yellow = 0xFFFFD000;
+        d2d.draw_border(ctx, 640, 360, 4, yellow)?;
+
+        let style = TextRenderStyle {
+            font_size: 28,
+            font_face: "Segoe UI".to_string(),
+            font_style: 1, // bold
+            color: 0xFFFFFFFF,
+            outline1_size: 2,
+            outline1_color: 0xFF000000,
+            outline2_size: 4,
+            outline2_color: 0xFF404040,
+            shadow_enabled: true,
+            shadow_color: 0xC0000000,
+            shadow_offset_x: 2,
+            shadow_offset_y: 2,
+        };
+        d2d.draw_text(
+            ctx,
+            "D2DRenderer ▸ DComp 결합 OK",
+            20.0,
+            300.0,
+            600.0,
+            40.0,
+            &style,
+        )?;
+        Ok(())
+    })
+}
+
+/// 메인 `app.rs::paint` 와 동일한 워크로드 — default TextStyle / 초기
+/// 텍스트 / 400×200 윈도우 / margin 10. paint() 가 default config 에서
+/// 무엇을 그리는지 정확히 재현한다.
+fn draw_bench_match_app(ctx: &ID2D1DeviceContext) -> Result<()> {
+    // 메인 paint 의 배경 처리: background_visible=true 일 때 default
+    // background_color. config::Config default 와 동일한 값 사용.
+    let bg = premul(0.0, 0.0, 0.0, 0.0); // background_visible 가 보통 false 라 ARGB=0
+    unsafe { ctx.Clear(Some(&bg)); }
+
+    D2D.with(|c| -> Result<()> {
+        let Ok(mut borrowed_d2d) = c.try_borrow_mut() else { return Ok(()); };
+        let Some(d2d) = borrowed_d2d.as_mut() else { return Ok(()); };
+
+        d2d.configure_frame(ctx);
+
+        // 메인 paint 와 같은 default TextStyle (config.rs::TextStyle::default).
+        let style = TextRenderStyle {
+            font_size: 22,
+            font_face: "맑은 고딕".to_string(),
+            font_style: 0,
+            color: 0xFFFFFFFF,
+            outline1_size: 2,
+            outline1_color: 0xFF000000,
+            outline2_size: 4,
+            outline2_color: 0xFF404040,
+            shadow_enabled: true,
+            shadow_color: 0x80000000,
+            shadow_offset_x: 2,
+            shadow_offset_y: 2,
+        };
+
+        // 400×200 윈도우 / margin 10 — paint() 와 동일.
+        const WIDTH: i32 = 400;
+        const HEIGHT: i32 = 200;
+        const MARGIN: i32 = 10;
+        let max_width = (WIDTH - MARGIN * 2) as f32;
+        let max_height = (HEIGHT - MARGIN * 2) as f32;
+
+        d2d.draw_text(
+            ctx,
+            "아네모네 시작됨 - 클립보드를 복사해보세요",
+            MARGIN as f32,
+            MARGIN as f32,
+            max_width,
+            max_height,
+            &style,
+        )?;
         Ok(())
     })
 }
@@ -368,7 +447,7 @@ fn run_composition_bench(iters: usize) {
     // 비용이 가려진다. baseline 의 `UpdateLayeredWindow` 도 vsync 대기를
     // 하지 않으므로 비교 조건을 맞추는 것과도 부합.
     for _ in 0..WARMUP {
-        if let Err(e) = render_frame(0) {
+        if let Err(e) = render_frame(0, RenderMode::BenchMatchApp) {
             eprintln!("bench warmup failed: {e}");
             return;
         }
@@ -377,7 +456,7 @@ fn run_composition_bench(iters: usize) {
     let mut acc = BenchAccumulator::with_capacity(iters);
     for _ in 0..iters {
         let t0 = acc.timer().now();
-        if let Err(e) = render_frame(0) {
+        if let Err(e) = render_frame(0, RenderMode::BenchMatchApp) {
             eprintln!("bench paint failed: {e}");
             return;
         }
