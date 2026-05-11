@@ -160,6 +160,11 @@ impl App {
                 // 초기 페인트
                 app_ref.paint()?;
 
+                // 벤치마크 모드: 환경변수로 켜진 경우 paint() N 회 측정
+                if let Some(iters) = crate::bench::paint_bench_iters() {
+                    app_ref.run_paint_bench(iters);
+                }
+
                 // 클립보드 감시 여부 확인 (borrow_mut 블록 안에서)
                 app_ref.config.borrow().clipboard_watch
             };
@@ -306,6 +311,34 @@ impl App {
         window::update_layered_window(self.hwnd, buffer)?;
 
         Ok(())
+    }
+
+    /// paint() 1 회 비용을 N 회 반복 측정해 통계를 로그로 출력.
+    ///
+    /// `ANEMONE_BENCH_PAINT=<N>` 환경변수가 설정된 경우 초기 paint 직후 1 회
+    /// 호출된다. D2D 합성 경로 (DCRenderTarget → HwndRT/DComp) 재작성 결정의
+    /// baseline 측정용.
+    fn run_paint_bench(&mut self, iters: usize) {
+        // 워밍업 (캐시 / 셰이더 컴파일 등의 1 회성 비용 제거)
+        const WARMUP: usize = 16;
+        for _ in 0..WARMUP {
+            if let Err(e) = self.paint() {
+                tracing::warn!("bench warmup paint failed: {e}");
+                return;
+            }
+        }
+
+        let mut acc = crate::bench::BenchAccumulator::with_capacity(iters);
+        for _ in 0..iters {
+            let t0 = acc.timer().now();
+            if let Err(e) = self.paint() {
+                tracing::warn!("bench paint failed: {e}");
+                return;
+            }
+            let t1 = acc.timer().now();
+            acc.push(t1 - t0);
+        }
+        acc.report("paint");
     }
 
     fn resize(&mut self, width: i32, height: i32) -> Result<()> {
