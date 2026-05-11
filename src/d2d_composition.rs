@@ -50,7 +50,7 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::{
-            Direct2D::{Common::*, *},
+            Direct2D::*,
             Direct3D::*,
             Direct3D11::*,
             DirectComposition::*,
@@ -74,7 +74,11 @@ pub struct CompositionRenderer {
     /// composition 용 swap chain (no-hwnd, flip + premultiplied alpha)
     swap_chain: IDXGISwapChain1,
     /// swap chain back buffer 를 wrap 한 D2D 비트맵. resize 시 재생성.
-    bitmap: ID2D1Bitmap1,
+    ///
+    /// `Option` 인 이유: `ResizeBuffers` 가 outstanding back buffer reference 를
+    /// 거부 (DXGI_ERROR_INVALID_CALL) 하므로 호출 전에 이 필드도 `None` 으로
+    /// drop 시켜야 한다. 정상 상태에서는 항상 `Some`.
+    bitmap: Option<ID2D1Bitmap1>,
 
     // ── DirectComposition 트리 ────────────────────────
     /// DComp 디바이스. `Commit` 메서드 보유.
@@ -180,7 +184,7 @@ impl CompositionRenderer {
                 _d3d_device: d3d_device,
                 d2d_context,
                 swap_chain,
-                bitmap,
+                bitmap: Some(bitmap),
                 dcomp_device,
                 _dcomp_target: dcomp_target,
                 _dcomp_visual: dcomp_visual,
@@ -203,33 +207,36 @@ impl CompositionRenderer {
 
     /// 그리기 종료 + swap chain 제출.
     ///
+    /// `sync_interval` 은 DXGI `Present` 의 첫 인자:
+    /// - `1` — 다음 vsync 까지 대기 (60 fps 제한, 본 앱의 정상 운용 값)
+    /// - `0` — 즉시 반환 (벤치마크 / 자유 프레임 페이싱 용)
+    ///
     /// device-lost (`D2DERR_RECREATE_TARGET`) 시 `Err` 를 반환한다. 호출자는
     /// 스택을 새로 만들어야 한다 (현재 PoC 에서는 재생성 로직 미포함).
-    pub fn end_draw_and_present(&self) -> Result<()> {
+    pub fn end_draw_and_present(&self, sync_interval: u32) -> Result<()> {
         // SAFETY: BeginDraw 와 짝. Present 는 매 프레임 호출.
         unsafe {
             self.d2d_context.EndDraw(None, None)?;
-            self.swap_chain.Present(1, DXGI_PRESENT::default()).ok()?;
+            self.swap_chain.Present(sync_interval, DXGI_PRESENT::default()).ok()?;
         }
         Ok(())
     }
 
     /// 윈도우 리사이즈 처리.
     ///
-    /// `ResizeBuffers` 호출 전에 D2D 가 잡고 있는 back buffer 참조를 모두
-    /// 풀어야 하므로 `SetTarget(None)` + bitmap drop 을 먼저 한다.
+    /// `ResizeBuffers` 는 swap chain back buffer 에 대한 모든 outstanding
+    /// reference 가 해제돼야 성공한다. D2D 컨텍스트의 target 뿐 아니라
+    /// `self.bitmap` 자체도 reference 를 잡고 있으므로 둘 다 풀어야 한다.
     pub fn resize(&mut self, width: u32, height: u32) -> Result<()> {
         if width == 0 || height == 0 {
             return Ok(());
         }
 
-        // SAFETY: SetTarget(None) 으로 bitmap 의 back buffer 참조를 끊은 뒤
-        // ResizeBuffers 호출 → 새 back buffer 를 다시 wrap.
+        // SAFETY: SetTarget(None) + bitmap = None 으로 back buffer reference 를
+        // 모두 끊고 ResizeBuffers 호출 → 새 back buffer 를 다시 wrap → SetTarget.
         unsafe {
             self.d2d_context.SetTarget(None);
-            // bitmap 자체도 swap chain back buffer 를 잡고 있으므로 교체
-            // 가능하도록 일단 dummy 1x1 로 대체하지 않고 ResizeBuffers 에 의존.
-            // (Rust 소유권상 bitmap 필드는 즉시 새 값으로 덮어쓴다.)
+            self.bitmap = None;
             self.swap_chain.ResizeBuffers(
                 0, // BufferCount 유지
                 width,
@@ -237,8 +244,9 @@ impl CompositionRenderer {
                 DXGI_FORMAT_UNKNOWN, // 포맷 유지
                 DXGI_SWAP_CHAIN_FLAG::default(),
             )?;
-            self.bitmap = create_bitmap_from_swapchain(&self.d2d_context, &self.swap_chain)?;
-            self.d2d_context.SetTarget(&self.bitmap);
+            let new_bitmap = create_bitmap_from_swapchain(&self.d2d_context, &self.swap_chain)?;
+            self.d2d_context.SetTarget(&new_bitmap);
+            self.bitmap = Some(new_bitmap);
         }
         Ok(())
     }
@@ -263,16 +271,13 @@ unsafe fn create_bitmap_from_swapchain(
     // 이 포함된 유효한 객체. 인덱스 0 은 항상 존재.
     unsafe {
         let surface: IDXGISurface = swap_chain.GetBuffer(0)?;
-        let props = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-            colorContext: std::mem::ManuallyDrop::new(None),
-        };
-        dc.CreateBitmapFromDxgiSurface(&surface, Some(&props))
+        // `D2D1_BITMAP_PROPERTIES1` 의 `colorContext` 필드 (`ManuallyDrop<
+        // Option<ID2D1ColorContext>>`) 는 raw COM 포인터 자리라 `None` 으로
+        // 채워도 D2D 가 E_INVALIDARG 로 거부하는 사례가 있다. props 를 통째로
+        // None 으로 넘기면 D2D 가 DXGI surface 의 메타데이터 (BGRA8 +
+        // premultiplied, swap chain 디스크립션과 동일) 를 그대로 사용한다.
+        // render target 용 bitmap options 도 surface 가 RENDER_TARGET_OUTPUT
+        // 으로 만들어진 점에서 자동 추론된다.
+        dc.CreateBitmapFromDxgiSurface(&surface, None)
     }
 }
