@@ -1,10 +1,6 @@
 use std::mem::zeroed;
-use std::ptr::null_mut;
 
-use windows::{
-    Win32::{Foundation::*, Graphics::Gdi::*, UI::WindowsAndMessaging::*},
-    core::*,
-};
+use windows::Win32::{Foundation::*, Graphics::Gdi::ScreenToClient, UI::WindowsAndMessaging::*};
 
 /// 텍스트 렌더링 스타일
 #[derive(Clone, Debug)]
@@ -21,102 +17,6 @@ pub struct TextRenderStyle {
     pub shadow_color: u32,
     pub shadow_offset_x: i32,
     pub shadow_offset_y: i32,
-}
-
-/// 더블 버퍼링용 DIB 섹션
-pub struct DoubleBuffer {
-    hdc_mem: HDC,
-    hbitmap: HBITMAP,
-    hbitmap_old: HGDIOBJ,
-    pub width: i32,
-    pub height: i32,
-}
-
-impl Drop for DoubleBuffer {
-    fn drop(&mut self) {
-        // SAFETY: hdc_mem, hbitmap, and hbitmap_old were created in new() and are valid GDI
-        // objects. They are cleaned up in the correct order: restore old bitmap, delete bitmap,
-        // delete DC.
-        unsafe {
-            SelectObject(self.hdc_mem, self.hbitmap_old);
-            let _ = DeleteObject(self.hbitmap.into());
-            let _ = DeleteDC(self.hdc_mem);
-        }
-    }
-}
-
-impl DoubleBuffer {
-    pub fn new(hdc: HDC, width: i32, height: i32) -> Result<Self> {
-        // SAFETY: hdc is a valid device context from the caller. CreateCompatibleDC,
-        // CreateDIBSection, and SelectObject are standard GDI calls with valid parameters.
-        unsafe {
-            let hdc_mem = CreateCompatibleDC(Some(hdc));
-            if hdc_mem.is_invalid() {
-                return Err(Error::from_hresult(HRESULT::from_win32(GetLastError().0)));
-            }
-
-            let mut bmi: BITMAPINFO = zeroed();
-            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = width;
-            bmi.bmiHeader.biHeight = -height; // top-down DIB
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB.0;
-
-            let mut bits: *mut std::ffi::c_void = null_mut();
-            let hbitmap = CreateDIBSection(Some(hdc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)?;
-
-            let hbitmap_old = SelectObject(hdc_mem, hbitmap.into());
-
-            Ok(Self {
-                hdc_mem,
-                hbitmap,
-                hbitmap_old,
-                width,
-                height,
-            })
-        }
-    }
-
-    pub fn hdc(&self) -> HDC {
-        self.hdc_mem
-    }
-
-}
-
-/// 레이어드 윈도우 업데이트
-pub fn update_layered_window(hwnd: HWND, buffer: &DoubleBuffer) -> Result<()> {
-    // SAFETY: hwnd is a valid layered window handle. buffer.hdc() returns a valid memory DC
-    // with a selected DIB section. GetDC(None)/ReleaseDC are called in matched pairs.
-    unsafe {
-        let hdc_screen = GetDC(None);
-        let size = SIZE {
-            cx: buffer.width,
-            cy: buffer.height,
-        };
-        let pt_src = POINT { x: 0, y: 0 };
-        let blend = BLENDFUNCTION {
-            BlendOp: AC_SRC_OVER as u8,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: AC_SRC_ALPHA as u8,
-        };
-
-        UpdateLayeredWindow(
-            hwnd,
-            Some(hdc_screen),
-            None,
-            Some(&size),
-            Some(buffer.hdc()),
-            Some(&pt_src),
-            COLORREF(0),
-            Some(&blend),
-            ULW_ALPHA,
-        )?;
-
-        ReleaseDC(None, hdc_screen);
-        Ok(())
-    }
 }
 
 /// 윈도우 표시/숨김

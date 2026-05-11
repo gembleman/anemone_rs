@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use windows::{
     Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
+        Foundation::*,
+        Graphics::Gdi::{ClientToScreen, HBRUSH, UpdateWindow},
+        System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
     core::*,
@@ -19,13 +21,14 @@ use crate::constants::{
     WM_DEFERRED_CLIPBOARD, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
 use crate::d2d::D2DRenderer;
+use crate::d2d_composition::CompositionRenderer;
 use crate::dialogs::{BacklogDialog, LogEntry, SettingsDialog, TranslateDialog, add_to_backlog};
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
 use crate::translation::{request_translation, take_response};
 use crate::tray::{self, TrayIcon};
-use crate::window::{self, DoubleBuffer, TextRenderStyle};
+use crate::window::{self, TextRenderStyle};
 
 const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
 const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
@@ -35,7 +38,6 @@ pub struct App {
     hwnd: HWND,
     width: i32,
     height: i32,
-    buffer: Option<DoubleBuffer>,
     config: Rc<RefCell<Config>>,
     tray: TrayIcon,
     menu: ContextMenu,
@@ -48,6 +50,10 @@ pub struct App {
     magnetic: Option<MagneticManager>,
     current_text: String,
     d2d_renderer: Option<D2DRenderer>,
+    /// DComp 합성 렌더러. lazy init: hwnd 가 보이는 시점 (`ShowWindow` 후)
+    /// 의 첫 paint 에서 만든다. client size 가 0 이면 swap chain 생성이
+    /// 실패하기 때문.
+    composition: Option<CompositionRenderer>,
     /// 대기 중인 번역의 원문 (번역 완료 시 백로그에 추가)
     pending_original_text: Option<String>,
 }
@@ -85,9 +91,12 @@ impl App {
                 None,
             )?;
 
-            // 메인 레이어드 윈도우 생성
+            // 메인 윈도우 생성 (DComp 합성 경로).
+            // - WS_EX_NOREDIRECTIONBITMAP: DWM 이 redirection surface 미할당 → DComp visual 노출
+            // - WS_EX_LAYERED 와 상호 배타. layered 시절의 픽셀 단위 알파는 swap chain
+            //   premultiplied alpha + DComp 가 동등 표현 제공.
             let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 CLASS_NAME,
                 WINDOW_TITLE,
                 WS_POPUP,
@@ -117,7 +126,6 @@ impl App {
                 hwnd,
                 width: INITIAL_WINDOW_WIDTH,
                 height: INITIAL_WINDOW_HEIGHT,
-                buffer: None,
                 config,
                 tray: TrayIcon::new(),
                 menu: ContextMenu::new()?,
@@ -130,6 +138,7 @@ impl App {
                 magnetic: None,
                 current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
                 d2d_renderer: Some(d2d_renderer),
+                composition: None,
                 pending_original_text: None,
             }));
 
@@ -138,14 +147,12 @@ impl App {
                 *cell.borrow_mut() = Some(app.clone());
             });
 
-            // 초기화
+            // 초기화 — 트레이/핫키 등 paint 와 무관한 셋업.
+            // 합성 경로는 client size > 0 (윈도우가 보인 후) 에서만 부착 가능하므로
+            // 첫 paint 는 ShowWindow 이후로 미룬다. 더블버퍼/UpdateLayeredWindow
+            // 의존이 사라져 ShowWindow 전에 픽셀을 채울 필요가 없다.
             let should_start_clipboard = {
                 let mut app_ref = app.borrow_mut();
-
-                // 더블 버퍼 초기화
-                let hdc = GetDC(Some(hwnd));
-                app_ref.buffer = Some(DoubleBuffer::new(hdc, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)?);
-                ReleaseDC(Some(hwnd), hdc);
 
                 // 트레이 아이콘 생성
                 app_ref.tray.create(hwnd, 0)?;
@@ -156,14 +163,6 @@ impl App {
                     tracing::warn!("Failed to register hotkeys: {e}");
                 }
                 app_ref.hotkey = Some(hotkey);
-
-                // 초기 페인트
-                app_ref.paint()?;
-
-                // 벤치마크 모드: 환경변수로 켜진 경우 paint() N 회 측정
-                if let Some(iters) = crate::bench::paint_bench_iters() {
-                    app_ref.run_paint_bench(iters);
-                }
 
                 // 클립보드 감시 여부 확인 (borrow_mut 블록 안에서)
                 app_ref.config.borrow().clipboard_watch
@@ -176,9 +175,20 @@ impl App {
                 app.borrow_mut().clipboard.start();
             }
 
-            // 윈도우 표시
+            // 윈도우 표시 → 첫 paint (CompositionRenderer lazy init 트리거).
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = UpdateWindow(hwnd);
+
+            {
+                let mut app_ref = app.borrow_mut();
+                if let Err(e) = app_ref.paint() {
+                    tracing::warn!("initial paint failed: {e}");
+                }
+                // 벤치마크 모드: 환경변수로 켜진 경우 paint() N 회 측정.
+                if let Some(iters) = crate::bench::paint_bench_iters() {
+                    app_ref.run_paint_bench(iters);
+                }
+            }
 
             // 메시지 루프
             let mut msg: MSG = zeroed();
@@ -187,10 +197,14 @@ impl App {
                 DispatchMessageW(&msg);
             }
 
-            // 정리
+            // 정리 순서:
+            // 1) App drop → tray/hotkey/clipboard/composition 등 RAII 해제
+            // 2) 번역 워커 스레드 + tokio runtime 명시 종료
+            //    (detach 채로 두면 main 리턴 후 CRT cleanup 단계에서 hang 위험)
             APP.with(|cell| {
                 *cell.borrow_mut() = None;
             });
+            crate::translation::shutdown();
 
             Ok(())
         }
@@ -225,10 +239,26 @@ impl App {
     }
 
     fn paint(&mut self) -> Result<()> {
-        let buffer = match &mut self.buffer {
-            Some(b) => b,
-            None => return Ok(()),
-        };
+        // 합성 렌더러 lazy init — 첫 paint 시 부착.
+        // hwnd 가 보이는 시점 (`ShowWindow` 이후) 이어야 클라이언트 사이즈가 양수다.
+        if self.composition.is_none() {
+            // D2DRenderer 의 factory 를 공유해 합성 경로의 device 를 같은 factory
+            // 위에서 만든다 → brush/geometry/text-layout 의 factory 일치 보장.
+            let Some(d2d_renderer) = self.d2d_renderer.as_ref() else {
+                tracing::warn!("paint: d2d_renderer 미초기화 — 합성 렌더러 부착 보류");
+                return Ok(());
+            };
+            match CompositionRenderer::new(self.hwnd, d2d_renderer.factory()) {
+                Ok(c) => {
+                    tracing::info!("DComp composition renderer initialized");
+                    self.composition = Some(c);
+                }
+                Err(e) => {
+                    tracing::error!("CompositionRenderer init failed: {e}");
+                    return Ok(());
+                }
+            }
+        }
 
         let cfg = self.config.borrow();
 
@@ -260,55 +290,56 @@ impl App {
 
         drop(cfg);
 
-        // D2D 렌더러로 그리기
-        if let Some(ref mut renderer) = self.d2d_renderer {
-            // DC 바인딩
-            if let Err(e) = renderer.bind_dc(buffer.hdc(), buffer.width, buffer.height) {
-                tracing::error!("D2D bind_dc failed: {e}");
-                return Ok(());
-            }
+        let composition = match self.composition.as_ref() {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+        let renderer = match self.d2d_renderer.as_mut() {
+            Some(r) => r,
+            None => return Ok(()),
+        };
 
-            // 렌더링 시작
-            renderer.begin_draw();
+        // 합성 경로: BeginDraw 는 CompositionRenderer 가 책임진다.
+        let ctx = composition.begin_draw();
 
-            // 배경 클리어
-            if background_visible {
-                renderer.clear(background_color);
-            } else {
-                renderer.clear(TRANSPARENT_ALPHA);
-            }
+        // 한 프레임 시작 — brush 캐시 reset + AA 모드.
+        renderer.configure_frame(ctx);
 
-            // 테두리 그리기
-            if border_visible {
-                if let Err(e) = renderer.draw_border(border_width, border_color) {
-                    tracing::error!("D2D draw_border failed: {e}");
-                }
-            }
+        // 배경 클리어 (배경 비활성 시 완전 투명)
+        let clear_color = if background_visible { background_color } else { TRANSPARENT_ALPHA };
+        renderer.clear(ctx, clear_color);
 
-            // 텍스트 그리기
-            if !self.current_text.is_empty() {
-                let max_width = (buffer.width - margin_x * 2) as f32;
-                let max_height = (buffer.height - margin_y * 2) as f32;
-                if let Err(e) = renderer.draw_text(
-                    &self.current_text,
-                    margin_x as f32,
-                    margin_y as f32,
-                    max_width,
-                    max_height,
-                    &render_style,
-                ) {
-                    tracing::error!("D2D draw_text failed: {e}");
-                }
-            }
+        // 테두리 그리기
+        if border_visible
+            && let Err(e) = renderer.draw_border(ctx, self.width, self.height, border_width, border_color)
+        {
+            tracing::error!("D2D draw_border failed: {e}");
+        }
 
-            // 렌더링 종료 (device loss 시 render target 자동 폐기 → 다음 paint에서 재생성)
-            if let Err(e) = renderer.end_draw() {
-                tracing::error!("D2D end_draw failed: {e}");
+        // 텍스트 그리기
+        if !self.current_text.is_empty() {
+            let max_width = (self.width - margin_x * 2) as f32;
+            let max_height = (self.height - margin_y * 2) as f32;
+            if let Err(e) = renderer.draw_text(
+                ctx,
+                &self.current_text,
+                margin_x as f32,
+                margin_y as f32,
+                max_width,
+                max_height,
+                &render_style,
+            ) {
+                tracing::error!("D2D draw_text failed: {e}");
             }
         }
 
-        // 레이어드 윈도우 업데이트
-        window::update_layered_window(self.hwnd, buffer)?;
+        // EndDraw + Present.
+        // sync_interval=0: 응답성 우선 (paint 는 이벤트 기반이라 매 프레임 호출되지
+        // 않으므로 GPU 큐 백프레셔 위험 낮음). baseline 의 UpdateLayeredWindow 도
+        // vsync 미대기였으니 동일 정책.
+        if let Err(e) = composition.end_draw_and_present(0) {
+            tracing::error!("DComp end_draw_and_present failed: {e}");
+        }
 
         Ok(())
     }
@@ -342,6 +373,8 @@ impl App {
     }
 
     fn resize(&mut self, width: i32, height: i32) -> Result<()> {
+        // 0 사이즈 (minimize) 는 paint/resize 모두 스킵 — DXGI ResizeBuffers 가
+        // 0 사이즈를 거부하며, 어차피 그릴 면적도 없다.
         if width <= 0 || height <= 0 {
             return Ok(());
         }
@@ -349,12 +382,13 @@ impl App {
         self.width = width;
         self.height = height;
 
-        // SAFETY: self.hwnd is a valid window handle created during App initialization.
-        // GetDC/ReleaseDC are called in matched pairs with the same hwnd.
-        unsafe {
-            let hdc = GetDC(Some(self.hwnd));
-            self.buffer = Some(DoubleBuffer::new(hdc, width, height)?);
-            ReleaseDC(Some(self.hwnd), hdc);
+        // 합성 렌더러가 이미 부착된 상태면 swap chain 도 따라 키운다.
+        // 첫 paint 전 (lazy init 직전) 의 WM_SIZE 는 self.composition 이 None 이라
+        // 자연 무시된다 — 다음 paint 의 lazy init 이 새 사이즈로 swap chain 을 만든다.
+        if let Some(composition) = self.composition.as_mut()
+            && let Err(e) = composition.resize(width as u32, height as u32)
+        {
+            tracing::error!("CompositionRenderer.resize failed: {e}");
         }
 
         self.paint()
@@ -430,10 +464,19 @@ impl App {
                 drop(cfg);
                 self.paint()?;
             }
-            // SAFETY: self.hwnd is a valid window handle created during App initialization.
+            // EXIT 처리는 RefCell mutable borrow 가 활성인 상태에서 실행된다.
+            // DestroyWindow 를 직접 부르면 같은 스레드에서 WM_DESTROY 가 동기 send
+            // 되어 wndproc 가 재진입하는데, 그 시점 borrow_mut 이 실패해
+            // dispatch_message 의 WM_DESTROY 분기 (PostQuitMessage 호출처) 를 못 타고
+            // DefWindowProcW 로 빠진다 → 프로세스 hang.
+            //
+            // PostMessageW(WM_CLOSE) 로 메시지 큐에 넣어두면, 현재 wndproc 가
+            // 끝나고 borrow 가 풀린 뒤 메시지 루프의 다음 패스에서 WM_CLOSE →
+            // 기본 DefWindowProcW 처리 → DestroyWindow → WM_DESTROY → PostQuitMessage
+            // 흐름이 정상 작동한다.
             menu::id::EXIT => unsafe {
-                if let Err(e) = DestroyWindow(self.hwnd) {
-                    tracing::error!("DestroyWindow failed: {e}");
+                if let Err(e) = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) {
+                    tracing::error!("PostMessageW(WM_CLOSE) failed: {e}");
                 }
             },
             _ => {}
@@ -785,10 +828,8 @@ impl App {
                 }
 
                 WM_DISPLAYCHANGE => {
-                    // 디스플레이 변경 시 render target 재생성 (DPI/해상도 변경 대응)
-                    if let Some(ref mut renderer) = self.d2d_renderer {
-                        renderer.invalidate_target();
-                    }
+                    // 합성 경로에서는 DComp/DXGI 가 모니터 변경에 자체 대응한다.
+                    // 즉시 다시 그려주기만 해도 갱신 효과로 충분.
                     if let Err(e) = self.paint() {
                         tracing::warn!("paint failed on display change: {e}");
                     }
@@ -797,9 +838,8 @@ impl App {
 
                 WM_DPICHANGED => {
                     // Per-Monitor V2: 모니터 간 이동 또는 OS DPI 변경 시 호출된다.
-                    // wParam 하위 워드 = 새 DPI. lParam = Windows 가 제안하는 RECT(논리 좌표는 아니고
-                    // 새 DPI 에 맞춰 스케일된 화면 좌표). 자식 컨트롤이 없는 D2D 레이어드 윈도우이므로
-                    // 권장 RECT 로 위치/크기를 갱신하고 render target 을 무효화하면 충분하다.
+                    // 자식 컨트롤이 없는 합성 윈도우이므로 권장 RECT 로 위치/크기만 갱신.
+                    // 위치/크기 변경은 WM_SIZE 를 유발해 거기서 swap chain resize + paint 가 이어진다.
                     if lparam.0 != 0 {
                         let rect = &*(lparam.0 as *const RECT);
                         let w = rect.right - rect.left;
@@ -813,12 +853,6 @@ impl App {
                             h,
                             SWP_NOZORDER | SWP_NOACTIVATE,
                         );
-                    }
-                    if let Some(ref mut renderer) = self.d2d_renderer {
-                        renderer.invalidate_target();
-                    }
-                    if let Err(e) = self.paint() {
-                        tracing::warn!("paint failed on DPI change: {e}");
                     }
                     Some(LRESULT(0))
                 }
@@ -962,6 +996,18 @@ impl App {
                 if let Some(result) = unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) } {
                     return result;
                 }
+            } else {
+                // borrow_mut 실패 = wndproc 재진입 (예: dispatch_message 처리 중에
+                // Win32 가 동기 send 한 메시지). 종료 메시지만은 fallback 처리해
+                // 메시지 루프가 멈추지 않도록 보장.
+                if msg == WM_DESTROY {
+                    tracing::warn!(
+                        "WM_DESTROY arrived during wndproc reentry (App borrowed) — \
+                         posting quit directly"
+                    );
+                    unsafe { PostQuitMessage(0) };
+                    return LRESULT(0);
+                }
             }
         }
 
@@ -969,3 +1015,4 @@ impl App {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 }
+

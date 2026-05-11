@@ -1,4 +1,5 @@
-#![windows_subsystem = "windows"]
+// 진단 중 — stdout 로그 확인용으로 console 서브시스템 유지.
+// #![windows_subsystem = "windows"]
 
 mod app;
 mod bench;
@@ -6,7 +7,6 @@ mod clipboard;
 mod config;
 mod constants;
 mod d2d;
-#[allow(dead_code)]
 mod d2d_composition;
 mod dialogs;
 mod dpi;

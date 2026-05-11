@@ -24,7 +24,7 @@ pub use eztrans::EzTransTranslator;
 pub use isolang::Language;
 pub use llm::LlmProvider;
 pub use worker::{
-    EngineCredentials, take_response, translate as request_translation,
+    EngineCredentials, shutdown, take_response, translate as request_translation,
     unregister_hwnd as unregister_translation_hwnd,
 };
 

@@ -92,11 +92,15 @@ pub struct CompositionRenderer {
 impl CompositionRenderer {
     /// hwnd 에 합성 스택을 부착한다.
     ///
+    /// `d2d_factory` 는 `D2DRenderer::factory()` 가 반환한 인스턴스를 받는다.
+    /// 같은 factory 트리 안에 D2D Device 를 만들어, 두 모듈의 D2D 객체가
+    /// 서로의 device context 에서 호환되도록 한다 (D2DERR_WRONG_FACTORY 회피).
+    ///
     /// 호출자는 hwnd 가 `WS_EX_NOREDIRECTIONBITMAP` 으로 만들어졌고
     /// `WS_EX_LAYERED` 가 아님을 보장해야 한다. 클라이언트 사이즈가
     /// 0 이면 swap chain 생성이 실패하므로 윈도우가 보이는 시점 이후에
     /// 호출.
-    pub fn new(hwnd: HWND) -> Result<Self> {
+    pub fn new(hwnd: HWND, d2d_factory: &ID2D1Factory1) -> Result<Self> {
         // SAFETY: 모든 Direct3D/DXGI/D2D/DComp create 함수는 표준 COM
         // 부트스트랩이며, out-pointer 는 로컬 변수다. hwnd 는 호출자가
         // 보장한 유효 핸들.
@@ -148,9 +152,8 @@ impl CompositionRenderer {
                 None, // 출력 제한 없음
             )?;
 
-            // 5. D2D factory + device + context
-            let d2d_factory: ID2D1Factory1 =
-                D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+            // 5. D2D device + context — factory 는 호출자가 보유한 D2DRenderer 의
+            //    것을 그대로 사용한다 (factory 통일 → WRONG_FACTORY 회피).
             let d2d_device = d2d_factory.CreateDevice(&dxgi_device)?;
             let d2d_context =
                 d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;

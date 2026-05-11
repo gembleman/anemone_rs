@@ -15,7 +15,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
-use std::thread;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use isolang::Language;
 use windows::Win32::Foundation::HWND;
@@ -144,10 +145,14 @@ impl DispatchState {
 
 /// 프로세스 단일 디스패치
 pub struct TranslationDispatch {
-    sender: Sender<DispatchJob>,
+    /// `Option` 인 이유: shutdown 시 `take()` 로 drop 시켜 채널을 닫고
+    /// 워커 스레드의 `rx.recv()` 가 `Err` 를 반환해 자연 종료되도록 한다.
+    sender: Mutex<Option<Sender<DispatchJob>>>,
     state: Mutex<DispatchState>,
     /// hwnd 별 최신 req_id 의 원자 스냅샷 (워커 스레드가 lock 없이 빠르게 확인)
     latest_snapshot: Mutex<Vec<(usize, std::sync::Arc<AtomicU64>)>>,
+    /// 워커 스레드 핸들 (shutdown 시 join 용)
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 static DISPATCH: OnceLock<TranslationDispatch> = OnceLock::new();
@@ -167,22 +172,70 @@ pub fn unregister_hwnd(hwnd: HWND) {
     dispatch().unregister_hwnd(hwnd);
 }
 
+/// 프로세스 종료 직전 호출. 워커 스레드를 정상 종료시켜 detached 백그라운드
+/// 스레드가 남지 않도록 한다.
+///
+/// 디스패치가 한 번도 사용되지 않은 경우 (`OnceLock` 미초기화) 에는 아무
+/// 작업도 하지 않는다.
+pub fn shutdown() {
+    if let Some(d) = DISPATCH.get() {
+        d.shutdown();
+    }
+}
+
 impl TranslationDispatch {
     fn spawn() -> Self {
         let (tx, rx) = mpsc::channel::<DispatchJob>();
 
-        let dispatch = Self {
-            sender: tx,
-            state: Mutex::new(DispatchState::new()),
-            latest_snapshot: Mutex::new(Vec::new()),
-        };
-
-        // 워커 스레드는 디스패치 싱글톤 수명과 동일. JoinHandle 은 의도적으로 detach.
-        thread::spawn(move || {
+        // shutdown() 이 join 할 수 있도록 핸들 보관.
+        let handle = thread::spawn(move || {
             Self::worker_thread(rx);
         });
 
-        dispatch
+        Self {
+            sender: Mutex::new(Some(tx)),
+            state: Mutex::new(DispatchState::new()),
+            latest_snapshot: Mutex::new(Vec::new()),
+            worker: Mutex::new(Some(handle)),
+        }
+    }
+
+    /// 채널 sender 를 drop 해 워커 스레드를 종료시키고 join.
+    ///
+    /// 워커는 `rt.block_on(async { while let Ok(job) = rx.recv() })` 로 블록되어
+    /// 있어, 모든 sender 가 drop 되면 `Err` 를 받고 루프를 빠져나와 tokio 런타임
+    /// (및 그 아래 워커 스레드 풀) 까지 자연 종료된다.
+    ///
+    /// join 은 짧은 timeout 이 없는 단순 join 이지만, 워커는 즉시 빠져나오므로
+    /// 실무상 즉시 끝난다. 만에 하나 join 이 오래 걸리면 프로세스 종료를 막을
+    /// 위험이 있으므로 호출자는 충분히 짧은 시간을 기대해야 한다.
+    fn shutdown(&self) {
+        // 1. sender drop → 워커의 rx.recv() 가 Err 를 반환해 루프 탈출 → tokio
+        //    runtime drop → 워커 스레드 자연 종료.
+        {
+            let mut s = self.sender.lock().expect("dispatch sender poisoned");
+            *s = None;
+        }
+        // 2. 워커 스레드 join (안전망: in-flight HTTP 요청 등으로 runtime drop 이
+        //    오래 걸리면 짧은 polling 후 detach. 정상 케이스는 수 ms 안에 끝남).
+        let handle = {
+            let mut w = self.worker.lock().expect("dispatch worker poisoned");
+            w.take()
+        };
+        if let Some(handle) = handle {
+            let start = std::time::Instant::now();
+            const MAX_WAIT: Duration = Duration::from_millis(2000);
+            while !handle.is_finished() && start.elapsed() < MAX_WAIT {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            } else {
+                tracing::warn!(
+                    "translation worker did not finish in {MAX_WAIT:?}, leaving detached"
+                );
+            }
+        }
     }
 
     /// hwnd 의 최신 ID 원자 슬롯 확보 (없으면 생성)
@@ -220,7 +273,15 @@ impl TranslationDispatch {
         // 워커가 lock 없이 stale 판정할 수 있도록 원자 슬롯 갱신
         self.latest_atomic(hwnd_raw).store(id, Ordering::Release);
 
-        if let Err(e) = self.sender.send(DispatchJob { hwnd_raw, req }) {
+        // shutdown 이 진행됐다면 sender 가 None — 조용히 폐기.
+        let send_result = {
+            let s = self.sender.lock().expect("dispatch sender poisoned");
+            match s.as_ref() {
+                Some(tx) => tx.send(DispatchJob { hwnd_raw, req }),
+                None => return id,
+            }
+        };
+        if let Err(e) = send_result {
             tracing::error!("Failed to send translation request: {}", e);
         }
 

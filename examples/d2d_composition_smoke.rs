@@ -23,9 +23,44 @@ mod d2d_composition;
 #[path = "../src/bench.rs"]
 mod bench;
 
+// d2d.rs 는 `crate::util::to_wide` 와 `crate::window::TextRenderStyle` 를
+// 참조하므로, 같은 이름의 stub 모듈을 example crate 루트에 둔다. binary
+// crate 와 격리된 채로 d2d.rs 를 그대로 컴파일 시키기 위한 최소 의존만 노출.
+mod util {
+    pub fn to_wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+}
+mod window {
+    #[derive(Clone, Debug)]
+    pub struct TextRenderStyle {
+        pub font_size: i32,
+        pub font_face: String,
+        pub font_style: u8,
+        pub color: u32,
+        pub outline1_size: i32,
+        pub outline1_color: u32,
+        pub outline2_size: i32,
+        pub outline2_color: u32,
+        pub shadow_enabled: bool,
+        pub shadow_color: u32,
+        pub shadow_offset_x: i32,
+        pub shadow_offset_y: i32,
+    }
+}
+// example 은 d2d.rs 의 일부 API (configure_frame / draw_border / draw_text)
+// 만 사용한다. 메인 binary crate 에서는 모두 사용되지만 격리 컴파일이라
+// 사용 안 한 메서드/필드가 dead_code 경고로 잡힌다 — example 측 모듈에만
+// 한정해 봉합.
+#[allow(dead_code)]
+#[path = "../src/d2d.rs"]
+mod d2d;
+
 use bench::{BenchAccumulator, paint_bench_iters};
+use d2d::D2DRenderer;
 use d2d_composition::CompositionRenderer;
 use std::cell::RefCell;
+use window::TextRenderStyle;
 use windows::{
     Win32::{
         Foundation::*,
@@ -47,6 +82,9 @@ const WINDOW_CLASS: PCWSTR = w!("AnemoneDCompSmokeClass");
 
 thread_local! {
     static RENDERER: RefCell<Option<CompositionRenderer>> = const { RefCell::new(None) };
+    /// 합성 경로에서 D2DRenderer (DC 경로용으로 만든 일반화된 그리기 헬퍼) 를
+    /// 그대로 재사용할 수 있는지 시연용. 인터랙티브 모드에서만 사용.
+    static D2D: RefCell<Option<D2DRenderer>> = const { RefCell::new(None) };
     static FRAME_COUNT: RefCell<u32> = const { RefCell::new(0) };
 }
 
@@ -97,7 +135,21 @@ fn main() -> Result<()> {
         // 식별. 성공해도 출력은 남겨서 어디까지 도달했는지 알 수 있다.
         diagnose_pipeline(hwnd);
 
-        let renderer = match CompositionRenderer::new(hwnd) {
+        // D2DRenderer 를 먼저 만들고 그 factory 를 CompositionRenderer 에 주입한다.
+        // factory 통일이 핵심 — brush/geometry/text-layout 이 합성 경로
+        // device context 위에서 거부되지 않도록 한다 (D2DERR_WRONG_FACTORY 회피).
+        let d2d = match D2DRenderer::new() {
+            Ok(r) => {
+                eprintln!("D2DRenderer::new: OK");
+                r
+            }
+            Err(e) => {
+                eprintln!("D2DRenderer::new failed: {e}");
+                return Err(e);
+            }
+        };
+
+        let renderer = match CompositionRenderer::new(hwnd, d2d.factory()) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("CompositionRenderer::new failed: {e}");
@@ -106,11 +158,13 @@ fn main() -> Result<()> {
         };
         eprintln!("CompositionRenderer::new: OK");
         RENDERER.with(|r| *r.borrow_mut() = Some(renderer));
+        D2D.with(|c| *c.borrow_mut() = Some(d2d));
 
         if let Some(iters) = bench_iters {
             run_composition_bench(iters);
             // 벤치만 돌리고 종료 — UI 루프 진입하지 않음.
             RENDERER.with(|r| r.borrow_mut().take());
+            D2D.with(|c| c.borrow_mut().take());
             let _ = DestroyWindow(hwnd);
             return Ok(());
         }
@@ -129,6 +183,7 @@ fn main() -> Result<()> {
         }
 
         // 명시 해제: 윈도우보다 먼저 COM 객체들이 사라지도록.
+        D2D.with(|c| c.borrow_mut().take());
         RENDERER.with(|r| r.borrow_mut().take());
         Ok(())
     }
@@ -234,6 +289,51 @@ fn render_frame(sync_interval: u32) -> Result<()> {
                 &white_brush,
             );
         }
+
+        // ── D2DRenderer 결합 시연 ─────────────────────────────────
+        //
+        // CompositionRenderer 가 돌려준 `&ID2D1DeviceContext` 를 그대로 — cast
+        // 없이 deref coercion 만으로 — D2DRenderer 의 일반화된 그리기 메서드에
+        // 전달한다. `&ID2D1DeviceContext` → `&ID2D1RenderTarget` 으로 자동 변환
+        // 되는 것이 1 단계 일반화의 핵심.
+        D2D.with(|c| -> Result<()> {
+            let Ok(mut borrowed_d2d) = c.try_borrow_mut() else { return Ok(()); };
+            let Some(d2d) = borrowed_d2d.as_mut() else { return Ok(()); };
+
+            // 한 프레임 시작 — 캐시 reset + AA 모드.
+            d2d.configure_frame(ctx);
+
+            // 노란 외곽선 (10px 두께) — paint 영역 사이즈는 윈도우 클라이언트
+            // 사이즈와 동일하게 사용 (WM_SIZE 시 swap chain 도 같이 resize 됨).
+            let yellow = 0xFFFFD000;
+            d2d.draw_border(ctx, 640, 360, 4, yellow)?;
+
+            // 외곽선/그림자 포함 텍스트 — DC 경로의 paint 와 동일 시그니처.
+            let style = TextRenderStyle {
+                font_size: 28,
+                font_face: "Segoe UI".to_string(),
+                font_style: 1, // bold
+                color: 0xFFFFFFFF,
+                outline1_size: 2,
+                outline1_color: 0xFF000000,
+                outline2_size: 0,
+                outline2_color: 0xFF000000,
+                shadow_enabled: true,
+                shadow_color: 0xC0000000,
+                shadow_offset_x: 2,
+                shadow_offset_y: 2,
+            };
+            d2d.draw_text(
+                ctx,
+                "D2DRenderer ▸ DComp 결합 OK",
+                20.0,
+                300.0,
+                600.0,
+                40.0,
+                &style,
+            )?;
+            Ok(())
+        })?;
 
         renderer.end_draw_and_present(sync_interval)?;
         Ok(())

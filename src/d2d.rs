@@ -1,7 +1,8 @@
 //! Direct2D 기반 렌더러
 //!
-//! ID2D1DCRenderTarget을 사용하여 레이어드 윈도우와 호환되는
-//! Direct2D 렌더링을 제공합니다.
+//! 그리기 메서드들은 모두 `&ID2D1RenderTarget` 을 받도록 일반화돼
+//! `CompositionRenderer` (DComp 합성 경로) 의 `ID2D1DeviceContext` 와
+//! 미래에 추가될 다른 render target 모두에서 그대로 사용된다.
 
 use std::collections::HashMap;
 
@@ -12,7 +13,6 @@ use windows::{
         Graphics::{
             Direct2D::{Common::*, *},
             DirectWrite::*,
-            Gdi::HDC,
         },
     },
     core::*,
@@ -58,12 +58,12 @@ fn font_style_to_dwrite(bits: u8) -> (DWRITE_FONT_WEIGHT, DWRITE_FONT_STYLE) {
 /// IDWriteTextRenderer 구현체 - 글리프를 ID2D1GeometrySink로 출력
 #[windows::core::implement(IDWriteTextRenderer, IDWritePixelSnapping)]
 struct OutlineTextRenderer {
-    d2d_factory: ID2D1Factory,
+    d2d_factory: ID2D1Factory1,
     sink: ID2D1GeometrySink,
 }
 
 impl OutlineTextRenderer {
-    fn new(d2d_factory: ID2D1Factory, sink: ID2D1GeometrySink) -> Self {
+    fn new(d2d_factory: ID2D1Factory1, sink: ID2D1GeometrySink) -> Self {
         Self { d2d_factory, sink }
     }
 }
@@ -123,8 +123,11 @@ impl IDWriteTextRenderer_Impl for OutlineTextRenderer_Impl {
 
             // FontFace에서 글리프 아웃라인을 geometry sink로 출력
             if let Some(font_face) = &*glyph_run.fontFace {
-                // 임시 PathGeometry를 만들어서 글리프 아웃라인 추출
-                let temp_geometry: ID2D1PathGeometry = self.d2d_factory.CreatePathGeometry()?;
+                // 임시 PathGeometry를 만들어서 글리프 아웃라인 추출.
+                // Factory1::CreatePathGeometry 는 PathGeometry1 을 반환 — 부모
+                // 인터페이스로 다운캐스트해 받는다 (이후 Open/Close 만 사용).
+                let temp_geometry: ID2D1PathGeometry =
+                    self.d2d_factory.CreatePathGeometry()?.into();
                 let temp_sink = temp_geometry.Open()?;
 
                 font_face.GetGlyphRunOutline(
@@ -200,13 +203,22 @@ impl IDWriteTextRenderer_Impl for OutlineTextRenderer_Impl {
 
 // ── D2DRenderer ─────────────────────────────────────────
 
-/// Direct2D 기반 렌더러
+/// Direct2D 기반 렌더러.
+///
+/// 그리기 메서드들은 `&ID2D1RenderTarget` 을 받아 호출 측이 보유한
+/// render target (현재는 `CompositionRenderer` 의 `ID2D1DeviceContext`)
+/// 위에 그린다. `BeginDraw`/`EndDraw`/`Present` 는 호출 측이 책임지며,
+/// 본 타입은 한 프레임 시작 시 [`Self::configure_frame`] 으로 캐시
+/// reset + AA 모드 설정만 수행한다.
+///
+/// `d2d_factory` 는 [`ID2D1Factory1`] 로 보관한다 — `CreateDevice` 가
+/// 필요한 `CompositionRenderer` 가 [`Self::factory`] 로 받아 같은 factory
+/// 위에 D2D Device 를 만들도록 한다. 같은 factory 트리 안에 머물러야
+/// brush/geometry/text-layout 같은 본 렌더러의 객체들이 합성 경로의
+/// `ID2D1DeviceContext` 위에서 거부되지 않는다 (D2DERR_WRONG_FACTORY 방지).
 pub struct D2DRenderer {
-    d2d_factory: ID2D1Factory,
+    d2d_factory: ID2D1Factory1,
     dwrite_factory: IDWriteFactory,
-    render_target: Option<ID2D1DCRenderTarget>,
-    bound_width: i32,
-    bound_height: i32,
     /// 프레임 단위 브러시 캐시 (ARGB 색상 → SolidColorBrush)
     brush_cache: HashMap<u32, ID2D1SolidColorBrush>,
     /// 외곽선 스트로크 스타일 캐시 (불변이므로 한 번만 생성)
@@ -219,11 +231,15 @@ impl D2DRenderer {
         // SAFETY: D2D1CreateFactory and DWriteCreateFactory are COM factory functions that
         // return valid COM interface pointers on success.
         unsafe {
-            let d2d_factory: ID2D1Factory =
+            let d2d_factory: ID2D1Factory1 =
                 D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dwrite_factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
 
-            let stroke_style = d2d_factory.CreateStrokeStyle(
+            // Factory1::CreateStrokeStyle 은 STROKE_STYLE_PROPERTIES1 을 받는다 —
+            // 본 모듈은 base 필드만 사용하므로 부모 인터페이스 메서드를 명시 호출해
+            // STROKE_STYLE_PROPERTIES (base) 그대로 통과시킨다.
+            let parent_factory: &ID2D1Factory = &d2d_factory;
+            let stroke_style = parent_factory.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
                     startCap: D2D1_CAP_STYLE_ROUND,
                     endCap: D2D1_CAP_STYLE_ROUND,
@@ -239,26 +255,29 @@ impl D2DRenderer {
             Ok(Self {
                 d2d_factory,
                 dwrite_factory,
-                render_target: None,
-                bound_width: 0,
-                bound_height: 0,
                 brush_cache: HashMap::new(),
                 stroke_style: Some(stroke_style),
             })
         }
     }
 
-    /// 활성 render target을 clone하여 반환. 없으면 None.
-    /// COM 객체이므로 clone은 참조 카운트 증가일 뿐이다.
-    #[inline]
-    fn target(&self) -> Option<ID2D1DCRenderTarget> {
-        self.render_target.clone()
+    /// 본 렌더러가 보유한 D2D factory 를 노출한다.
+    ///
+    /// `CompositionRenderer::new` 에 넘겨주면 같은 factory 위에 D2D Device 를
+    /// 만들어, 본 렌더러의 brush/geometry/text-layout 이 합성 경로의
+    /// device context 에서도 거부되지 않는다.
+    pub fn factory(&self) -> &ID2D1Factory1 {
+        &self.d2d_factory
     }
 
-    /// ARGB 색상으로 SolidColorBrush를 가져온다 (프레임 내 캐시 활용)
+    /// ARGB 색상으로 SolidColorBrush를 가져온다 (프레임 내 캐시 활용).
+    ///
+    /// `target` 은 `ID2D1RenderTarget` 으로 받는다 — DCRenderTarget 과
+    /// DeviceContext 둘 다 이 인터페이스를 상속하므로 Deref coercion
+    /// (`&dc_target` 또는 `&device_context`) 으로 전달 가능.
     fn get_or_create_brush(
         &mut self,
-        target: &ID2D1DCRenderTarget,
+        target: &ID2D1RenderTarget,
         color: u32,
     ) -> Result<ID2D1SolidColorBrush> {
         if let Some(brush) = self.brush_cache.get(&color) {
@@ -315,107 +334,55 @@ impl D2DRenderer {
 
     // ── 퍼블릭 렌더링 API ───────────────────────────────
 
-    /// DC에 렌더 타겟 바인딩
-    pub fn bind_dc(&mut self, hdc: HDC, width: i32, height: i32) -> Result<()> {
-        // SAFETY: hdc is a valid device context from the caller. The render target is
-        // created with valid D2D properties and bound to the DC with correct dimensions.
-        unsafe {
-            // 렌더 타겟이 없으면 생성
-            if self.render_target.is_none() {
-                let props = D2D1_RENDER_TARGET_PROPERTIES {
-                    r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-                    pixelFormat: D2D1_PIXEL_FORMAT {
-                        format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
-                        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-                    },
-                    dpiX: 0.0,
-                    dpiY: 0.0,
-                    usage: D2D1_RENDER_TARGET_USAGE_NONE,
-                    minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-                };
-
-                let target = self.d2d_factory.CreateDCRenderTarget(&props)?;
-                self.render_target = Some(target);
-            }
-
-            let rect = RECT {
-                left: 0,
-                top: 0,
-                right: width,
-                bottom: height,
-            };
-
-            if let Some(ref target) = self.render_target {
-                target.BindDC(hdc, &rect)?;
-            }
-
-            self.bound_width = width;
-            self.bound_height = height;
-
-            Ok(())
-        }
-    }
-
-    /// 렌더링 시작
-    pub fn begin_draw(&mut self) {
-        // 이전 프레임의 브러시 캐시 폐기
+    /// 한 프레임을 시작하기 직전에 호출. 브러시 캐시를 비운다.
+    /// [`Self::configure_frame`] 이 내부에서 호출하므로, 별도 캐시 reset 만
+    /// 필요한 경우에만 직접 사용한다.
+    pub fn reset_frame_cache(&mut self) {
         self.brush_cache.clear();
-
-        if let Some(target) = self.target() {
-            // SAFETY: render_target is a valid ID2D1DCRenderTarget initialized in bind_dc.
-            unsafe {
-                target.BeginDraw();
-                target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            }
-        }
     }
 
-    /// 렌더링 종료
+    /// 호출자가 매 프레임 호출하는 단일 진입점.
     ///
-    /// `D2DERR_RECREATE_TARGET` 발생 시 render target을 폐기하고 `Err`를 반환.
-    /// 다음 `bind_dc` 호출에서 자동으로 재생성된다.
-    pub fn end_draw(&mut self) -> Result<()> {
-        if let Some(target) = self.target() {
-            // SAFETY: render_target is valid and EndDraw is called after a matching BeginDraw.
-            unsafe {
-                let hr = target.EndDraw(None, None);
-                if let Err(ref e) = hr {
-                    // D2DERR_RECREATE_TARGET (0x8899000C)
-                    if e.code() == HRESULT(0x8899000Cu32 as i32) {
-                        tracing::warn!("D2D device lost — render target will be recreated");
-                        self.render_target = None;
-                    }
-                    return hr;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// 배경 클리어 (ARGB)
-    pub fn clear(&self, color: u32) {
-        if let Some(target) = self.target() {
-            // SAFETY: render_target is valid and we are between BeginDraw/EndDraw.
-            unsafe {
-                target.Clear(Some(&argb_to_color_f(color)));
-            }
+    /// 1) 직전 프레임 brush 캐시 폐기 + 2) target 의 안티앨리어싱 모드를
+    /// grayscale 로 설정. `BeginDraw` 자체는 `CompositionRenderer::begin_draw`
+    /// 가 이미 호출했다고 가정한다.
+    pub fn configure_frame(&mut self, target: &ID2D1RenderTarget) {
+        self.reset_frame_cache();
+        // SAFETY: target is a valid render target between BeginDraw/EndDraw (caller's responsibility).
+        unsafe {
+            target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         }
     }
 
-    /// 테두리 그리기 (ARGB)
-    pub fn draw_border(&mut self, thickness: i32, color: u32) -> Result<()> {
-        let target = match self.target() {
-            Some(t) => t,
-            None => return Ok(()),
-        };
+    /// 배경 클리어 (ARGB).
+    ///
+    /// `target` 은 BeginDraw/EndDraw 사이의 활성 render target.
+    pub fn clear(&self, target: &ID2D1RenderTarget, color: u32) {
+        // SAFETY: target is valid and we are between BeginDraw/EndDraw (caller's responsibility).
+        unsafe {
+            target.Clear(Some(&argb_to_color_f(color)));
+        }
+    }
 
-        let w = self.bound_width as f32;
-        let h = self.bound_height as f32;
+    /// 테두리 그리기 (ARGB).
+    ///
+    /// `target` 은 BeginDraw/EndDraw 사이의 활성 render target.
+    /// `width` / `height` 는 그릴 영역 크기 (px).
+    pub fn draw_border(
+        &mut self,
+        target: &ID2D1RenderTarget,
+        width: i32,
+        height: i32,
+        thickness: i32,
+        color: u32,
+    ) -> Result<()> {
+        let w = width as f32;
+        let h = height as f32;
         let t = thickness as f32;
 
         // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
-            let brush = self.get_or_create_brush(&target, color)?;
+            let brush = self.get_or_create_brush(target, color)?;
 
             // 상단
             target.FillRectangle(
@@ -442,10 +409,13 @@ impl D2DRenderer {
         Ok(())
     }
 
-    /// 텍스트 그리기 (외곽선, 그림자 포함)
-    /// 렌더링 순서: 그림자 -> 외곽선2 -> 외곽선1 -> 주 텍스트
+    /// 텍스트 그리기 (외곽선, 그림자 포함).
+    /// 렌더링 순서: 그림자 -> 외곽선2 -> 외곽선1 -> 주 텍스트.
+    ///
+    /// `target` 은 BeginDraw/EndDraw 사이의 활성 render target.
     pub fn draw_text(
         &mut self,
+        target: &ID2D1RenderTarget,
         text: &str,
         x: f32,
         y: f32,
@@ -453,11 +423,6 @@ impl D2DRenderer {
         max_height: f32,
         style: &TextRenderStyle,
     ) -> Result<()> {
-        let target = match self.target() {
-            Some(t) => t,
-            None => return Err(Error::from_hresult(HRESULT(-1))),
-        };
-
         let text_layout = self.create_text_layout(text, style, max_width, max_height)?;
         let outline_total = style.outline1_size + style.outline2_size;
 
@@ -470,7 +435,7 @@ impl D2DRenderer {
 
                 if outline_total > 0 {
                     self.draw_text_outline(
-                        &target,
+                        target,
                         &text_layout,
                         shadow_x,
                         shadow_y,
@@ -479,7 +444,7 @@ impl D2DRenderer {
                     )?;
                 }
 
-                let shadow_brush = self.get_or_create_brush(&target, style.shadow_color)?;
+                let shadow_brush = self.get_or_create_brush(target, style.shadow_color)?;
                 target.DrawTextLayout(
                     Vector2::new(shadow_x, shadow_y),
                     &text_layout,
@@ -491,7 +456,7 @@ impl D2DRenderer {
             // 2. 외곽선2 그리기 (OutlineOut)
             if style.outline2_size > 0 && outline_total > 0 {
                 self.draw_text_outline(
-                    &target,
+                    target,
                     &text_layout,
                     x,
                     y,
@@ -503,7 +468,7 @@ impl D2DRenderer {
             // 3. 외곽선1 그리기 (OutlineIn)
             if style.outline1_size > 0 {
                 self.draw_text_outline(
-                    &target,
+                    target,
                     &text_layout,
                     x,
                     y,
@@ -513,7 +478,7 @@ impl D2DRenderer {
             }
 
             // 4. 주 텍스트 그리기
-            let text_brush = self.get_or_create_brush(&target, style.color)?;
+            let text_brush = self.get_or_create_brush(target, style.color)?;
             target.DrawTextLayout(
                 Vector2::new(x, y),
                 &text_layout,
@@ -525,11 +490,11 @@ impl D2DRenderer {
         Ok(())
     }
 
-    /// Geometry 기반 텍스트 외곽선 그리기
-    /// IDWriteFontFace::GetGlyphRunOutline을 사용하여 정확한 벡터 외곽선 생성
+    /// Geometry 기반 텍스트 외곽선 그리기.
+    /// IDWriteFontFace::GetGlyphRunOutline 을 사용해 정확한 벡터 외곽선 생성.
     fn draw_text_outline(
         &mut self,
-        target: &ID2D1DCRenderTarget,
+        target: &ID2D1RenderTarget,
         text_layout: &IDWriteTextLayout,
         x: f32,
         y: f32,
@@ -540,8 +505,10 @@ impl D2DRenderer {
         // DirectWrite layout. The geometry, stroke style, and brush are created and used
         // within this scope with valid parameters.
         unsafe {
-            // 1. PathGeometry 생성
-            let path_geometry: ID2D1PathGeometry = self.d2d_factory.CreatePathGeometry()?;
+            // 1. PathGeometry 생성 (Factory1::CreatePathGeometry → PathGeometry1
+            //    을 부모로 다운캐스트해 사용 — Open/DrawGeometry/FillGeometry 만 호출).
+            let path_geometry: ID2D1PathGeometry =
+                self.d2d_factory.CreatePathGeometry()?.into();
             let sink = path_geometry.Open()?;
 
             // 2. 커스텀 텍스트 렌더러로 글리프 아웃라인 추출
@@ -566,13 +533,6 @@ impl D2DRenderer {
         }
 
         Ok(())
-    }
-
-    /// Render target을 강제 폐기 (디스플레이 변경 등에서 호출)
-    /// 다음 `bind_dc` 호출에서 자동으로 재생성된다.
-    pub fn invalidate_target(&mut self) {
-        self.render_target = None;
-        self.brush_cache.clear();
     }
 
 }
