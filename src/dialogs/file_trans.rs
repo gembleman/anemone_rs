@@ -21,12 +21,12 @@ use windows::{
 };
 
 use crate::config::Config;
-use crate::impl_dialog;
+use crate::define_dialog_instance;
 use crate::translation::{EngineCredentials, Language, TranslationEngine};
 use crate::util::to_wide;
 use super::file_dialog::{FileFilter, open_files_multi, save_file};
 use super::file_trans_progress::FileTransProgressDialog;
-use super::helpers::DialogControls;
+use super::helpers::{Dialog, DialogControls};
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -97,16 +97,25 @@ impl DialogControls for FileTransDialog {
     fn dialog_hwnd(&self) -> HWND { self.hwnd }
 }
 
-impl_dialog! {
-    dialog: FileTransDialog,
-    instance: FILE_TRANS_INSTANCE,
-    class_name: w!("AnemoneFileTransClass"),
-    title: w!("파일 번역"),
-    width: 550,
-    height: 450,
-    extra_style: WINDOW_STYLE::default(),
-    params: (_parent: HWND, config: Rc<RefCell<Config>>),
-    init: |hwnd, _parent, config| {
+define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
+
+impl Dialog for FileTransDialog {
+    type Params = Rc<RefCell<Config>>;
+
+    const CLASS_NAME: PCWSTR = w!("AnemoneFileTransClass");
+    const TITLE: PCWSTR = w!("파일 번역");
+    const WIDTH: i32 = 550;
+    const HEIGHT: i32 = 450;
+    const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
+
+    fn instance_slot()
+        -> &'static std::thread::LocalKey<
+            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+        > {
+        &FILE_TRANS_INSTANCE
+    }
+
+    fn init(hwnd: HWND, _parent: HWND, config: Self::Params) -> Self {
         FileTransDialog {
             hwnd,
             config,
@@ -121,11 +130,8 @@ impl_dialog! {
             no_trans_linefeed: false,
             cancel_token: Arc::new(AtomicBool::new(false)),
         }
-    },
-}
+    }
 
-impl FileTransDialog {
-    /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
         // SAFETY: self.hwnd is a valid dialog window handle. GetModuleHandleW(None) returns
         // the current module. All CreateWindowExW calls use valid parent handle, module
@@ -254,6 +260,31 @@ impl FileTransDialog {
         }
     }
 
+    /// 커스텀 메시지 핸들러 (없음)
+    fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
+        None
+    }
+
+    /// 명령 처리
+    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
+        use ctrl_id::*;
+
+        match cmd {
+            LOAD_BROWSER => self.browse_input_files(),
+            SAVE_BROWSER => self.browse_output_file(),
+            OUTPUT_1 => self.write_type = WriteType::TranslationOnly,
+            OUTPUT_2 => self.write_type = WriteType::OriginalAndTrans,
+            OUTPUT_3 => self.write_type = WriteType::OriginalTransNewline,
+            NO_TRANS_LINEFEED => self.no_trans_linefeed = !self.no_trans_linefeed,
+            BTN_TRANSLATE => self.start_translation(),
+            // SAFETY: self.hwnd is a valid dialog window handle.
+            BTN_CLOSE => unsafe { let _ = DestroyWindow(self.hwnd); },
+            _ => {}
+        }
+    }
+}
+
+impl FileTransDialog {
     /// 엔진 안내 라벨 텍스트 갱신
     fn update_engine_label(&self) {
         use crate::translation::lang_utils::to_korean_name;
@@ -277,11 +308,6 @@ impl FileTransDialog {
         );
         // SAFETY: engine_label is a valid static label control handle from create_controls.
         unsafe { Self::set_edit_text(self.engine_label, &text); }
-    }
-
-    /// 커스텀 메시지 핸들러 (없음)
-    fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
-        None
     }
 
     /// Edit 컨트롤에 텍스트 설정
@@ -464,23 +490,5 @@ impl FileTransDialog {
         std::thread::spawn(move || {
             super::file_trans_thread::file_trans_thread(job_data);
         });
-    }
-
-    /// 명령 처리
-    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
-        use ctrl_id::*;
-
-        match cmd {
-            LOAD_BROWSER => self.browse_input_files(),
-            SAVE_BROWSER => self.browse_output_file(),
-            OUTPUT_1 => self.write_type = WriteType::TranslationOnly,
-            OUTPUT_2 => self.write_type = WriteType::OriginalAndTrans,
-            OUTPUT_3 => self.write_type = WriteType::OriginalTransNewline,
-            NO_TRANS_LINEFEED => self.no_trans_linefeed = !self.no_trans_linefeed,
-            BTN_TRANSLATE => self.start_translation(),
-            // SAFETY: self.hwnd is a valid dialog window handle.
-            BTN_CLOSE => unsafe { let _ = DestroyWindow(self.hwnd); },
-            _ => {}
-        }
     }
 }

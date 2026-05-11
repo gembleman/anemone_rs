@@ -19,10 +19,10 @@ use windows::{
 
 use crate::config::{Config, TextAlign};
 use crate::constants::TBM_GETPOS_VAL;
-use crate::impl_dialog;
+use crate::define_dialog_instance;
 use crate::translation::{TranslationEngine, lang_utils};
 use crate::util::to_wide;
-use super::helpers::DialogControls;
+use super::helpers::{Dialog, DialogControls};
 
 /// 설정 변경 콜백 타입
 pub type SettingsChangeCallback = Box<dyn Fn(&Config)>;
@@ -71,23 +71,56 @@ impl DialogControls for SettingsDialog {
     fn dialog_hwnd(&self) -> HWND { self.hwnd }
 }
 
-impl_dialog! {
-    dialog: SettingsDialog,
-    instance: SETTINGS_INSTANCE,
-    class_name: w!("AnemoneSettingsClass"),
-    title: w!("아네모네 설정"),
-    width: 500,
-    height: 780,
-    extra_style: WINDOW_STYLE::default(),
-    params: (parent: HWND, config: Rc<RefCell<Config>>, on_change: Option<SettingsChangeCallback>),
-    init: |hwnd, parent, config, on_change| {
+define_dialog_instance!(SETTINGS_INSTANCE: SettingsDialog);
+
+impl Dialog for SettingsDialog {
+    type Params = (Rc<RefCell<Config>>, Option<SettingsChangeCallback>);
+
+    const CLASS_NAME: PCWSTR = w!("AnemoneSettingsClass");
+    const TITLE: PCWSTR = w!("아네모네 설정");
+    const WIDTH: i32 = 500;
+    const HEIGHT: i32 = 780;
+    const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
+
+    fn instance_slot()
+        -> &'static std::thread::LocalKey<
+            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+        > {
+        &SETTINGS_INSTANCE
+    }
+
+    fn init(hwnd: HWND, parent: HWND, params: Self::Params) -> Self {
+        let (config, on_change) = params;
         SettingsDialog {
             hwnd, config, main_hwnd: parent, on_change,
             tab_controls: [Vec::new(), Vec::new(), Vec::new()],
             current_tab: TAB_APPEARANCE,
             engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
         }
-    },
+    }
+
+    fn create_controls(&mut self) -> Result<()> {
+        SettingsDialog::create_controls(self)
+    }
+
+    fn handle_command(&mut self, cmd: u16, notify_code: u32) {
+        SettingsDialog::handle_command(self, cmd, notify_code);
+    }
+
+    fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+        SettingsDialog::handle_message(self, msg, wparam, lparam)
+    }
+}
+
+impl SettingsDialog {
+    /// 기존 3-인자 시그니처를 유지하는 공개 진입점.
+    pub fn show(
+        parent: HWND,
+        config: Rc<RefCell<Config>>,
+        on_change: Option<SettingsChangeCallback>,
+    ) -> Result<HWND> {
+        <Self as Dialog>::show(parent, (config, on_change))
+    }
 }
 
 impl SettingsDialog {

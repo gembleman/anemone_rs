@@ -23,6 +23,7 @@ use crate::constants::{
 };
 use crate::d2d::D2DRenderer;
 use crate::d2d_composition::CompositionRenderer;
+use crate::dialogs::helpers::Dialog;
 use crate::dialogs::{BacklogDialog, LogEntry, SettingsDialog, TranslateDialog, add_to_backlog};
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;

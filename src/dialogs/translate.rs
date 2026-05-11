@@ -20,8 +20,8 @@ use windows::{
 };
 
 use crate::util::to_wide;
-use crate::impl_dialog;
-use super::helpers::DialogControls;
+use crate::define_dialog_instance;
+use super::helpers::{Dialog, DialogControls};
 
 use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
@@ -84,16 +84,25 @@ impl DialogControls for TranslateDialog {
     fn dialog_hwnd(&self) -> HWND { self.hwnd }
 }
 
-impl_dialog! {
-    dialog: TranslateDialog,
-    instance: TRANSLATE_INSTANCE,
-    class_name: w!("AnemoneTranslateClass"),
-    title: w!("번역"),
-    width: 500,
-    height: 520,
-    extra_style: WINDOW_STYLE::default(),
-    params: (_parent: HWND, config: Rc<RefCell<Config>>),
-    init: |hwnd, _parent, config| {
+define_dialog_instance!(TRANSLATE_INSTANCE: TranslateDialog);
+
+impl Dialog for TranslateDialog {
+    type Params = Rc<RefCell<Config>>;
+
+    const CLASS_NAME: PCWSTR = w!("AnemoneTranslateClass");
+    const TITLE: PCWSTR = w!("번역");
+    const WIDTH: i32 = 500;
+    const HEIGHT: i32 = 520;
+    const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
+
+    fn instance_slot()
+        -> &'static std::thread::LocalKey<
+            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+        > {
+        &TRANSLATE_INSTANCE
+    }
+
+    fn init(hwnd: HWND, _parent: HWND, config: Self::Params) -> Self {
         TranslateDialog {
             hwnd,
             config,
@@ -108,11 +117,8 @@ impl_dialog! {
             engine_initialized: false,
             translating: false,
         }
-    },
-}
+    }
 
-impl TranslateDialog {
-    /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
         // SAFETY: self.hwnd is a valid window handle from show_impl. All CreateWindowExW
         // and SendMessageW calls use valid handles. SetWindowSubclass installs a Comctl32
@@ -269,6 +275,40 @@ impl TranslateDialog {
         None
     }
 
+    /// 명령 처리
+    fn handle_command(&mut self, cmd: u16, notify_code: u32) {
+        use ctrl_id::*;
+
+        match cmd {
+            BTN_TRANSLATE => self.do_translate(),
+            BTN_COPY => self.copy_to_clipboard(),
+            BTN_CLEAR => self.clear_text(),
+            CHK_ONE_GO => self.one_go = !self.one_go,
+            CHK_NO_LINEFEED => self.no_linefeed = !self.no_linefeed,
+            RADIO_OUTPUT_1 => self.output_format = OutputFormat::Normal,
+            RADIO_OUTPUT_2 => self.output_format = OutputFormat::Brackets,
+            RADIO_OUTPUT_3 => self.output_format = OutputFormat::NameSplit,
+            COMBO_ENGINE | COMBO_SOURCE_LANG | COMBO_TARGET_LANG => {
+                // CBN_SELCHANGE
+                if notify_code == 1 {
+                    if cmd == COMBO_ENGINE {
+                        // SAFETY: engine_combo is a valid handle.
+                        let engine_idx = unsafe {
+                            SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8
+                        };
+                        let engine = TranslationEngine::from_u8(engine_idx);
+                        self.populate_language_combos(engine);
+                        self.engine_initialized = false;
+                    }
+                    self.apply_current_settings();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl TranslateDialog {
     /// 엔진에 맞게 언어 콤보박스 항목 갱신
     fn populate_language_combos(&self, engine: TranslationEngine) {
         use crate::translation::lang_utils;
@@ -533,38 +573,6 @@ impl TranslateDialog {
             Self::set_edit_text(self.source_edit, "");
             Self::set_edit_text(self.dest_edit, "");
             let _ = SetFocus(Some(self.source_edit));
-        }
-    }
-
-    /// 명령 처리
-    fn handle_command(&mut self, cmd: u16, notify_code: u32) {
-        use ctrl_id::*;
-
-        match cmd {
-            BTN_TRANSLATE => self.do_translate(),
-            BTN_COPY => self.copy_to_clipboard(),
-            BTN_CLEAR => self.clear_text(),
-            CHK_ONE_GO => self.one_go = !self.one_go,
-            CHK_NO_LINEFEED => self.no_linefeed = !self.no_linefeed,
-            RADIO_OUTPUT_1 => self.output_format = OutputFormat::Normal,
-            RADIO_OUTPUT_2 => self.output_format = OutputFormat::Brackets,
-            RADIO_OUTPUT_3 => self.output_format = OutputFormat::NameSplit,
-            COMBO_ENGINE | COMBO_SOURCE_LANG | COMBO_TARGET_LANG => {
-                // CBN_SELCHANGE
-                if notify_code == 1 {
-                    if cmd == COMBO_ENGINE {
-                        // SAFETY: engine_combo is a valid handle.
-                        let engine_idx = unsafe {
-                            SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8
-                        };
-                        let engine = TranslationEngine::from_u8(engine_idx);
-                        self.populate_language_combos(engine);
-                        self.engine_initialized = false;
-                    }
-                    self.apply_current_settings();
-                }
-            }
-            _ => {}
         }
     }
 }
