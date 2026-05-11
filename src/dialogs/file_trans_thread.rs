@@ -294,46 +294,31 @@ fn send_filename(hwnd: HWND, path: &PathBuf) {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let wide = to_wide(&filename);
-
-    // 정적 버퍼에 복사 (PostMessage 후에도 유효하도록)
-    static mut FILENAME_BUFFER: [u16; 260] = [0; 260];
-    // SAFETY: FILENAME_BUFFER is a static mut accessed only from the file translation thread.
-    // The buffer outlives the PostMessageW call. The copy length is bounded to 259 elements.
-    unsafe {
-        let buffer_ptr = std::ptr::addr_of_mut!(FILENAME_BUFFER);
-        let copy_len = wide.len().min(259);
-        (&mut (*buffer_ptr))[..copy_len].copy_from_slice(&wide[..copy_len]);
-        (&mut (*buffer_ptr))[copy_len] = 0;
-
-        let _ = PostMessageW(
-            Some(hwnd),
-            WM_PROGRESS_NAME,
-            WPARAM(0),
-            LPARAM((&(*buffer_ptr)).as_ptr() as isize),
-        );
-    }
+    post_wide_string(hwnd, WM_PROGRESS_NAME, &filename);
 }
 
 /// 에러 메시지 전송
 fn send_error(hwnd: HWND, message: &str) {
-    let wide = to_wide(message);
+    post_wide_string(hwnd, WM_PROGRESS_ERROR, message);
+}
 
-    // 정적 버퍼에 복사
-    static mut ERROR_BUFFER: [u16; 512] = [0; 512];
-    // SAFETY: ERROR_BUFFER is a static mut accessed only from the file translation thread.
-    // The buffer outlives the PostMessageW call. The copy length is bounded to 511 elements.
-    unsafe {
-        let buffer_ptr = std::ptr::addr_of_mut!(ERROR_BUFFER);
-        let copy_len = wide.len().min(511);
-        (&mut (*buffer_ptr))[..copy_len].copy_from_slice(&wide[..copy_len]);
-        (&mut (*buffer_ptr))[copy_len] = 0;
+/// UTF-16 문자열을 힙에 박스로 담아 LPARAM 로 PostMessage 한다.
+///
+/// 수신측은 `lparam` 을 `*mut Vec<u16>` 으로 받아 `Box::from_raw` 로 회수해
+/// 자동 free 한다. 이전 구현은 `static mut` 버퍼를 공유했지만, PostMessage 가
+/// 비동기 큐잉이라 수신측이 처리하기 전에 송신측이 같은 버퍼를 덮어쓰는
+/// 데이터 레이스가 있었다 (연속 파일 처리 시 파일명 메시지가 섞일 수 있음).
+fn post_wide_string(hwnd: HWND, msg: u32, s: &str) {
+    let boxed: Box<Vec<u16>> = Box::new(to_wide(s));
+    let raw = Box::into_raw(boxed);
 
-        let _ = PostMessageW(
-            Some(hwnd),
-            WM_PROGRESS_ERROR,
-            WPARAM(0),
-            LPARAM((&(*buffer_ptr)).as_ptr() as isize),
-        );
+    // SAFETY: raw points to a leaked Vec<u16> owned by us; receiver reclaims via Box::from_raw.
+    // PostMessageW only queues; ownership transfer is atomic at message-queue boundary.
+    let result = unsafe { PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(raw as isize)) };
+    if result.is_err() {
+        // PostMessage 실패 — 수신자가 박스를 회수하지 못하므로 직접 회수해서 누수 방지.
+        // SAFETY: raw is still valid; we just leaked it via into_raw above.
+        let _ = unsafe { Box::from_raw(raw) };
+        tracing::warn!("PostMessageW failed for msg {msg:#x}");
     }
 }

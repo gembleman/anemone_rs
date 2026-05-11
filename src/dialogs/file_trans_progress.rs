@@ -314,8 +314,8 @@ impl FileTransProgressDialog {
     /// 진행률 메시지 처리
     fn handle_progress_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) {
         // SAFETY: All control handles were created in create_controls and are valid.
-        // lparam pointers for WM_PROGRESS_NAME/WM_PROGRESS_ERROR point to static buffers
-        // in file_trans_thread that outlive the message processing.
+        // lparam for WM_PROGRESS_NAME/WM_PROGRESS_ERROR is a *mut Vec<u16> leaked by
+        // file_trans_thread::post_wide_string; we reclaim ownership via Box::from_raw below.
         unsafe {
             match msg {
                 WM_PROGRESS_TOTAL_SIZE => {
@@ -337,15 +337,11 @@ impl FileTransProgressDialog {
                     Self::set_text(self.index_text, &text);
                 }
                 WM_PROGRESS_NAME => {
-                    // lparam은 파일명 문자열 포인터
+                    // lparam 은 워커가 Box::into_raw 로 넘긴 *mut Vec<u16> — Box::from_raw 로 회수.
                     if lparam.0 != 0 {
-                        let ptr = lparam.0 as *const u16;
-                        let mut len = 0;
-                        while *ptr.add(len) != 0 {
-                            len += 1;
-                        }
-                        let slice = std::slice::from_raw_parts(ptr, len);
-                        let filename = String::from_utf16_lossy(slice);
+                        let boxed: Box<Vec<u16>> = Box::from_raw(lparam.0 as *mut Vec<u16>);
+                        let end = boxed.iter().position(|&c| c == 0).unwrap_or(boxed.len());
+                        let filename = String::from_utf16_lossy(&boxed[..end]);
                         let text = format!(
                             "{} ({}/{})",
                             filename, self.state.current_file_index, self.state.total_files
@@ -429,15 +425,11 @@ impl FileTransProgressDialog {
                     let _ = DestroyWindow(self.hwnd);
                 }
                 WM_PROGRESS_ERROR => {
-                    // lparam은 에러 메시지 문자열 포인터
+                    // lparam 은 워커가 Box::into_raw 로 넘긴 *mut Vec<u16> — Box::from_raw 로 회수.
                     let error_msg = if lparam.0 != 0 {
-                        let ptr = lparam.0 as *const u16;
-                        let mut len = 0;
-                        while *ptr.add(len) != 0 {
-                            len += 1;
-                        }
-                        let slice = std::slice::from_raw_parts(ptr, len);
-                        String::from_utf16_lossy(slice)
+                        let boxed: Box<Vec<u16>> = Box::from_raw(lparam.0 as *mut Vec<u16>);
+                        let end = boxed.iter().position(|&c| c == 0).unwrap_or(boxed.len());
+                        String::from_utf16_lossy(&boxed[..end])
                     } else {
                         "알 수 없는 오류가 발생했습니다.".to_string()
                     };
@@ -493,13 +485,20 @@ impl FileTransProgressDialog {
         unsafe {
             // 진행률 메시지 범위 체크
             if msg >= WM_PROGRESS_TOTAL_SIZE && msg <= WM_PROGRESS_ERROR {
+                let mut handled = false;
                 PROGRESS_INSTANCE.with(|cell| {
                     if let Ok(mut guard) = cell.try_borrow_mut() {
                         if let Some(ref mut dialog) = *guard {
                             dialog.handle_progress_message(msg, wparam, lparam);
+                            handled = true;
                         }
                     }
                 });
+                // 다이얼로그가 사라졌거나 borrow 충돌로 메시지를 처리하지 못한 경우,
+                // 박스로 전달된 lparam payload 를 직접 회수해 누수를 막는다.
+                if !handled && lparam.0 != 0 && (msg == WM_PROGRESS_NAME || msg == WM_PROGRESS_ERROR) {
+                    let _ = Box::from_raw(lparam.0 as *mut Vec<u16>);
+                }
                 return LRESULT(0);
             }
 
