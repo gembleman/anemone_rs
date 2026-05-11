@@ -5,10 +5,12 @@
 //!
 //! 구조:
 //! - 프로세스 전역에 워커 스레드/tokio 런타임이 하나만 존재한다.
-//! - 호출자(메인 윈도우, 번역 다이얼로그 등)는 `request_with_hwnd` 로 자신의 hwnd 를 함께 전달한다.
-//! - 워커는 응답 도착 시 `req_id → hwnd` 라우팅 테이블을 보고 그 hwnd 에만
-//!   `WM_TRANSLATION_COMPLETE` 를 PostMessage 한다. WPARAM 은 `req_id` 다.
+//! - 호출자(메인 윈도우, 번역 다이얼로그 등)는 `translate(hwnd, …)` 헬퍼
+//!   (또는 `dispatch().request(hwnd, …)`) 로 자신의 hwnd 를 함께 전달한다.
+//! - 워커는 응답 도착 시 hwnd 별 원자 슬롯(`latest_snapshot`)으로 stale 을 거른 뒤
+//!   그 hwnd 에만 `WM_TRANSLATION_COMPLETE` 를 PostMessage 한다. WPARAM 은 `req_id` 다.
 //! - 호출자는 메시지 수신 시 `take_response(req_id)` 로 본인 응답만 꺼낸다.
+//! - 다이얼로그가 닫힐 때는 `unregister_hwnd(hwnd)` 로 라우팅/대기 응답을 청소한다.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};

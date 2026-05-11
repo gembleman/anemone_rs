@@ -1,0 +1,4 @@
+# Windows-only 프로젝트(EzTrans 32-bit DLL 의존)이므로 Rust 소스는 CRLF 로 고정한다.
+# 작업 중 platform default 가 CRLF 인 환경에서 매 파일마다 LF→CRLF 변환 경고가
+# 뜨는 문제를 막기 위함.
+*.rs    text eol=crlf

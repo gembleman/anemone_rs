@@ -312,19 +312,35 @@ pub type TranslationResult = Result<String, TranslationError>;
 /// 보관할 필요가 없다.
 pub struct EzTransManager {
     engine: Option<EzTransTranslator>,
+    /// 현재 로드된 엔진의 (dll_path, dat_path). 동일하면 재로드 스킵, 다르면 폐기 후 재로드.
+    loaded_paths: Option<(String, String)>,
 }
 
 impl EzTransManager {
     fn new() -> Self {
-        Self { engine: None }
+        Self {
+            engine: None,
+            loaded_paths: None,
+        }
     }
 
-    /// EzTrans 초기화 (이미 초기화되었으면 스킵)
+    /// EzTrans 초기화.
+    ///
+    /// 동일한 경로로 이미 초기화되어 있으면 스킵. 경로가 바뀌었으면 기존 엔진을
+    /// 폐기하고 새 경로로 재로드한다. 사용자가 설정 다이얼로그에서 dll/dat 경로를
+    /// 바꿔도 즉시 반영되도록 하기 위함.
     pub fn init(&mut self, dll_path: &str, dat_path: &str) -> Result<(), String> {
-        if self.engine.is_some() {
-            return Ok(());
+        if let Some((loaded_dll, loaded_dat)) = &self.loaded_paths {
+            if loaded_dll == dll_path && loaded_dat == dat_path && self.engine.is_some() {
+                return Ok(());
+            }
+            // 경로가 바뀌었거나 엔진이 사라진 상태 — 기존 인스턴스 폐기.
+            self.engine = None;
+            self.loaded_paths = None;
         }
-        self.engine = Some(EzTransTranslator::new(dll_path, dat_path)?);
+        let engine = EzTransTranslator::new(dll_path, dat_path)?;
+        self.engine = Some(engine);
+        self.loaded_paths = Some((dll_path.to_string(), dat_path.to_string()));
         Ok(())
     }
 }
