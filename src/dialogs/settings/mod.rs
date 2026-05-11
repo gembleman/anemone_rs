@@ -98,6 +98,7 @@ impl SettingsDialog {
         unsafe {
             let hinst = GetModuleHandleW(None)?;
             let text_wide = crate::util::to_wide(text);
+            let dpi = crate::dpi::dpi_for_window(self.hwnd);
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 w!("BUTTON"),
@@ -105,7 +106,10 @@ impl SettingsDialog {
                 WINDOW_STYLE(
                     BS_OWNERDRAW as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0,
                 ),
-                x, y, w, h,
+                crate::dpi::scale(x, dpi),
+                crate::dpi::scale(y, dpi),
+                crate::dpi::scale(w, dpi),
+                crate::dpi::scale(h, dpi),
                 Some(self.hwnd),
                 Some(HMENU(id as isize as *mut _)),
                 Some(hinst.into()),
@@ -259,13 +263,15 @@ impl SettingsDialog {
         };
         // SAFETY: self.hwnd is valid. SetWindowPos uses valid parameters.
         unsafe {
+            let dpi = crate::dpi::dpi_for_window(self.hwnd);
+            let s = |v: i32| crate::dpi::scale(v, dpi);
             let mut rect = RECT::default();
             let _ = GetWindowRect(self.hwnd, &mut rect);
             let cur_w = rect.right - rect.left;
             let _ = SetWindowPos(
                 self.hwnd, None,
                 0, 0,
-                cur_w, target_height,
+                cur_w, s(target_height),
                 SWP_NOMOVE | SWP_NOZORDER,
             );
             // 탭 컨트롤도 같이 늘리기 (탭 헤더 ~ 닫기 버튼 위까지)
@@ -273,7 +279,7 @@ impl SettingsDialog {
                 let _ = SetWindowPos(
                     tab_hwnd, None,
                     0, 0,
-                    485, target_height - 70,
+                    s(485), s(target_height - 70),
                     SWP_NOMOVE | SWP_NOZORDER,
                 );
             }
@@ -281,7 +287,7 @@ impl SettingsDialog {
             if let Ok(close_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
                 let _ = SetWindowPos(
                     close_hwnd, None,
-                    385, target_height - 65,
+                    s(385), s(target_height - 65),
                     0, 0,
                     SWP_NOSIZE | SWP_NOZORDER,
                 );

@@ -30,10 +30,12 @@ pub fn dialog_font() -> HFONT {
             return HFONT(cur as *mut _);
         }
         // SAFETY: CreateFontW is called with literal-safe parameters.
+        // 시스템 DPI(Win10 1607+)에 맞춰 폰트 높이 스케일링.
+        let height = crate::dpi::scale_font_for_system(-12);
         let hfont = unsafe {
             let face = to_wide("맑은 고딕");
             CreateFontW(
-                -12, 0, 0, 0,
+                height, 0, 0, 0,
                 FW_NORMAL.0 as i32, 0, 0, 0,
                 DEFAULT_CHARSET,
                 OUT_DEFAULT_PRECIS,
@@ -132,10 +134,15 @@ pub unsafe fn create_dialog_window(opts: &DialogWindowOptions) -> Result<HWND> {
     unsafe {
         let instance = GetModuleHandleW(None)?;
 
+        // 96-DPI 기준 크기를 부모 윈도우의 DPI 로 스케일링.
+        // 자식 컨트롤은 create_child 에서 다이얼로그 자체 DPI 로 동일 비율 스케일된다.
+        let dpi = crate::dpi::dpi_for_window(opts.parent);
+        let w = crate::dpi::scale(opts.width, dpi);
+        let h = crate::dpi::scale(opts.height, dpi);
         let cx = GetSystemMetrics(SM_CXSCREEN);
         let cy = GetSystemMetrics(SM_CYSCREEN);
-        let x = (cx - opts.width) / 2;
-        let y = (cy - opts.height) / 2;
+        let x = (cx - w) / 2;
+        let y = (cy - h) / 2;
 
         let hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW,
@@ -144,8 +151,8 @@ pub unsafe fn create_dialog_window(opts: &DialogWindowOptions) -> Result<HWND> {
             WS_POPUP | WS_CAPTION | WS_SYSMENU | opts.extra_style,
             x,
             y,
-            opts.width,
-            opts.height,
+            w,
+            h,
             Some(opts.parent),
             None,
             Some(instance.into()),
@@ -166,10 +173,15 @@ pub unsafe fn create_dialog_window_centered_on_parent(
     unsafe {
         let instance = GetModuleHandleW(None)?;
 
+        // 96-DPI 기준 크기를 부모 윈도우의 DPI 로 스케일링.
+        let dpi = crate::dpi::dpi_for_window(opts.parent);
+        let w = crate::dpi::scale(opts.width, dpi);
+        let h = crate::dpi::scale(opts.height, dpi);
+
         let mut parent_rect = RECT::default();
         let _ = GetWindowRect(opts.parent, &mut parent_rect);
-        let x = parent_rect.left + (parent_rect.right - parent_rect.left - opts.width) / 2;
-        let y = parent_rect.top + (parent_rect.bottom - parent_rect.top - opts.height) / 2;
+        let x = parent_rect.left + (parent_rect.right - parent_rect.left - w) / 2;
+        let y = parent_rect.top + (parent_rect.bottom - parent_rect.top - h) / 2;
 
         let hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW,
@@ -178,8 +190,8 @@ pub unsafe fn create_dialog_window_centered_on_parent(
             WS_POPUP | WS_CAPTION | WS_SYSMENU | opts.extra_style,
             x,
             y,
-            opts.width,
-            opts.height,
+            w,
+            h,
             Some(opts.parent),
             None,
             Some(instance.into()),
@@ -205,6 +217,9 @@ pub unsafe fn show_dialog_window(hwnd: HWND) {
 // ============================================================
 
 /// 자식 컨트롤을 생성하고 기본 GUI 폰트를 설정한다.
+///
+/// 좌표(`x`, `y`, `w`, `h`) 는 96 DPI 디자인 단위로 받으며, 부모 윈도우의 DPI 로
+/// 자동 스케일링된다.
 // SAFETY: Caller must provide a valid parent HWND, class name, and text pointer.
 unsafe fn create_child(
     parent: HWND,
@@ -223,15 +238,21 @@ unsafe fn create_child(
     unsafe {
         let hinst = GetModuleHandleW(None)?;
 
+        let dpi = crate::dpi::dpi_for_window(parent);
+        let sx = crate::dpi::scale(x, dpi);
+        let sy = crate::dpi::scale(y, dpi);
+        let sw = crate::dpi::scale(w, dpi);
+        let sh = crate::dpi::scale(h, dpi);
+
         let hwnd = CreateWindowExW(
             ex_style,
             class,
             text,
             style,
-            x,
-            y,
-            w,
-            h,
+            sx,
+            sy,
+            sw,
+            sh,
             Some(parent),
             Some(HMENU(id as isize as *mut _)),
             Some(hinst.into()),

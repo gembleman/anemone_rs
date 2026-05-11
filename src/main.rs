@@ -6,6 +6,7 @@ mod config;
 mod constants;
 mod d2d;
 mod dialogs;
+mod dpi;
 mod hotkey;
 mod magnetic;
 mod menu;

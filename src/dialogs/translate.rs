@@ -124,6 +124,8 @@ impl TranslateDialog {
         unsafe {
             let hinst = GetModuleHandleW(None)?;
             let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let dpi = crate::dpi::dpi_for_window(self.hwnd);
+            let s = |v: i32| crate::dpi::scale(v, dpi);
 
             // ====== 번역 엔진 선택 그룹 ======
             self.create_group_box(10, 5, 475, 55, "번역 설정")?;
@@ -173,7 +175,7 @@ impl TranslateDialog {
                     WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0
                         | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | ES_WANTRETURN as u32,
                 ),
-                20, 85, 455, 100,
+                s(20), s(85), s(455), s(100),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::SOURCE_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -206,7 +208,7 @@ impl TranslateDialog {
                     WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0
                         | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | ES_READONLY as u32,
                 ),
-                20, 220, 455, 100,
+                s(20), s(220), s(455), s(100),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::DEST_EDIT as isize as *mut _)),
                 Some(hinst.into()),

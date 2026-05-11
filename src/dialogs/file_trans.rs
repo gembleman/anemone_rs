@@ -128,6 +128,8 @@ impl FileTransDialog {
         unsafe {
             let hinst = GetModuleHandleW(None)?;
             let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let dpi = crate::dpi::dpi_for_window(self.hwnd);
+            let s = |v: i32| crate::dpi::scale(v, dpi);
 
             // ====== 입력 파일 그룹 ======
             self.create_group_box(10, 5, 525, 70, "입력 파일")?;
@@ -142,7 +144,7 @@ impl FileTransDialog {
                 WINDOW_STYLE(
                     WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
                 ),
-                75, 27, 370, 24,
+                s(75), s(27), s(370), s(24),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::LOAD_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -170,7 +172,7 @@ impl FileTransDialog {
                 WINDOW_STYLE(
                     WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
                 ),
-                75, 102, 370, 24,
+                s(75), s(102), s(370), s(24),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::SAVE_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -202,7 +204,7 @@ impl FileTransDialog {
                         | ES_AUTOVSCROLL as u32
                         | ES_READONLY as u32,
                 ),
-                20, 175, 505, 100,
+                s(20), s(175), s(505), s(100),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::PREVIEW_EDIT as isize as *mut _)),
                 Some(hinst.into()),

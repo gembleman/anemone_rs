@@ -180,6 +180,8 @@ impl BacklogDialog {
         // SendMessageW use valid handles and parameters.
         unsafe {
             let hinst = GetModuleHandleW(None)?;
+            let dpi = crate::dpi::dpi_for_window(self.hwnd);
+            let s = |v: i32| crate::dpi::scale(v, dpi);
 
             // RichEdit 컨트롤 생성
             self.richedit = CreateWindowExW(
@@ -191,7 +193,7 @@ impl BacklogDialog {
                         | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32
                         | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
                 ),
-                10, 10, BACKLOG_WIDTH - 30, BACKLOG_HEIGHT - 120,
+                s(10), s(10), s(BACKLOG_WIDTH - 30), s(BACKLOG_HEIGHT - 120),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::RICHEDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -416,9 +418,11 @@ impl BacklogDialog {
     fn on_size(&self, width: i32, height: i32) {
         // SAFETY: self.richedit is a valid control handle from create_controls.
         unsafe {
+            let dpi = crate::dpi::dpi_for_window(self.hwnd);
+            let s = |v: i32| crate::dpi::scale(v, dpi);
             let _ = SetWindowPos(
                 self.richedit, None,
-                10, 10, width - 30, height - 120,
+                s(10), s(10), width - s(30), height - s(120),
                 SWP_NOZORDER,
             );
         }

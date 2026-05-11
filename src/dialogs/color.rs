@@ -181,10 +181,9 @@ impl ColorDialog {
         }
     }
 
-    /// DPI 스케일링 적용 (기본 96 DPI 사용)
-    fn scale_for_dpi(value: i32, _hwnd: HWND) -> i32 {
-        // GetDpiForWindow는 Windows 10 이상에서만 사용 가능하므로 기본값 사용
-        value
+    /// 다이얼로그 DPI 기준으로 96-DPI 디자인 좌표/크기를 스케일링한다.
+    fn scale_for_dpi(value: i32, hwnd: HWND) -> i32 {
+        crate::dpi::scale_for_window(value, hwnd)
     }
 
     /// 다이얼로그에서 ARGB 색상 읽기
