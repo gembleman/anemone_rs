@@ -19,6 +19,10 @@ use crate::constants::{
     WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
     WM_PROGRESS_UPDATE,
 };
+use crate::translation::{
+    TranslationEngine, get_eztrans_manager,
+    worker::{TranslationDispatch, TranslationRequest},
+};
 use crate::util::to_wide;
 use super::file_trans::{FileTransJobData, WriteType};
 
@@ -65,6 +69,37 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
         );
         return;
     }
+
+    // EzTrans 는 최초 한 번 dll/dat 을 매니저에 적재해야 한다. 실패하면 전체 작업
+    // 중단 — 라인마다 같은 에러로 실패하는 것보다 사전에 끊는 편이 친절하다.
+    if job_data.engine == TranslationEngine::EzTrans {
+        let manager = get_eztrans_manager();
+        let init_result = match manager.lock() {
+            Ok(mut mgr) => mgr.init(&job_data.eztrans_dll_path, &job_data.eztrans_dat_path),
+            Err(_) => Err("EzTrans 매니저 잠금 실패".to_string()),
+        };
+        if let Err(e) = init_result {
+            send_error(progress_hwnd, &format!("EzTrans 초기화 실패: {}", e));
+            return;
+        }
+    }
+
+    // 비동기 HTTP 엔진 호출용 자체 tokio runtime. 디스패치 워커를 거치지 않고
+    // 라인 단위로 동기적 응답이 필요하기 때문에 별도 런타임을 둔다.
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            send_error(
+                progress_hwnd,
+                &format!("tokio 런타임 생성 실패: {}", e),
+            );
+            return;
+        }
+    };
+    let http_client = reqwest::Client::new();
 
     // 전체 라인 수 계산
     let total_lines = calculate_total_lines(&job_data.input_files);
@@ -115,6 +150,8 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
             &job_data,
             progress_hwnd,
             &mut global_current_line,
+            &rt,
+            &http_client,
         ) {
             Ok(()) => {}
             Err(e) => {
@@ -155,6 +192,8 @@ fn process_single_file(
     job_data: &FileTransJobData,
     progress_hwnd: HWND,
     global_current: &mut i32,
+    rt: &tokio::runtime::Runtime,
+    http_client: &reqwest::Client,
 ) -> Result<(), String> {
     // 입력 파일 열기
     let input_file = File::open(input_path).map_err(|e| {
@@ -198,8 +237,9 @@ fn process_single_file(
             return Err("사용자가 취소했습니다.".to_string());
         }
 
-        // 번역 처리
-        let translated = translate_line(line, job_data.no_trans_linefeed);
+        // 번역 처리 — 실패 시 원문을 그대로 두고 메시지를 결과 라인에 박아 넘긴다.
+        // 한 줄 실패로 전체 배치를 중단하지 않는 편이 사용자 경험상 낫다.
+        let translated = translate_line(line, job_data, rt, http_client);
 
         // 출력 형식에 따라 쓰기
         write_output(
@@ -227,19 +267,51 @@ fn process_single_file(
     Ok(())
 }
 
-/// 라인 번역 (현재는 플레이스홀더 - 실제 번역 엔진 연동 필요)
-fn translate_line(line: &str, no_trans_linefeed: bool) -> String {
-    // 줄바꿈만 있는 라인 처리
-    if no_trans_linefeed && line.trim().is_empty() {
+/// 라인 번역.
+///
+/// 빈/공백 라인은 그대로 통과시킨다. 그 외 라인은 작업의 엔진 설정에 따라
+/// 동기적으로 한 줄씩 호출한다. EzTrans 는 글로벌 매니저를 통해 동기 호출,
+/// HTTP 기반 엔진(Google/DeepL/Papago/LLM)은 디스패치의 `translate_async`
+/// (재시도/DeepL 폴백 포함) 를 자체 tokio 런타임 위에서 `block_on` 한다.
+///
+/// 한 줄 실패가 전체 배치를 중단시키지는 않도록, 실패 시에는 `[번역 실패: ...]`
+/// 표식을 반환한다. 호출자는 이 문자열을 결과 파일에 그대로 기록한다.
+fn translate_line(
+    line: &str,
+    job_data: &FileTransJobData,
+    rt: &tokio::runtime::Runtime,
+    http_client: &reqwest::Client,
+) -> String {
+    // 빈 라인(길이 0) 은 옵션과 무관하게 통과 — 엔진에 보낼 의미도 없고 EmptyText
+    // 에러만 받는다.
+    if line.is_empty() {
         return line.to_string();
     }
 
-    // TODO: 실제 번역 엔진 연동
-    // 현재는 원문 앞에 [번역] 태그 추가
-    if line.trim().is_empty() {
-        line.to_string()
-    } else {
-        format!("[번역] {}", line)
+    // no_trans_linefeed: 공백/탭만 있는 "줄바꿈 라인" 도 통과시킨다. 영문 등 일부
+    // 텍스트에서 단락 구분용으로 공백만 있는 줄이 나오는데, 그것까지 번역기에
+    // 넘기면 결과가 어지러워진다.
+    if job_data.no_trans_linefeed && line.trim().is_empty() {
+        return line.to_string();
+    }
+
+    let request = TranslationRequest {
+        id: 0,
+        text: line.to_string(),
+        engine: job_data.engine,
+        source_lang: job_data.source_lang,
+        target_lang: job_data.target_lang,
+        credentials: job_data.credentials.clone(),
+    };
+
+    let result = rt.block_on(TranslationDispatch::translate_async(&request, http_client));
+
+    match result {
+        Ok(translated) => translated,
+        Err(e) => {
+            tracing::warn!("라인 번역 실패: {} (원문: {:.60})", e, line);
+            format!("[번역 실패: {}]", e)
+        }
     }
 }
 

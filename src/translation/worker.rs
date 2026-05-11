@@ -442,7 +442,11 @@ impl TranslationDispatch {
     }
 
     /// 비동기 번역 수행 (재시도 포함)
-    async fn translate_async(
+    ///
+    /// 디스패치 큐를 우회해 직접 한 건을 번역할 때도 쓸 수 있도록 `pub(crate)` 노출.
+    /// 파일 번역처럼 라인 단위 동기 호출이 필요한 곳에서 자체 tokio 런타임 위에
+    /// 이 함수를 `block_on` 하는 식으로 재사용한다.
+    pub(crate) async fn translate_async(
         req: &TranslationRequest,
         client: &reqwest::Client,
     ) -> TranslationResult {

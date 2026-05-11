@@ -22,6 +22,7 @@ use windows::{
 
 use crate::config::Config;
 use crate::impl_dialog;
+use crate::translation::{EngineCredentials, Language, TranslationEngine};
 use crate::util::to_wide;
 use super::file_dialog::{FileFilter, open_files_multi, save_file};
 use super::file_trans_progress::FileTransProgressDialog;
@@ -40,6 +41,7 @@ mod ctrl_id {
     pub const NO_TRANS_LINEFEED: u16 = 4020;
     pub const BTN_TRANSLATE: u16 = 4030;
     pub const BTN_CLOSE: u16 = 4031;
+    pub const ENGINE_LABEL: u16 = 4040;
 }
 
 /// 출력 형식
@@ -59,6 +61,13 @@ pub struct FileTransJobData {
     pub no_trans_linefeed: bool,
     pub progress_hwnd: isize, // HWND를 isize로 저장 (Send 가능)
     pub cancel_token: Arc<AtomicBool>,
+    pub engine: TranslationEngine,
+    pub source_lang: Language,
+    pub target_lang: Language,
+    pub credentials: EngineCredentials,
+    /// EzTrans 사용 시 필요한 DLL/DAT 경로. 다른 엔진에서는 빈 문자열이어도 무방.
+    pub eztrans_dll_path: String,
+    pub eztrans_dat_path: String,
 }
 
 // SAFETY: FileTransJobData is Send/Sync safe because the HWND is stored as a plain isize
@@ -71,10 +80,12 @@ unsafe impl Sync for FileTransJobData {}
 /// 파일 번역 대화상자
 pub struct FileTransDialog {
     hwnd: HWND,
+    config: Rc<RefCell<Config>>,
     load_edit: HWND,
     save_edit: HWND,
     save_browser_btn: HWND,
     preview_edit: HWND,
+    engine_label: HWND,
     input_files: Vec<PathBuf>,
     output_files: Vec<PathBuf>,
     write_type: WriteType,
@@ -92,16 +103,18 @@ impl_dialog! {
     class_name: w!("AnemoneFileTransClass"),
     title: w!("파일 번역"),
     width: 550,
-    height: 420,
+    height: 450,
     extra_style: WINDOW_STYLE::default(),
-    params: (_parent: HWND, _config: Rc<RefCell<Config>>),
-    init: |hwnd, _parent, _config| {
+    params: (_parent: HWND, config: Rc<RefCell<Config>>),
+    init: |hwnd, _parent, config| {
         FileTransDialog {
             hwnd,
+            config,
             load_edit: HWND::default(),
             save_edit: HWND::default(),
             save_browser_btn: HWND::default(),
             preview_edit: HWND::default(),
+            engine_label: HWND::default(),
             input_files: Vec::new(),
             output_files: Vec::new(),
             write_type: WriteType::TranslationOnly,
@@ -228,8 +241,42 @@ impl FileTransDialog {
             self.create_button(385, 310, 65, 28, ctrl_id::BTN_TRANSLATE, "번역 시작")?;
             self.create_button(460, 310, 60, 28, ctrl_id::BTN_CLOSE, "닫기")?;
 
+            // ====== 엔진 안내 라벨 (다이얼로그 하단) ======
+            // 파일 번역은 별도의 엔진 선택 UI 를 두지 않고 전역 설정 (번역 다이얼로그/
+            // 설정 다이얼로그) 에서 선택된 엔진을 그대로 사용한다. 이용자가 현재
+            // 어떤 엔진/언어쌍으로 동작할지 헷갈리지 않도록 표시만 해 준다.
+            self.engine_label = self.create_label_with_id(
+                20, 355, 510, 36, ctrl_id::ENGINE_LABEL, "",
+            )?;
+            self.update_engine_label();
+
             Ok(())
         }
+    }
+
+    /// 엔진 안내 라벨 텍스트 갱신
+    fn update_engine_label(&self) {
+        use crate::translation::lang_utils::to_korean_name;
+        let (engine_name, source, target) = {
+            let config = self.config.borrow();
+            let engine = config.translation.get_engine();
+            let engine_name = match engine {
+                TranslationEngine::EzTrans => "EzTrans",
+                TranslationEngine::Google => "Google",
+                TranslationEngine::DeepL => "DeepL",
+                TranslationEngine::Papago => "Papago",
+                TranslationEngine::Llm => "LLM",
+            };
+            let source = to_korean_name(config.translation.get_source_language());
+            let target = to_korean_name(config.translation.get_target_language());
+            (engine_name, source, target)
+        };
+        let text = format!(
+            "현재 번역 엔진: {} ({} → {})\r\n엔진/언어는 \"번역\" 또는 \"설정\" 다이얼로그에서 변경할 수 있습니다.",
+            engine_name, source, target,
+        );
+        // SAFETY: engine_label is a valid static label control handle from create_controls.
+        unsafe { Self::set_edit_text(self.engine_label, &text); }
     }
 
     /// 커스텀 메시지 핸들러 (없음)
@@ -326,12 +373,61 @@ impl FileTransDialog {
 
     /// 번역 시작
     fn start_translation(&mut self) {
+        // 다이얼로그가 떠 있는 동안 다른 창에서 설정이 바뀌었을 수 있으므로
+        // 번역 시작 직전에 안내 라벨을 한 번 갱신해 최신 상태를 보여준다.
+        self.update_engine_label();
+
         if self.input_files.is_empty() {
             // SAFETY: self.hwnd is a valid dialog window handle used as the message box owner.
             unsafe {
                 let _ = MessageBoxW(
                     Some(self.hwnd),
                     w!("파일을 먼저 선택해주세요."),
+                    w!("알림"),
+                    MB_ICONINFORMATION,
+                );
+            }
+            return;
+        }
+
+        // 현재 config 의 엔진 설정을 그대로 사용해 자격증명을 빌드.
+        // 번역 다이얼로그(translate.rs)와 동일한 패턴.
+        let (engine, source_lang, target_lang, credentials, dll, dat) = {
+            let config = self.config.borrow();
+            let engine = config.translation.get_engine();
+            let source_lang = config.translation.get_source_language();
+            let target_lang = config.translation.get_target_language();
+            let credentials = match engine {
+                TranslationEngine::DeepL => EngineCredentials::DeepL {
+                    keys: config.translation.deepl_effective_keys(),
+                    strategy: config.translation.deepl_strategy(),
+                },
+                TranslationEngine::Papago => EngineCredentials::Papago {
+                    client_id: config.translation.papago_client_id.clone(),
+                    client_secret: config.translation.papago_client_secret.clone(),
+                },
+                TranslationEngine::Llm => {
+                    EngineCredentials::Llm(config.translation.llm.to_call_params())
+                }
+                _ => EngineCredentials::None,
+            };
+            (
+                engine,
+                source_lang,
+                target_lang,
+                credentials,
+                config.translation.eztrans_dll_path.clone(),
+                config.translation.eztrans_dat_path.clone(),
+            )
+        };
+
+        // EzTrans 선택 시 경로 미설정이면 즉시 안내하고 중단.
+        if engine == TranslationEngine::EzTrans && (dll.is_empty() || dat.is_empty()) {
+            // SAFETY: self.hwnd is a valid dialog window handle used as the message box owner.
+            unsafe {
+                let _ = MessageBoxW(
+                    Some(self.hwnd),
+                    w!("EzTrans 경로가 설정되지 않았습니다. 번역 설정에서 DLL/DAT 경로를 지정하세요."),
                     w!("알림"),
                     MB_ICONINFORMATION,
                 );
@@ -357,6 +453,12 @@ impl FileTransDialog {
             no_trans_linefeed: self.no_trans_linefeed,
             progress_hwnd: progress_hwnd.0 as isize,
             cancel_token: self.cancel_token.clone(),
+            engine,
+            source_lang,
+            target_lang,
+            credentials,
+            eztrans_dll_path: dll,
+            eztrans_dat_path: dat,
         });
 
         std::thread::spawn(move || {

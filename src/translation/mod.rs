@@ -14,7 +14,7 @@ pub mod deepl;
 mod detect;
 mod eztrans;
 pub mod google;
-mod http_common;
+pub(crate) mod http_common;
 pub mod llm;
 pub mod papago;
 pub mod worker;
