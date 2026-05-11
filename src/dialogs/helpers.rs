@@ -658,7 +658,7 @@ macro_rules! impl_dialog {
         width: $width:expr,
         height: $height:expr,
         extra_style: $extra_style:expr,
-        params: (parent: $parent_type:ty $(, $param_name:ident : $param_type:ty)*),
+        params: ($parent_ident:ident : $parent_type:ty $(, $param_name:ident : $param_type:ty)*),
         init: |$hwnd_arg:ident, $parent_arg:ident $(, $init_param:ident)*| $init_body:expr,
     ) => {
         thread_local! {

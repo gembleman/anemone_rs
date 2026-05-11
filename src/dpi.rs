@@ -45,14 +45,6 @@ pub fn scale_for_window(value: i32, hwnd: HWND) -> i32 {
     scale(value, dpi_for_window(hwnd))
 }
 
-/// 96 DPI 기준 폰트 크기(논리 단위, 음수 가능)를 윈도우 DPI 로 스케일링한다.
-///
-/// `CreateFontW` 의 `cHeight` 인자에 그대로 사용 가능.
-#[inline]
-pub fn scale_font_for_window(logical_height: i32, hwnd: HWND) -> i32 {
-    scale_for_window(logical_height, hwnd)
-}
-
 /// 시스템 DPI 기준으로 폰트 크기를 스케일링 (윈도우 핸들이 없을 때).
 #[inline]
 pub fn scale_font_for_system(logical_height: i32) -> i32 {

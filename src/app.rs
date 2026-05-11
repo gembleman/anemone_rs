@@ -33,7 +33,6 @@ const WINDOW_TITLE: PCWSTR = w!("아네모네");
 
 pub struct App {
     hwnd: HWND,
-    hwnd_parent: HWND,
     width: i32,
     height: i32,
     buffer: Option<DoubleBuffer>,
@@ -119,7 +118,6 @@ impl App {
 
             let app = Rc::new(RefCell::new(App {
                 hwnd,
-                hwnd_parent,
                 width: INITIAL_WINDOW_WIDTH,
                 height: INITIAL_WINDOW_HEIGHT,
                 buffer: None,
@@ -584,7 +582,7 @@ impl App {
 
     /// 비동기 번역 요청
     fn request_translation_async(&mut self, text: &str) {
-        use crate::translation::{get_translation_manager, EngineCredentials, TranslationEngine};
+        use crate::translation::{get_eztrans_manager, EngineCredentials, TranslationEngine};
 
         let config = self.config.borrow();
         let engine = config.translation.get_engine();
@@ -608,9 +606,9 @@ impl App {
         // EzTrans 초기화 (필요시)
         if engine == TranslationEngine::EzTrans {
             if !config.translation.eztrans_dll_path.is_empty() {
-                let manager = get_translation_manager();
+                let manager = get_eztrans_manager();
                 if let Ok(mut mgr) = manager.lock() {
-                    if let Err(e) = mgr.init_eztrans(
+                    if let Err(e) = mgr.init(
                         &config.translation.eztrans_dll_path,
                         &config.translation.eztrans_dat_path,
                     ) {

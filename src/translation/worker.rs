@@ -71,8 +71,6 @@ pub struct TranslationRequest {
 /// 번역 응답
 #[derive(Debug, Clone)]
 pub struct TranslationResponse {
-    /// 요청 ID
-    pub id: u64,
     /// 번역 결과
     pub result: TranslationResult,
 }
@@ -100,16 +98,6 @@ pub fn store_response(response: TranslationResponse) {
             storage.drain(..excess);
         }
     }
-}
-
-/// 특정 ID의 응답 가져오기
-pub fn take_response(id: u64) -> Option<TranslationResponse> {
-    if let Ok(mut storage) = get_response_storage().lock() {
-        if let Some(pos) = storage.iter().position(|r| r.id == id) {
-            return Some(storage.remove(pos));
-        }
-    }
-    None
 }
 
 /// 모든 응답 가져오기
@@ -191,10 +179,7 @@ impl TranslationWorker {
                     continue;
                 }
 
-                let response = TranslationResponse {
-                    id: req.id,
-                    result,
-                };
+                let response = TranslationResponse { result };
 
                 // 응답 저장
                 store_response(response);

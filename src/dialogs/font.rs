@@ -42,15 +42,11 @@ pub struct FontResult {
     pub face_name: String,
     /// 폰트 스타일 (bold, italic)
     pub style: FontStyle,
-    /// 폰트 높이 (LOGFONT.lfHeight)
-    pub height: i32,
-    /// 포인트 크기 (CHOOSEFONT.iPointSize / 10)
-    pub point_size: i32,
 }
 
 impl FontResult {
     /// LOGFONT에서 변환
-    pub fn from_logfont(lf: &LOGFONTW, point_size: i32) -> Self {
+    pub fn from_logfont(lf: &LOGFONTW) -> Self {
         let face_name = String::from_utf16_lossy(
             &lf.lfFaceName[..lf
                 .lfFaceName
@@ -65,33 +61,7 @@ impl FontResult {
                 bold: lf.lfWeight >= 700,
                 italic: lf.lfItalic != 0,
             },
-            height: lf.lfHeight,
-            point_size,
         }
-    }
-
-    /// LOGFONT로 변환
-    ///
-    /// `hwnd` 의 DPI 를 사용해 포인트 → 픽셀 변환. Per-Monitor V2 환경에서는
-    /// 윈도우가 위치한 모니터의 DPI 로 계산해 모니터 간 이동 시에도 정확하다.
-    pub fn to_logfont(&self, hwnd: HWND) -> LOGFONTW {
-        // SAFETY: LOGFONTW is a plain data struct; zeroed memory is a valid representation.
-        let mut lf: LOGFONTW = unsafe { zeroed() };
-
-        // 폰트 이름 복사
-        let face_utf16: Vec<u16> = self.face_name.encode_utf16().collect();
-        let copy_len = face_utf16.len().min(lf.lfFaceName.len() - 1);
-        lf.lfFaceName[..copy_len].copy_from_slice(&face_utf16[..copy_len]);
-
-        // 스타일
-        lf.lfWeight = if self.style.bold { 700 } else { 400 };
-        lf.lfItalic = if self.style.italic { 1 } else { 0 };
-
-        // 높이 (포인트 크기 -> 픽셀)
-        let dpi = crate::dpi::dpi_for_window(hwnd) as i32;
-        lf.lfHeight = -((self.point_size * dpi) / 72);
-
-        lf
     }
 }
 
@@ -117,11 +87,6 @@ impl FontDialog {
         // SAFETY: hwnd is a valid window handle from the caller. show_impl handles all
         // Win32 dialog setup with valid parameters.
         unsafe { Self::show_impl(hwnd, config) }
-    }
-
-    /// 간단한 폰트 선택
-    pub fn show_simple(hwnd: HWND) -> Option<FontResult> {
-        Self::show(hwnd, FontDialogConfig::default())
     }
 
     unsafe fn show_impl(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> {
@@ -171,7 +136,7 @@ impl FontDialog {
             cf.nFontType = SCREEN_FONTTYPE;
 
             if ChooseFontW(&mut cf).as_bool() {
-                Some(FontResult::from_logfont(&lf, cf.iPointSize / 10))
+                Some(FontResult::from_logfont(&lf))
             } else {
                 None
             }

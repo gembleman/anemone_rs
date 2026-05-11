@@ -1,50 +1,11 @@
 //! Google Translate API (비공식 웹 API)
 //!
-//! Google Translate 비공식 웹 API를 사용한 번역
-//! 비동기 HTTPS 요청으로 UI 블로킹 없이 번역 수행
+//! Google Translate 비공식 웹 API를 사용한 번역.
+//! 워커 스레드에서 호출되는 async 함수만 제공한다.
 
-use super::{TranslationError, TranslationResult, Translator, lang_utils};
-use super::http_common::{block_on_async, send_and_read_body, validate_not_empty};
+use super::http_common::{send_and_read_body, validate_not_empty};
+use super::{TranslationError, TranslationResult, lang_utils};
 use isolang::Language;
-
-/// Google 번역기
-pub struct GoogleTranslator;
-
-impl GoogleTranslator {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for GoogleTranslator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Translator for GoogleTranslator {
-    fn translate(&self, text: &str, source: Language, target: Language) -> TranslationResult {
-        validate_not_empty(text)?;
-        block_on_async(|| translate_async(text, source, target))
-    }
-
-    fn engine_name(&self) -> &'static str {
-        "Google Translate"
-    }
-
-    fn is_available(&self) -> bool {
-        true
-    }
-}
-
-/// 비동기 번역 함수 (워커에서 호출용)
-pub async fn translate_async(
-    text: &str,
-    source: Language,
-    target: Language,
-) -> TranslationResult {
-    translate_async_with_client(&super::http_common::shared_client(), text, source, target).await
-}
 
 /// 공유 Client를 받는 비동기 번역 함수
 pub async fn translate_async_with_client(

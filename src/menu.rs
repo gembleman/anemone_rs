@@ -97,9 +97,6 @@ impl ContextMenu {
         }
     }
 
-    pub fn handle(&self) -> HMENU {
-        self.hmenu
-    }
 }
 
 impl Drop for ContextMenu {

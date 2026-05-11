@@ -81,16 +81,6 @@ impl TextStyle {
         }
     }
 
-    /// 크기 타입으로 크기 가져오기
-    pub fn get_size(&self, color_type: ColorType) -> i32 {
-        match color_type {
-            ColorType::Primary => self.size,
-            ColorType::Outline1 => self.outline1_size,
-            ColorType::Outline2 => self.outline2_size,
-            ColorType::Shadow => 0, // 그림자는 오프셋으로 관리
-        }
-    }
-
     /// 크기 타입으로 크기 설정
     pub fn set_size(&mut self, color_type: ColorType, size: i32) {
         match color_type {
@@ -338,18 +328,6 @@ impl TranslationConfig {
             "papago" => 3,
             "llm" => 4,
             _ => 0,
-        }
-    }
-
-    /// u8을 엔진 문자열로 변환 (UI 호환용)
-    pub fn engine_from_u8(value: u8) -> String {
-        match value {
-            0 => "eztrans".to_string(),
-            1 => "google".to_string(),
-            2 => "deepl".to_string(),
-            3 => "papago".to_string(),
-            4 => "llm".to_string(),
-            _ => "eztrans".to_string(),
         }
     }
 
@@ -635,16 +613,6 @@ impl Config {
     pub fn set_text_color(&mut self, text_type: TextType, color_type: ColorType, color: u32) {
         self.get_text_style_mut(text_type)
             .set_color(color_type, color);
-    }
-
-    /// 텍스트 크기 가져오기
-    pub fn get_text_size(&self, text_type: TextType, size_type: ColorType) -> i32 {
-        self.get_text_style(text_type).get_size(size_type)
-    }
-
-    /// 텍스트 크기 설정
-    pub fn set_text_size(&mut self, text_type: TextType, size_type: ColorType, size: i32) {
-        self.get_text_style_mut(text_type).set_size(size_type, size);
     }
 
     /// 모든 텍스트 타입의 크기 동시 설정

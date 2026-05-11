@@ -3,7 +3,7 @@
 //! Google/DeepL 등 HTTP 기반 번역 엔진의 공통 패턴을 추출.
 
 use std::sync::OnceLock;
-use super::{TranslationError, TranslationResult};
+use super::TranslationError;
 
 /// 프로세스 전역 reqwest::Client (connection pool 재사용)
 static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -42,15 +42,4 @@ pub fn validate_not_empty(text: &str) -> Result<(), TranslationError> {
         return Err(TranslationError::EmptyText);
     }
     Ok(())
-}
-
-/// 동기 번역용 tokio Runtime 생성 후 async 함수 실행
-pub fn block_on_async<F, Fut>(f: F) -> TranslationResult
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = TranslationResult>,
-{
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| TranslationError::Engine(format!("런타임 생성 실패: {}", e)))?;
-    rt.block_on(f())
 }

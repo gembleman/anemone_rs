@@ -52,15 +52,6 @@ impl HotkeyManager {
         }
     }
 
-    pub fn unregister(&mut self, id: i32) {
-        // SAFETY: self.hwnd is a valid window handle. UnregisterHotKey removes a hotkey
-        // previously registered with RegisterHotKey using the same hwnd and id.
-        unsafe {
-            let _ = UnregisterHotKey(Some(self.hwnd), id);
-            self.registered.retain(|&x| x != id);
-        }
-    }
-
     pub fn unregister_all(&mut self) {
         for &id in &self.registered {
             // SAFETY: self.hwnd is a valid window handle. UnregisterHotKey removes a hotkey

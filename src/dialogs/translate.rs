@@ -26,7 +26,7 @@ use super::helpers::DialogControls;
 use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::{
-    get_translation_manager, Language, TranslationEngine,
+    get_eztrans_manager, Language, TranslationEngine,
     TranslationWorker, take_all_responses,
 };
 
@@ -66,7 +66,6 @@ pub enum OutputFormat {
 /// 번역 대화상자
 pub struct TranslateDialog {
     hwnd: HWND,
-    main_hwnd: HWND,
     config: Rc<RefCell<Config>>,
     source_edit: HWND,
     dest_edit: HWND,
@@ -95,12 +94,11 @@ impl_dialog! {
     width: 500,
     height: 520,
     extra_style: WINDOW_STYLE::default(),
-    params: (parent: HWND, config: Rc<RefCell<Config>>),
-    init: |hwnd, parent, config| {
+    params: (_parent: HWND, config: Rc<RefCell<Config>>),
+    init: |hwnd, _parent, config| {
         let translation_worker = TranslationWorker::spawn(hwnd);
         TranslateDialog {
             hwnd,
-            main_hwnd: parent,
             config,
             source_edit: HWND::default(),
             dest_edit: HWND::default(),
@@ -361,43 +359,24 @@ impl TranslateDialog {
 
         let config = self.config.borrow();
         let engine = config.translation.get_engine();
-        let manager = get_translation_manager();
 
-        if let Ok(mut mgr) = manager.lock() {
-            if engine == TranslationEngine::EzTrans {
-                if config.translation.eztrans_dll_path.is_empty()
-                    || config.translation.eztrans_dat_path.is_empty()
-                {
-                    return Err("EzTrans 경로가 설정되지 않았습니다. 번역 설정에서 경로를 지정하세요.".to_string());
-                }
-                if let Err(e) = mgr.init_eztrans(
+        if engine == TranslationEngine::EzTrans {
+            if config.translation.eztrans_dll_path.is_empty()
+                || config.translation.eztrans_dat_path.is_empty()
+            {
+                return Err("EzTrans 경로가 설정되지 않았습니다. 번역 설정에서 경로를 지정하세요.".to_string());
+            }
+            let manager = get_eztrans_manager();
+            if let Ok(mut mgr) = manager.lock() {
+                if let Err(e) = mgr.init(
                     &config.translation.eztrans_dll_path,
                     &config.translation.eztrans_dat_path,
                 ) {
                     return Err(format!("EzTrans 초기화 실패: {}", e));
                 }
+            } else {
+                return Err("EzTrans 매니저 잠금 실패".to_string());
             }
-
-            if !config.translation.deepl_api_key.is_empty() {
-                mgr.set_deepl_api_key(config.translation.deepl_api_key.clone());
-            }
-
-            if !config.translation.papago_client_id.is_empty()
-                && !config.translation.papago_client_secret.is_empty()
-            {
-                mgr.set_papago_credentials(
-                    config.translation.papago_client_id.clone(),
-                    config.translation.papago_client_secret.clone(),
-                );
-            }
-
-            mgr.set_llm_api_key(config.translation.llm.api_key.clone());
-
-            mgr.set_engine(engine);
-            mgr.set_source_language(config.translation.get_source_language());
-            mgr.set_target_language(config.translation.get_target_language());
-        } else {
-            return Err("번역 매니저 잠금 실패".to_string());
         }
 
         self.engine_initialized = true;
@@ -420,19 +399,10 @@ impl TranslateDialog {
             let source_lang = supported_source.get(source_idx).copied().unwrap_or(Language::Jpn);
             let target_lang = supported_target.get(target_idx).copied().unwrap_or(Language::Kor);
 
-            let manager = get_translation_manager();
-            if let Ok(mut mgr) = manager.lock() {
-                mgr.set_engine(engine);
-                mgr.set_source_language(source_lang);
-                mgr.set_target_language(target_lang);
-            }
-
-            {
-                let mut config = self.config.borrow_mut();
-                config.translation.set_engine(engine);
-                config.translation.set_source_language(source_lang);
-                config.translation.set_target_language(target_lang);
-            }
+            let mut config = self.config.borrow_mut();
+            config.translation.set_engine(engine);
+            config.translation.set_source_language(source_lang);
+            config.translation.set_target_language(target_lang);
         }
     }
 

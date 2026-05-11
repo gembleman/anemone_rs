@@ -5,7 +5,6 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::SystemTime;
 
 use windows::{
     Win32::{
@@ -59,7 +58,6 @@ pub struct LogEntry {
     pub name: Option<String>,
     pub original: String,
     pub translation: Option<String>,
-    pub timestamp: SystemTime,
 }
 
 impl LogEntry {
@@ -68,13 +66,7 @@ impl LogEntry {
             name: None,
             original,
             translation: None,
-            timestamp: SystemTime::now(),
         }
-    }
-
-    pub fn with_name(mut self, name: String) -> Self {
-        self.name = Some(name);
-        self
     }
 
     pub fn with_translation(mut self, translation: String) -> Self {
@@ -86,8 +78,6 @@ impl LogEntry {
 /// 백로그 대화상자
 pub struct BacklogDialog {
     hwnd: HWND,
-    main_hwnd: HWND,
-    config: Rc<RefCell<Config>>,
     richedit: HWND,
     filter: BacklogFilter,
     add_linefeed: bool,
@@ -110,8 +100,8 @@ impl_dialog! {
     width: BACKLOG_WIDTH,
     height: BACKLOG_HEIGHT,
     extra_style: WS_SIZEBOX,
-    params: (parent: HWND, config: Rc<RefCell<Config>>),
-    init: |hwnd, parent, config| {
+    params: (_parent: HWND, _config: Rc<RefCell<Config>>),
+    init: |hwnd, _parent, _config| {
         // RichEdit 4.1+ DLL 로드 (Msftedit.dll, Vista+)
         //
         // System32 한정 검색으로 DLL hijacking 방어 (cwd/PATH 무시).
@@ -129,8 +119,6 @@ impl_dialog! {
         });
         BacklogDialog {
             hwnd,
-            main_hwnd: parent,
-            config,
             richedit: HWND::default(),
             filter: BacklogFilter::All,
             add_linefeed: true,

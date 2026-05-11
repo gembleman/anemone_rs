@@ -76,20 +76,6 @@ impl TrayIcon {
         }
     }
 
-    pub fn update_tooltip(&mut self, tip: &str) {
-        // SAFETY: self.nid 는 zeroed 로 초기화된 유효한 구조체이며 packed 필드는
-        // raw pointer 로 접근한다.
-        unsafe { set_sz_tip(addr_of_mut!(self.nid.szTip), tip) };
-
-        if self.registered {
-            // SAFETY: self.nid was initialized in create() and is still valid.
-            unsafe {
-                if !Shell_NotifyIconW(NIM_MODIFY, &self.nid).as_bool() {
-                    tracing::warn!("Shell_NotifyIconW(NIM_MODIFY) failed");
-                }
-            }
-        }
-    }
 }
 
 /// `NOTIFYICONDATAW.szTip` ([u16; 128]) 채우기. 항상 null 종결을 보장한다.

@@ -393,41 +393,23 @@ impl SettingsDialog {
         }
     }
 
-    /// 번역 매니저 설정 동기화
+    /// EzTrans 초기화 동기화 (다른 엔진은 워커가 매번 자격증명을 받아 stateless)
     fn sync_translation_manager(&self) {
-        use crate::translation::get_translation_manager;
+        use crate::translation::get_eztrans_manager;
         let config = self.config.borrow();
-        let manager = get_translation_manager();
+        if config.translation.eztrans_dll_path.is_empty()
+            || config.translation.eztrans_dat_path.is_empty()
+        {
+            return;
+        }
+        let manager = get_eztrans_manager();
         if let Ok(mut mgr) = manager.lock() {
-            mgr.set_engine(config.translation.get_engine());
-            mgr.set_source_language(config.translation.get_source_language());
-            mgr.set_target_language(config.translation.get_target_language());
-
-            if !config.translation.eztrans_dll_path.is_empty()
-                && !config.translation.eztrans_dat_path.is_empty()
-            {
-                if let Err(e) = mgr.init_eztrans(
-                    &config.translation.eztrans_dll_path,
-                    &config.translation.eztrans_dat_path,
-                ) {
-                    tracing::warn!("EzTrans init failed in sync: {e}");
-                }
+            if let Err(e) = mgr.init(
+                &config.translation.eztrans_dll_path,
+                &config.translation.eztrans_dat_path,
+            ) {
+                tracing::warn!("EzTrans init failed in sync: {e}");
             }
-
-            if !config.translation.deepl_api_key.is_empty() {
-                mgr.set_deepl_api_key(config.translation.deepl_api_key.clone());
-            }
-
-            if !config.translation.papago_client_id.is_empty()
-                && !config.translation.papago_client_secret.is_empty()
-            {
-                mgr.set_papago_credentials(
-                    config.translation.papago_client_id.clone(),
-                    config.translation.papago_client_secret.clone(),
-                );
-            }
-
-            mgr.set_llm_api_key(config.translation.llm.api_key.clone());
         }
     }
 

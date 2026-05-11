@@ -71,8 +71,6 @@ unsafe impl Sync for FileTransJobData {}
 /// 파일 번역 대화상자
 pub struct FileTransDialog {
     hwnd: HWND,
-    main_hwnd: HWND,
-    config: Rc<RefCell<Config>>,
     load_edit: HWND,
     save_edit: HWND,
     save_browser_btn: HWND,
@@ -96,12 +94,10 @@ impl_dialog! {
     width: 550,
     height: 420,
     extra_style: WINDOW_STYLE::default(),
-    params: (parent: HWND, config: Rc<RefCell<Config>>),
-    init: |hwnd, parent, config| {
+    params: (_parent: HWND, _config: Rc<RefCell<Config>>),
+    init: |hwnd, _parent, _config| {
         FileTransDialog {
             hwnd,
-            main_hwnd: parent,
-            config,
             load_edit: HWND::default(),
             save_edit: HWND::default(),
             save_browser_btn: HWND::default(),

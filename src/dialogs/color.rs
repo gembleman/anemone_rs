@@ -28,24 +28,6 @@ pub struct ColorResult {
 }
 
 impl ColorResult {
-    pub fn alpha(&self) -> u8 {
-        ((self.argb >> 24) & 0xFF) as u8
-    }
-    pub fn red(&self) -> u8 {
-        ((self.argb >> 16) & 0xFF) as u8
-    }
-    pub fn green(&self) -> u8 {
-        ((self.argb >> 8) & 0xFF) as u8
-    }
-    pub fn blue(&self) -> u8 {
-        (self.argb & 0xFF) as u8
-    }
-
-    pub fn to_colorref(&self) -> u32 {
-        // COLORREF는 BGR 순서
-        ((self.blue() as u32) << 16) | ((self.green() as u32) << 8) | (self.red() as u32)
-    }
-
     pub fn from_colorref(colorref: u32, alpha: u8) -> Self {
         let r = (colorref & 0xFF) as u8;
         let g = ((colorref >> 8) & 0xFF) as u8;

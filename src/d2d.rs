@@ -402,28 +402,6 @@ impl D2DRenderer {
         }
     }
 
-    /// 사각형 채우기 (ARGB)
-    pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) -> Result<()> {
-        let target = match self.target() {
-            Some(t) => t,
-            None => return Ok(()),
-        };
-
-        // SAFETY: target is a valid render target between BeginDraw/EndDraw.
-        unsafe {
-            let brush = self.get_or_create_brush(&target, color)?;
-            let rect = D2D_RECT_F {
-                left: x,
-                top: y,
-                right: x + w,
-                bottom: y + h,
-            };
-            target.FillRectangle(&rect, &brush);
-        }
-
-        Ok(())
-    }
-
     /// 테두리 그리기 (ARGB)
     pub fn draw_border(&mut self, thickness: i32, color: u32) -> Result<()> {
         let target = match self.target() {
@@ -459,75 +437,6 @@ impl D2DRenderer {
                 &D2D_RECT_F { left: w - t, top: 0.0, right: w, bottom: h },
                 &brush,
             );
-        }
-
-        Ok(())
-    }
-
-    /// 둥근 사각형 채우기
-    pub fn fill_rounded_rect(
-        &mut self,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        radius: f32,
-        color: u32,
-    ) -> Result<()> {
-        let target = match self.target() {
-            Some(t) => t,
-            None => return Ok(()),
-        };
-
-        // SAFETY: target is a valid render target between BeginDraw/EndDraw.
-        unsafe {
-            let brush = self.get_or_create_brush(&target, color)?;
-            let rounded_rect = D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: x,
-                    top: y,
-                    right: x + w,
-                    bottom: y + h,
-                },
-                radiusX: radius,
-                radiusY: radius,
-            };
-            target.FillRoundedRectangle(&rounded_rect, &brush);
-        }
-
-        Ok(())
-    }
-
-    /// 둥근 사각형 테두리 그리기
-    pub fn draw_rounded_rect(
-        &mut self,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        radius: f32,
-        stroke_width: f32,
-        color: u32,
-    ) -> Result<()> {
-        let target = match self.target() {
-            Some(t) => t,
-            None => return Ok(()),
-        };
-
-        // SAFETY: target is a valid render target between BeginDraw/EndDraw.
-        unsafe {
-            let brush = self.get_or_create_brush(&target, color)?;
-            let rounded_rect = D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: x,
-                    top: y,
-                    right: x + w,
-                    bottom: y + h,
-                },
-                radiusX: radius,
-                radiusY: radius,
-            };
-            target.DrawRoundedRectangle(&rounded_rect, &brush, stroke_width, None);
         }
 
         Ok(())
@@ -659,24 +568,6 @@ impl D2DRenderer {
         Ok(())
     }
 
-    /// 텍스트 메트릭스 가져오기
-    pub fn get_text_metrics(
-        &self,
-        text: &str,
-        style: &TextRenderStyle,
-        max_width: f32,
-        max_height: f32,
-    ) -> Result<(f32, f32)> {
-        let text_layout = self.create_text_layout(text, style, max_width, max_height)?;
-
-        // SAFETY: DWRITE_TEXT_METRICS is zeroed before use and filled by GetMetrics.
-        unsafe {
-            let mut metrics: DWRITE_TEXT_METRICS = std::mem::zeroed();
-            text_layout.GetMetrics(&mut metrics)?;
-            Ok((metrics.width, metrics.height))
-        }
-    }
-
     /// Render target을 강제 폐기 (디스플레이 변경 등에서 호출)
     /// 다음 `bind_dc` 호출에서 자동으로 재생성된다.
     pub fn invalidate_target(&mut self) {
@@ -684,8 +575,4 @@ impl D2DRenderer {
         self.brush_cache.clear();
     }
 
-    /// 바인딩된 크기 반환
-    pub fn get_size(&self) -> (i32, i32) {
-        (self.bound_width, self.bound_height)
-    }
 }

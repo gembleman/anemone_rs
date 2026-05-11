@@ -19,13 +19,10 @@ pub mod llm;
 pub mod papago;
 pub mod worker;
 
-pub use deepl::DeepLTranslator;
 pub use detect::is_source_language;
 pub use eztrans::EzTransTranslator;
-pub use google::GoogleTranslator;
 pub use isolang::Language;
 pub use llm::LlmProvider;
-pub use papago::PapagoTranslator;
 pub use worker::{EngineCredentials, TranslationWorker, take_all_responses};
 
 use std::sync::{Arc, Mutex, OnceLock};
@@ -115,16 +112,6 @@ impl TranslationEngine {
         }
     }
 
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::EzTrans => "EzTrans",
-            Self::Google => "Google",
-            Self::DeepL => "DeepL",
-            Self::Papago => "Papago",
-            Self::Llm => "LLM",
-        }
-    }
-
     /// 해당 엔진이 지원하는 소스 언어 목록
     pub fn supported_source_languages(&self) -> &'static [Language] {
         match self {
@@ -146,12 +133,6 @@ impl TranslationEngine {
             Self::Papago => &PAPAGO_SUPPORTED_LANGUAGES,
             Self::Llm => &GOOGLE_SUPPORTED_LANGUAGES,
         }
-    }
-
-    /// 엔진이 해당 언어 쌍을 지원하는지 확인
-    pub fn supports_language_pair(&self, source: Language, target: Language) -> bool {
-        self.supported_source_languages().contains(&source)
-            && self.supported_target_languages().contains(&target)
     }
 }
 
@@ -316,185 +297,52 @@ pub mod lang_utils {
             _ => "en",
         }
     }
-
-    /// 기본 언어 (일본어)
-    pub fn default_source() -> Language {
-        Language::Jpn
-    }
-
-    /// 기본 타겟 언어 (한국어)
-    pub fn default_target() -> Language {
-        Language::Kor
-    }
 }
 
 /// 번역 결과 타입
 pub type TranslationResult = Result<String, TranslationError>;
 
-/// 번역 인터페이스
-pub trait Translator: Send + Sync {
-    /// 번역 수행
-    fn translate(&self, text: &str, source: Language, target: Language) -> TranslationResult;
-
-    /// 엔진 이름
-    fn engine_name(&self) -> &'static str;
-
-    /// 사용 가능 여부
-    fn is_available(&self) -> bool;
+/// EzTrans 인스턴스 보관용 글로벌 매니저.
+///
+/// EzTrans 는 외부 32-bit DLL 을 mmap 하는 무거운 객체라서 프로세스당 하나만
+/// 유지한다. 다른 엔진(Google/DeepL/Papago/LLM)은 stateless 한 HTTP 호출이라
+/// 보관할 필요가 없다.
+pub struct EzTransManager {
+    engine: Option<EzTransTranslator>,
 }
 
-/// 글로벌 번역 매니저
-pub struct TranslationManager {
-    eztrans: Option<EzTransTranslator>,
-    google: GoogleTranslator,
-    deepl: DeepLTranslator,
-    papago: PapagoTranslator,
-    /// LLM 호출에 필요한 키. 비어 있으면 미설정으로 간주.
-    llm_api_key: String,
-    current_engine: TranslationEngine,
-    source_lang: Language,
-    target_lang: Language,
-}
-
-impl TranslationManager {
-    /// 새 매니저 생성
-    pub fn new() -> Self {
-        Self {
-            eztrans: None,
-            google: GoogleTranslator::new(),
-            deepl: DeepLTranslator::new(String::new()),
-            papago: PapagoTranslator::new(String::new(), String::new()),
-            llm_api_key: String::new(),
-            current_engine: TranslationEngine::EzTrans,
-            source_lang: Language::Jpn,
-            target_lang: Language::Kor,
-        }
+impl EzTransManager {
+    fn new() -> Self {
+        Self { engine: None }
     }
 
     /// EzTrans 초기화 (이미 초기화되었으면 스킵)
-    pub fn init_eztrans(&mut self, dll_path: &str, dat_path: &str) -> Result<(), String> {
-        if self.eztrans.is_some() {
+    pub fn init(&mut self, dll_path: &str, dat_path: &str) -> Result<(), String> {
+        if self.engine.is_some() {
             return Ok(());
         }
-        match EzTransTranslator::new(dll_path, dat_path) {
-            Ok(engine) => {
-                self.eztrans = Some(engine);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /// DeepL API 키 설정
-    pub fn set_deepl_api_key(&mut self, api_key: String) {
-        self.deepl = DeepLTranslator::new(api_key);
-    }
-
-    /// Papago 자격증명 설정
-    pub fn set_papago_credentials(&mut self, client_id: String, client_secret: String) {
-        self.papago.set_credentials(client_id, client_secret);
-    }
-
-    /// LLM API 키 설정 (사용 가능 여부 판정용)
-    pub fn set_llm_api_key(&mut self, api_key: String) {
-        self.llm_api_key = api_key;
-    }
-
-    /// 현재 엔진 설정
-    pub fn set_engine(&mut self, engine: TranslationEngine) {
-        self.current_engine = engine;
-    }
-
-    /// 소스 언어 설정
-    pub fn set_source_language(&mut self, lang: Language) {
-        self.source_lang = lang;
-    }
-
-    /// 타겟 언어 설정
-    pub fn set_target_language(&mut self, lang: Language) {
-        self.target_lang = lang;
-    }
-
-    /// 현재 엔진 가져오기
-    pub fn current_engine(&self) -> TranslationEngine {
-        self.current_engine
-    }
-
-    /// 소스 언어 가져오기
-    pub fn source_language(&self) -> Language {
-        self.source_lang
-    }
-
-    /// 타겟 언어 가져오기
-    pub fn target_language(&self) -> Language {
-        self.target_lang
-    }
-
-    /// 번역 수행
-    ///
-    /// LLM 엔진은 비동기 워커(`TranslationWorker`)에서만 호출되므로 여기서는 미지원.
-    pub fn translate(&self, text: &str) -> TranslationResult {
-        match self.current_engine {
-            TranslationEngine::EzTrans => {
-                if let Some(ref engine) = self.eztrans {
-                    engine.translate(text, self.source_lang, self.target_lang)
-                } else {
-                    Err(TranslationError::EngineNotInitialized("EzTrans"))
-                }
-            }
-            TranslationEngine::Google => {
-                self.google
-                    .translate(text, self.source_lang, self.target_lang)
-            }
-            TranslationEngine::DeepL => {
-                self.deepl
-                    .translate(text, self.source_lang, self.target_lang)
-            }
-            TranslationEngine::Papago => {
-                self.papago
-                    .translate(text, self.source_lang, self.target_lang)
-            }
-            TranslationEngine::Llm => Err(TranslationError::Engine(
-                "LLM 엔진은 비동기 워커를 통해서만 호출 가능합니다.".to_string(),
-            )),
-        }
-    }
-
-    /// 현재 엔진 사용 가능 여부
-    pub fn is_current_engine_available(&self) -> bool {
-        match self.current_engine {
-            TranslationEngine::EzTrans => self.eztrans.as_ref().is_some_and(|e| e.is_available()),
-            TranslationEngine::Google => self.google.is_available(),
-            TranslationEngine::DeepL => self.deepl.is_available(),
-            TranslationEngine::Papago => self.papago.is_available(),
-            TranslationEngine::Llm => !self.llm_api_key.is_empty(),
-        }
+        self.engine = Some(EzTransTranslator::new(dll_path, dat_path)?);
+        Ok(())
     }
 }
 
-impl Default for TranslationManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+static EZTRANS_MANAGER: OnceLock<Arc<Mutex<EzTransManager>>> = OnceLock::new();
 
-// 글로벌 인스턴스
-static TRANSLATION_MANAGER: OnceLock<Arc<Mutex<TranslationManager>>> = OnceLock::new();
-
-/// 글로벌 번역 매니저 가져오기
-pub fn get_translation_manager() -> Arc<Mutex<TranslationManager>> {
-    TRANSLATION_MANAGER
-        .get_or_init(|| Arc::new(Mutex::new(TranslationManager::new())))
+/// EzTrans 매니저 (필요 시 초기화) 가져오기
+pub fn get_eztrans_manager() -> Arc<Mutex<EzTransManager>> {
+    EZTRANS_MANAGER
+        .get_or_init(|| Arc::new(Mutex::new(EzTransManager::new())))
         .clone()
 }
 
-/// EzTrans로 번역 수행 (워커 스레드에서 호출용)
+/// EzTrans 로 번역 수행 (워커 스레드에서 호출용).
 ///
-/// 글로벌 매니저의 EzTrans 인스턴스를 사용합니다.
+/// 글로벌 매니저의 EzTrans 인스턴스를 사용한다. 초기화되어 있지 않으면
+/// `EngineNotInitialized` 를 돌려준다.
 pub fn translate_with_eztrans(text: &str, source: Language, target: Language) -> TranslationResult {
-    let manager = get_translation_manager();
+    let manager = get_eztrans_manager();
     if let Ok(mgr) = manager.lock() {
-        if let Some(ref engine) = mgr.eztrans {
+        if let Some(ref engine) = mgr.engine {
             return engine.translate(text, source, target);
         }
     }

@@ -48,11 +48,6 @@ impl ClipboardWatcher {
         }
     }
 
-    pub fn restart(&mut self) {
-        self.stop();
-        self.start();
-    }
-
     pub fn is_watching(&self) -> bool {
         self.watching
     }
@@ -108,10 +103,6 @@ impl ClipboardWatcher {
         }
     }
 
-    /// 다음 클립보드 변경 무시
-    pub fn ignore_next_change(&mut self) {
-        self.ignore_next = true;
-    }
 }
 
 impl Drop for ClipboardWatcher {
