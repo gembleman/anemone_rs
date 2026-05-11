@@ -16,6 +16,43 @@ use windows::{
 use crate::constants::{CB_ADDSTRING, CB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, TCM_INSERTITEMW};
 use crate::util::to_wide;
 
+/// 다이얼로그 공용 한글 폰트 (Malgun Gothic 9pt).
+///
+/// 최초 호출 시 `CreateFontW`로 생성 후 캐시. 실패 시 DEFAULT_GUI_FONT로 폴백.
+/// 프로세스 종료 시 OS가 핸들을 정리하므로 명시적 해제는 하지 않는다.
+pub fn dialog_font() -> HFONT {
+    thread_local! {
+        static CACHED: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+    }
+    CACHED.with(|c| {
+        let cur = c.get();
+        if cur != 0 {
+            return HFONT(cur as *mut _);
+        }
+        // SAFETY: CreateFontW is called with literal-safe parameters.
+        let hfont = unsafe {
+            let face = to_wide("맑은 고딕");
+            CreateFontW(
+                -12, 0, 0, 0,
+                FW_NORMAL.0 as i32, 0, 0, 0,
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                PCWSTR(face.as_ptr()),
+            )
+        };
+        if hfont.0.is_null() {
+            // SAFETY: GetStockObject returns a process-wide stock handle.
+            let stock = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+            return HFONT(stock.0 as *mut _);
+        }
+        c.set(hfont.0 as isize);
+        hfont
+    })
+}
+
 // ── Tab Control 구조체 ──────────────────────────────────
 
 /// TCITEMW (Win32 Tab Control item)
@@ -201,7 +238,7 @@ unsafe fn create_child(
             None,
         )?;
 
-        let hfont = GetStockObject(DEFAULT_GUI_FONT);
+        let hfont = dialog_font();
         let _ = SendMessageW(
             hwnd,
             WM_SETFONT,
@@ -435,6 +472,34 @@ pub unsafe fn create_edit(
     }
 }
 
+/// 숫자 전용 에디트 컨트롤 생성 (ES_NUMBER)
+// SAFETY: Caller must provide a valid parent HWND.
+pub unsafe fn create_edit_numeric(
+    parent: HWND,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    id: u16,
+    text: &str,
+) -> Result<HWND> {
+    let text_wide = to_wide(text);
+    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
+    unsafe {
+        create_child(
+            parent,
+            w!("EDIT"),
+            PCWSTR(text_wide.as_ptr()),
+            WINDOW_STYLE(
+                ES_AUTOHSCROLL as u32 | ES_NUMBER as u32
+                    | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0,
+            ),
+            WS_EX_CLIENTEDGE,
+            x, y, w, h, id,
+        )
+    }
+}
+
 /// 멀티라인 에디트 컨트롤 생성 (수직 스크롤 + 줄바꿈 보존)
 // SAFETY: Caller must provide a valid parent HWND.
 pub unsafe fn create_multiline_edit(
@@ -532,6 +597,10 @@ pub trait DialogControls {
 
     unsafe fn create_edit(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
         unsafe { create_edit(self.dialog_hwnd(), x, y, w, h, id, text) }
+    }
+
+    unsafe fn create_edit_numeric(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+        unsafe { create_edit_numeric(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 
     unsafe fn create_multiline_edit(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {

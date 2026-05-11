@@ -70,6 +70,7 @@ impl SettingsDialog {
                 let initial = self.config.borrow().background_color;
                 if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
                     self.config.borrow_mut().background_color = result.argb;
+                    self.invalidate_color_button(BACKGROUND_COLOR);
                     self.notify_change();
                 }
             }
@@ -81,24 +82,24 @@ impl SettingsDialog {
             }
 
             // NAME/ORG/TRANS 색상 버튼
-            NAME_COLOR => self.handle_color_button(TextType::Name, ColorType::Primary),
-            NAME_OUTLINE1 => self.handle_color_button(TextType::Name, ColorType::Outline1),
-            NAME_OUTLINE2 => self.handle_color_button(TextType::Name, ColorType::Outline2),
-            NAME_SHADOW_COLOR => self.handle_color_button(TextType::Name, ColorType::Shadow),
+            NAME_COLOR => self.handle_color_button(NAME_COLOR, TextType::Name, ColorType::Primary),
+            NAME_OUTLINE1 => self.handle_color_button(NAME_OUTLINE1, TextType::Name, ColorType::Outline1),
+            NAME_OUTLINE2 => self.handle_color_button(NAME_OUTLINE2, TextType::Name, ColorType::Outline2),
+            NAME_SHADOW_COLOR => self.handle_color_button(NAME_SHADOW_COLOR, TextType::Name, ColorType::Shadow),
             NAME_FONT => self.handle_font_button(TextType::Name),
             NAME_SHADOW => { self.config.borrow_mut().toggle_shadow(TextType::Name); self.notify_change(); }
 
-            ORG_COLOR => self.handle_color_button(TextType::Original, ColorType::Primary),
-            ORG_OUTLINE1 => self.handle_color_button(TextType::Original, ColorType::Outline1),
-            ORG_OUTLINE2 => self.handle_color_button(TextType::Original, ColorType::Outline2),
-            ORG_SHADOW_COLOR => self.handle_color_button(TextType::Original, ColorType::Shadow),
+            ORG_COLOR => self.handle_color_button(ORG_COLOR, TextType::Original, ColorType::Primary),
+            ORG_OUTLINE1 => self.handle_color_button(ORG_OUTLINE1, TextType::Original, ColorType::Outline1),
+            ORG_OUTLINE2 => self.handle_color_button(ORG_OUTLINE2, TextType::Original, ColorType::Outline2),
+            ORG_SHADOW_COLOR => self.handle_color_button(ORG_SHADOW_COLOR, TextType::Original, ColorType::Shadow),
             ORG_FONT => self.handle_font_button(TextType::Original),
             ORG_SHADOW => { self.config.borrow_mut().toggle_shadow(TextType::Original); self.notify_change(); }
 
-            TRANS_COLOR => self.handle_color_button(TextType::Translation, ColorType::Primary),
-            TRANS_OUTLINE1 => self.handle_color_button(TextType::Translation, ColorType::Outline1),
-            TRANS_OUTLINE2 => self.handle_color_button(TextType::Translation, ColorType::Outline2),
-            TRANS_SHADOW_COLOR => self.handle_color_button(TextType::Translation, ColorType::Shadow),
+            TRANS_COLOR => self.handle_color_button(TRANS_COLOR, TextType::Translation, ColorType::Primary),
+            TRANS_OUTLINE1 => self.handle_color_button(TRANS_OUTLINE1, TextType::Translation, ColorType::Outline1),
+            TRANS_OUTLINE2 => self.handle_color_button(TRANS_OUTLINE2, TextType::Translation, ColorType::Outline2),
+            TRANS_SHADOW_COLOR => self.handle_color_button(TRANS_SHADOW_COLOR, TextType::Translation, ColorType::Shadow),
             TRANS_FONT => self.handle_font_button(TextType::Translation),
             TRANS_SHADOW => { self.config.borrow_mut().toggle_shadow(TextType::Translation); self.notify_change(); }
 
@@ -111,6 +112,7 @@ impl SettingsDialog {
                 let initial = self.config.borrow().border_color;
                 if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
                     self.config.borrow_mut().border_color = result.argb;
+                    self.invalidate_color_button(BORDER_COLOR);
                     self.notify_change();
                 }
             }
@@ -125,7 +127,7 @@ impl SettingsDialog {
                 cfg.repeat_text_mode = (cfg.repeat_text_mode + 1) % 5;
                 let new_mode = cfg.repeat_text_mode;
                 drop(cfg);
-                self.set_control_text(REPEAT_TEXT, &format!("반복:{}", new_mode));
+                self.set_control_text(REPEAT_TEXT, &super::repeat_mode_label(new_mode));
                 self.notify_change();
             }
 
@@ -275,12 +277,13 @@ impl SettingsDialog {
     }
 
     /// 색상 버튼 처리
-    fn handle_color_button(&mut self, text_type: TextType, color_type: ColorType) {
+    fn handle_color_button(&mut self, ctrl_id: u16, text_type: TextType, color_type: ColorType) {
         let initial = self.config.borrow().get_text_color(text_type, color_type);
         if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
             self.config
                 .borrow_mut()
                 .set_text_color(text_type, color_type, result.argb);
+            self.invalidate_color_button(ctrl_id);
             self.notify_change();
         }
     }
@@ -364,6 +367,8 @@ impl SettingsDialog {
                     use crate::translation::TranslationEngine;
                     let engine = TranslationEngine::from_u8(sel as u8);
                     self.config.borrow_mut().translation.set_engine(engine);
+                    // 엔진 변경 시 해당 그룹만 활성화하고 언어 콤보 항목 재구성
+                    self.apply_engine_state(engine);
                 }
                 TRANS_SOURCE_LANG => {
                     let engine = self.config.borrow().translation.get_engine();
