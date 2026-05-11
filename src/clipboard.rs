@@ -1,7 +1,7 @@
 use windows::Win32::{
     Foundation::*,
     System::DataExchange::*,
-    System::Memory::{GlobalLock, GlobalUnlock},
+    System::Memory::{GlobalLock, GlobalSize, GlobalUnlock},
     System::Ole::CF_UNICODETEXT,
 };
 
@@ -80,14 +80,24 @@ impl ClipboardWatcher {
 
                 let handle = GetClipboardData(format).ok()?;
                 let hglobal = windows::Win32::Foundation::HGLOBAL(handle.0);
+                // 글로벌 메모리의 실제 바이트 길이를 알아내 UTF-16 길이 계산의
+                // 안전 상한으로 쓴다. 손상된 데이터에 null 종결자가 없어도
+                // OOR 읽기로 발산하지 않게 한다. GlobalSize 가 0 을 반환하면
+                // (실패 또는 빈 핸들) 즉시 None.
+                let byte_size = GlobalSize(hglobal);
+                if byte_size == 0 {
+                    return None;
+                }
+                let max_words = byte_size / 2;
+
                 let ptr = GlobalLock(hglobal) as *const u16;
                 if ptr.is_null() {
                     return None;
                 }
 
-                // null-terminated UTF-16 문자열 길이 계산
+                // null-terminated UTF-16 문자열 길이 계산 — max_words 로 상한.
                 let mut len = 0;
-                while *ptr.add(len) != 0 {
+                while len < max_words && *ptr.add(len) != 0 {
                     len += 1;
                 }
 
