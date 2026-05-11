@@ -17,7 +17,7 @@ use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
 use crate::constants::{
     INITIAL_WINDOW_HEIGHT, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_X, INITIAL_WINDOW_Y,
-    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, TRANSPARENT_ALPHA,
+    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH,
     WM_DEFERRED_CLIPBOARD, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
 use crate::d2d::D2DRenderer;
@@ -56,6 +56,13 @@ pub struct App {
     composition: Option<CompositionRenderer>,
     /// 대기 중인 번역의 원문 (번역 완료 시 백로그에 추가)
     pending_original_text: Option<String>,
+    /// 텍스트가 차지하는 라인 단위 사각형 (클라이언트 좌표).
+    ///
+    /// 비어 있으면 `WM_NCHITTEST` 가 윈도우 사각 전체를 `HTCAPTION` 으로
+    /// 잡는다 (현재 동작). 비어 있지 않으면 점이 사각형 합집합에 들면
+    /// `HTCAPTION`, 아니면 `HTTRANSPARENT`. 채워지는 조건은
+    /// `background_visible=false` 이고 `current_text` 가 비어있지 않을 때.
+    hit_region: Vec<RECT>,
 }
 
 // 전역 앱 인스턴스 (WndProc에서 접근용)
@@ -140,6 +147,7 @@ impl App {
                 d2d_renderer: Some(d2d_renderer),
                 composition: None,
                 pending_original_text: None,
+                hit_region: Vec::new(),
             }));
 
             // 전역 인스턴스 설정
@@ -305,8 +313,11 @@ impl App {
         // 한 프레임 시작 — brush 캐시 reset + AA 모드.
         renderer.configure_frame(ctx);
 
-        // 배경 클리어 (배경 비활성 시 완전 투명)
-        let clear_color = if background_visible { background_color } else { TRANSPARENT_ALPHA };
+        // 배경 클리어. 배경 비활성 시 ARGB=0 으로 완전 투명. DComp 합성
+        // 경로는 hit-testing 이 윈도우 단위라 layered 시절의 "α=1 트릭"
+        // (완전 투명이면 클릭이 통과되지 않음 방지) 은 더 이상 필요/유효하지
+        // 않다 — α 0 픽셀이든 1 픽셀이든 윈도우 사각 전체가 클릭을 잡는다.
+        let clear_color = if background_visible { background_color } else { 0 };
         renderer.clear(ctx, clear_color);
 
         // 테두리 그리기
@@ -339,6 +350,42 @@ impl App {
         // vsync 미대기였으니 동일 정책.
         if let Err(e) = composition.end_draw_and_present(0) {
             tracing::error!("DComp end_draw_and_present failed: {e}");
+        }
+
+        // hit_region 갱신 — `&mut self.d2d_renderer` 와 충돌하지 않도록 본
+        // 블록의 가변 borrow 가 풀린 뒤 별도 호출. `background_visible=true`
+        // 또는 텍스트가 비어 있으면 빈 Vec → WM_NCHITTEST 가 윈도우 사각
+        // 전체를 HTCAPTION 으로 잡는 기존 동작 유지.
+        self.hit_region.clear();
+        if !background_visible && !self.current_text.is_empty() {
+            let max_width = (self.width - margin_x * 2) as f32;
+            let max_height = (self.height - margin_y * 2) as f32;
+            // shadow 가 그림자 방향으로만 확장되므로 양방향 inflate 의 보수적
+            // 상한으로 abs 합. outline 은 텍스트 주변 전 방향이라 그대로 합산.
+            let shadow_inflate = if render_style.shadow_enabled {
+                render_style.shadow_offset_x.unsigned_abs() as i32
+                    + render_style.shadow_offset_y.unsigned_abs() as i32
+            } else {
+                0
+            };
+            let inflate = (render_style.outline1_size
+                + render_style.outline2_size
+                + shadow_inflate
+                + 1) as f32;
+            if let Some(d2d) = self.d2d_renderer.as_ref() {
+                match d2d.compute_text_line_rects(
+                    &self.current_text,
+                    &render_style,
+                    max_width,
+                    max_height,
+                    margin_x as f32,
+                    margin_y as f32,
+                    inflate,
+                ) {
+                    Ok(rects) => self.hit_region = rects,
+                    Err(e) => tracing::warn!("compute_text_line_rects failed: {e}"),
+                }
+            }
         }
 
         Ok(())
@@ -960,6 +1007,17 @@ impl App {
                         let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                         if let Some(hit) = window::hit_test_resize_border(hwnd, x, y, RESIZE_BORDER_WIDTH) {
                             return LRESULT(hit as isize);
+                        }
+                        // DComp 합성 경로 회귀 보완: 투명 배경 모드에서 텍스트
+                        // 라인 사각형 밖이면 HTTRANSPARENT 로 클릭 통과.
+                        // try_borrow 실패 (paint 등 mutable borrow 진행 중) 시는
+                        // 안전한 fallback 으로 HTCAPTION 유지. hit_region 이
+                        // 비어 있으면 (배경 표시 또는 텍스트 없음) 기존 동작.
+                        if let Ok(app_ref) = app.try_borrow()
+                            && !app_ref.hit_region.is_empty()
+                            && !window::point_in_any_rect(hwnd, x, y, &app_ref.hit_region)
+                        {
+                            return LRESULT(HTTRANSPARENT as isize);
                         }
                         return LRESULT(HTCAPTION as isize);
                     }

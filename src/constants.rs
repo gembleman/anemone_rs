@@ -19,8 +19,6 @@ pub const INITIAL_WINDOW_Y: i32 = 100;
 pub const MIN_WINDOW_SIZE: i32 = 100;
 /// 테두리 크기 조절 영역 너비 (WM_NCHITTEST)
 pub const RESIZE_BORDER_WIDTH: i32 = 8;
-/// 배경 투명 시 최소 알파 (alpha=1, 완전 투명이면 클릭 불가)
-pub const TRANSPARENT_ALPHA: u32 = 0x01000000;
 
 // ── 사용자 정의 메시지 (WM_USER) ────────────────────────
 

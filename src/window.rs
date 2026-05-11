@@ -114,3 +114,23 @@ pub fn set_min_track_size(mm: &mut MINMAXINFO, min_width: i32, min_height: i32) 
     mm.ptMinTrackSize.x = min_width;
     mm.ptMinTrackSize.y = min_height;
 }
+
+/// 스크린 좌표 (x, y) 를 hwnd 의 클라이언트 좌표로 변환해, 사각형 합집합
+/// 중 하나라도 포함하면 true.
+///
+/// DComp 합성 경로의 `background_visible=false` 상태에서 텍스트 라인
+/// 사각형 외의 투명 영역 클릭을 통과시키기 위한 보조. 빈 슬라이스면 false.
+pub fn point_in_any_rect(hwnd: HWND, x: i32, y: i32, rects: &[RECT]) -> bool {
+    if rects.is_empty() {
+        return false;
+    }
+    // SAFETY: hwnd 는 호출자가 보장한 유효 핸들. ScreenToClient 는 표준
+    // 좌표 변환이며 실패해도 pt 가 그대로 남을 뿐 메모리 안전성 무관.
+    let mut pt = POINT { x, y };
+    unsafe {
+        let _ = ScreenToClient(hwnd, &mut pt);
+    }
+    rects
+        .iter()
+        .any(|r| pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom)
+}

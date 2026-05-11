@@ -535,4 +535,72 @@ impl D2DRenderer {
         Ok(())
     }
 
+    /// 텍스트가 차지하는 라인 단위 사각형을 클라이언트 좌표계로 돌려준다.
+    ///
+    /// DComp 합성 경로에서는 hit-testing 이 윈도우 사각 단위라 투명 배경
+    /// 영역도 클릭/드래그를 가로채는 회귀가 있다. `WM_NCHITTEST` 에서
+    /// 본 사각형 합집합 vs 점 검사로 그 영역만 `HTCAPTION` 로 잡고
+    /// 나머지를 `HTTRANSPARENT` 반환하기 위함.
+    ///
+    /// `origin_x` / `origin_y` 는 텍스트 그리기 원점 (= margin), `inflate`
+    /// 는 outline/shadow 두께를 흡수하기 위한 사각형 확장 (px). 빈 텍스트
+    /// 면 빈 Vec.
+    pub fn compute_text_line_rects(
+        &self,
+        text: &str,
+        style: &TextRenderStyle,
+        max_width: f32,
+        max_height: f32,
+        origin_x: f32,
+        origin_y: f32,
+        inflate: f32,
+    ) -> Result<Vec<RECT>> {
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let layout = self.create_text_layout(text, style, max_width, max_height)?;
+        let text_len: u32 = text.encode_utf16().count() as u32;
+        if text_len == 0 {
+            return Ok(Vec::new());
+        }
+
+        // SAFETY: layout 은 위에서 막 만든 유효 객체. HitTestTextRange 는
+        // 먼저 None / 0 으로 호출해 필요한 metrics 개수를 받고, 그 크기로
+        // 버퍼를 잡아 두 번째 호출에서 채운다 (E_NOT_SUFFICIENT_BUFFER
+        // 는 정상 흐름).
+        let metrics: Vec<DWRITE_HIT_TEST_METRICS> = unsafe {
+            let mut needed: u32 = 0;
+            let probe = layout.HitTestTextRange(0, text_len, 0.0, 0.0, None, &mut needed);
+            // 첫 호출이 OK 면 (= 0 metrics 면) 빈 Vec 반환 — 빈 줄 케이스.
+            if probe.is_ok() && needed == 0 {
+                return Ok(Vec::new());
+            }
+            // ERROR_INSUFFICIENT_BUFFER 외 다른 에러는 그대로 전파.
+            if let Err(e) = probe
+                && needed == 0
+            {
+                return Err(e);
+            }
+            let mut buf: Vec<DWRITE_HIT_TEST_METRICS> =
+                vec![DWRITE_HIT_TEST_METRICS::default(); needed as usize];
+            let mut actual: u32 = 0;
+            layout.HitTestTextRange(0, text_len, 0.0, 0.0, Some(&mut buf), &mut actual)?;
+            buf.truncate(actual as usize);
+            buf
+        };
+
+        let inflate_i = inflate.ceil() as i32;
+        let rects = metrics
+            .into_iter()
+            .map(|m| {
+                let left = (origin_x + m.left).floor() as i32 - inflate_i;
+                let top = (origin_y + m.top).floor() as i32 - inflate_i;
+                let right = (origin_x + m.left + m.width).ceil() as i32 + inflate_i;
+                let bottom = (origin_y + m.top + m.height).ceil() as i32 + inflate_i;
+                RECT { left, top, right, bottom }
+            })
+            .collect();
+        Ok(rects)
+    }
 }
