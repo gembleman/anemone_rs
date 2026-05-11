@@ -238,9 +238,9 @@ impl ColorDialog {
                         w!("msctls_trackbar32"),
                         w!(""),
                         WINDOW_STYLE(
-                            TBS_VERT as u32
-                                | TBS_BOTH as u32
-                                | TBS_NOTICKS as u32
+                            TBS_VERT
+                                | TBS_BOTH
+                                | TBS_NOTICKS
                                 | WS_CHILD.0
                                 | WS_VISIBLE.0,
                         ),
@@ -306,7 +306,7 @@ impl ColorDialog {
                         IDC_ALPHA_TRACKBAR as i32,
                         TBM_SETRANGE,
                         WPARAM(1),
-                        LPARAM(((255 << 16) | 0) as isize),
+                        LPARAM((255 << 16) as isize),
                     );
 
                     // 트랙바 초기 위치

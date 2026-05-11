@@ -89,9 +89,9 @@ unsafe fn set_sz_tip(ptr: *mut [u16; 128], tip: &str) {
     let tip_wide = to_wide(tip);
     // 마지막 한 칸은 null 종결자용으로 비워둔다.
     let copy_len = tip_wide.len().min(CAP - 1);
-    for i in 0..copy_len {
+    for (i, &c) in tip_wide.iter().take(copy_len).enumerate() {
         // SAFETY: base 는 [u16; 128] 의 첫 원소를 가리키며 i < 128 이다.
-        unsafe { write_unaligned(base.add(i), tip_wide[i]) };
+        unsafe { write_unaligned(base.add(i), c) };
     }
     // 나머지는 0 으로 채워 null 종결.
     for i in copy_len..CAP {

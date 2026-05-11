@@ -829,7 +829,7 @@ pub unsafe fn create_trackbar(
             parent,
             w!("msctls_trackbar32"),
             w!(""),
-            WINDOW_STYLE(TBS_HORZ as u32 | TBS_NOTICKS as u32 | WS_CHILD.0 | WS_VISIBLE.0),
+            WINDOW_STYLE(TBS_HORZ | TBS_NOTICKS | WS_CHILD.0 | WS_VISIBLE.0),
             WINDOW_EX_STYLE::default(),
             x, y, w, h, id,
         )?;

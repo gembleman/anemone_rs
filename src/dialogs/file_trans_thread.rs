@@ -212,7 +212,7 @@ fn process_single_file(
 
         // 진행률 업데이트
         *global_current += 1;
-        send_progress_message(progress_hwnd, WM_PROGRESS_UPDATE, (i + 1) as usize, 0);
+        send_progress_message(progress_hwnd, WM_PROGRESS_UPDATE, i + 1, 0);
         send_progress_message(
             progress_hwnd,
             WM_PROGRESS_CURRENT,

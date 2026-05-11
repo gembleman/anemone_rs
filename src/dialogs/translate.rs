@@ -258,7 +258,7 @@ impl TranslateDialog {
         if msg == WM_COMMAND {
             let id = (wparam.0 & 0xFFFF) as u16;
             let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-            if notify_code == EN_CHANGE as u32 && id == ctrl_id::SOURCE_EDIT {
+            if notify_code == EN_CHANGE && id == ctrl_id::SOURCE_EDIT {
                 if self.one_go {
                     self.do_translate();
                 }

@@ -51,7 +51,7 @@ impl SettingsDialog {
         }
 
         // Edit 컨트롤 포커스 해제 시 값 저장
-        if notify_code == EN_KILLFOCUS as u32 {
+        if notify_code == EN_KILLFOCUS {
             self.handle_edit_killfocus(cmd);
             return;
         }
