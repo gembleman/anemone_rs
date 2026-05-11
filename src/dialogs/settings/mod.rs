@@ -51,7 +51,7 @@ impl_dialog! {
     class_name: w!("AnemoneSettingsClass"),
     title: w!("아네모네 설정"),
     width: 500,
-    height: 530,
+    height: 720,
     extra_style: WINDOW_STYLE::default(),
     params: (parent: HWND, config: Rc<RefCell<Config>>, on_change: Option<SettingsChangeCallback>),
     init: |hwnd, parent, config, on_change| {
@@ -101,7 +101,7 @@ impl SettingsDialog {
 
             // ====== 탭 컨트롤 ======
             let tabs = ["외관", "표시·윈도우", "번역"];
-            self.create_tab_control(5, 5, 485, 460, ctrl_id::TAB_CONTROL, &tabs)?;
+            self.create_tab_control(5, 5, 485, 650, ctrl_id::TAB_CONTROL, &tabs)?;
 
             // 탭 내부 컨트롤 시작 오프셋 (탭 헤더 아래)
             let tx = 15;  // 탭 영역 내부 x
@@ -131,7 +131,7 @@ impl SettingsDialog {
             }
 
             // ====== 닫기 버튼 (탭 외부, 항상 표시) ======
-            self.create_button(385, 472, 100, 30, ctrl_id::CLOSE, "닫기")?;
+            self.create_button(385, 662, 100, 30, ctrl_id::CLOSE, "닫기")?;
 
             Ok(())
         }
@@ -386,9 +386,9 @@ impl SettingsDialog {
             // 엔진 선택
             let h = self.create_label(tx + 15, ty + 25, 40, 18, "엔진:")?;
             self.register_control(tab, h);
-            let engine_items = vec!["EzTrans", "Google", "DeepL"];
+            let engine_items = vec!["EzTrans", "Google", "DeepL", "Papago", "LLM"];
             let engine_sel = self.config.borrow().translation.engine_as_u8() as usize;
-            let h = self.create_combobox(tx + 55, ty + 23, 90, 100, ctrl_id::TRANS_ENGINE, &engine_items, engine_sel)?;
+            let h = self.create_combobox(tx + 55, ty + 23, 90, 120, ctrl_id::TRANS_ENGINE, &engine_items, engine_sel)?;
             self.register_control(tab, h);
 
             // 소스/타겟 언어
@@ -436,6 +436,72 @@ impl SettingsDialog {
             self.register_control(tab, h);
             let api_key = self.config.borrow().translation.deepl_api_key.clone();
             let h = self.create_edit(tx + 95, ty + 118, 355, 22, ctrl_id::DEEPL_API_KEY_EDIT, &api_key)?;
+            self.register_control(tab, h);
+
+            // Papago Client ID / Secret
+            let h = self.create_label(tx + 15, ty + 150, 80, 18, "Papago ID:")?;
+            self.register_control(tab, h);
+            let papago_id = self.config.borrow().translation.papago_client_id.clone();
+            let h = self.create_edit(tx + 95, ty + 148, 355, 22, ctrl_id::PAPAGO_ID_EDIT, &papago_id)?;
+            self.register_control(tab, h);
+
+            let h = self.create_label(tx + 15, ty + 180, 80, 18, "Papago Secret:")?;
+            self.register_control(tab, h);
+            let papago_secret = self.config.borrow().translation.papago_client_secret.clone();
+            let h = self.create_edit(tx + 95, ty + 178, 355, 22, ctrl_id::PAPAGO_SECRET_EDIT, &papago_secret)?;
+            self.register_control(tab, h);
+
+            // ── LLM 번역 그룹 ──
+            let ly = ty + 210;
+            let h = self.create_group_box(tx, ly, 460, 245, "LLM 번역")?;
+            self.register_control(tab, h);
+
+            // 제공자 + 모델
+            let h = self.create_label(tx + 15, ly + 25, 50, 18, "제공자:")?;
+            self.register_control(tab, h);
+            let provider_items = vec!["OpenAI", "Anthropic", "Gemini", "Grok", "OpenRouter"];
+            let provider_sel = self.config.borrow().translation.llm.get_provider() as u8 as usize;
+            let h = self.create_combobox(tx + 65, ly + 23, 100, 150, ctrl_id::LLM_PROVIDER, &provider_items, provider_sel)?;
+            self.register_control(tab, h);
+
+            let h = self.create_label(tx + 180, ly + 25, 40, 18, "모델:")?;
+            self.register_control(tab, h);
+            let model = self.config.borrow().translation.llm.model.clone();
+            let h = self.create_edit(tx + 220, ly + 23, 230, 22, ctrl_id::LLM_MODEL_EDIT, &model)?;
+            self.register_control(tab, h);
+
+            // API 키
+            let h = self.create_label(tx + 15, ly + 55, 50, 18, "API 키:")?;
+            self.register_control(tab, h);
+            let api_key = self.config.borrow().translation.llm.api_key.clone();
+            let h = self.create_edit(tx + 65, ly + 53, 385, 22, ctrl_id::LLM_API_KEY_EDIT, &api_key)?;
+            self.register_control(tab, h);
+
+            // Base URL
+            let h = self.create_label(tx + 15, ly + 85, 60, 18, "Base URL:")?;
+            self.register_control(tab, h);
+            let base_url = self.config.borrow().translation.llm.base_url.clone();
+            let h = self.create_edit(tx + 80, ly + 83, 370, 22, ctrl_id::LLM_BASE_URL_EDIT, &base_url)?;
+            self.register_control(tab, h);
+
+            // 시스템 프롬프트 (멀티라인)
+            let h = self.create_label(tx + 15, ly + 115, 100, 18, "시스템 프롬프트:")?;
+            self.register_control(tab, h);
+            let system_prompt = self.config.borrow().translation.llm.system_prompt.clone();
+            let h = self.create_multiline_edit(tx + 15, ly + 135, 435, 60, ctrl_id::LLM_SYSTEM_PROMPT_EDIT, &system_prompt)?;
+            self.register_control(tab, h);
+
+            // Temperature + Max Tokens
+            let h = self.create_label(tx + 15, ly + 207, 90, 18, "Temperature:")?;
+            self.register_control(tab, h);
+            let temperature = format!("{}", self.config.borrow().translation.llm.temperature);
+            let h = self.create_edit(tx + 105, ly + 205, 70, 22, ctrl_id::LLM_TEMPERATURE_EDIT, &temperature)?;
+            self.register_control(tab, h);
+
+            let h = self.create_label(tx + 195, ly + 207, 80, 18, "Max Tokens:")?;
+            self.register_control(tab, h);
+            let max_tokens = format!("{}", self.config.borrow().translation.llm.max_tokens);
+            let h = self.create_edit(tx + 275, ly + 205, 90, 22, ctrl_id::LLM_MAX_TOKENS_EDIT, &max_tokens)?;
             self.register_control(tab, h);
 
             Ok(())

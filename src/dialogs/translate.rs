@@ -133,6 +133,8 @@ impl TranslateDialog {
             self.add_combobox_item(self.engine_combo, "EzTrans");
             self.add_combobox_item(self.engine_combo, "Google");
             self.add_combobox_item(self.engine_combo, "DeepL");
+            self.add_combobox_item(self.engine_combo, "Papago");
+            self.add_combobox_item(self.engine_combo, "LLM");
 
             self.create_label(180, 28, 40, 18, "소스:")?;
             self.source_lang_combo =
@@ -407,6 +409,17 @@ impl TranslateDialog {
                 mgr.set_deepl_api_key(config.translation.deepl_api_key.clone());
             }
 
+            if !config.translation.papago_client_id.is_empty()
+                && !config.translation.papago_client_secret.is_empty()
+            {
+                mgr.set_papago_credentials(
+                    config.translation.papago_client_id.clone(),
+                    config.translation.papago_client_secret.clone(),
+                );
+            }
+
+            mgr.set_llm_api_key(config.translation.llm.api_key.clone());
+
             mgr.set_engine(engine);
             mgr.set_source_language(config.translation.get_source_language());
             mgr.set_target_language(config.translation.get_target_language());
@@ -469,24 +482,34 @@ impl TranslateDialog {
             source
         };
 
-        let (engine, source_lang, target_lang, deepl_api_key) = {
+        let (engine, source_lang, target_lang, credentials) = {
+            use crate::translation::EngineCredentials;
             let config = self.config.borrow();
             let engine = config.translation.get_engine();
             let source_lang = config.translation.get_source_language();
             let target_lang = config.translation.get_target_language();
-            let deepl_api_key = if engine == TranslationEngine::DeepL {
-                Some(config.translation.deepl_api_key.clone())
-            } else {
-                None
+            let credentials = match engine {
+                TranslationEngine::DeepL => EngineCredentials::DeepL {
+                    keys: config.translation.deepl_effective_keys(),
+                    strategy: config.translation.deepl_strategy(),
+                },
+                TranslationEngine::Papago => EngineCredentials::Papago {
+                    client_id: config.translation.papago_client_id.clone(),
+                    client_secret: config.translation.papago_client_secret.clone(),
+                },
+                TranslationEngine::Llm => {
+                    EngineCredentials::Llm(config.translation.llm.to_call_params())
+                }
+                _ => EngineCredentials::None,
             };
-            (engine, source_lang, target_lang, deepl_api_key)
+            (engine, source_lang, target_lang, credentials)
         };
 
         self.set_dest_text("[번역 중...]");
         self.translating = true;
 
         if let Some(ref mut worker) = self.translation_worker {
-            worker.translate(text, engine, source_lang, target_lang, deepl_api_key);
+            worker.translate(text, engine, source_lang, target_lang, credentials);
         }
     }
 

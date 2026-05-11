@@ -88,6 +88,17 @@ pub const EZTRANS_DLL_BROWSE: u16 = 1265;
 pub const EZTRANS_DAT_EDIT: u16 = 1266;
 pub const EZTRANS_DAT_BROWSE: u16 = 1267;
 pub const DEEPL_API_KEY_EDIT: u16 = 1268;
+pub const PAPAGO_ID_EDIT: u16 = 1270;
+pub const PAPAGO_SECRET_EDIT: u16 = 1271;
+
+// LLM 설정 (1280-1289 예약)
+pub const LLM_PROVIDER: u16 = 1280;
+pub const LLM_MODEL_EDIT: u16 = 1281;
+pub const LLM_API_KEY_EDIT: u16 = 1282;
+pub const LLM_BASE_URL_EDIT: u16 = 1283;
+pub const LLM_SYSTEM_PROMPT_EDIT: u16 = 1284;
+pub const LLM_TEMPERATURE_EDIT: u16 = 1285;
+pub const LLM_MAX_TOKENS_EDIT: u16 = 1286;
 
 // 탭 컨트롤
 pub const TAB_CONTROL: u16 = 1290;

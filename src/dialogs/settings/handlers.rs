@@ -298,6 +298,11 @@ impl SettingsDialog {
                     let engine = self.config.borrow().translation.get_engine();
                     self.config.borrow_mut().translation.set_target_lang_by_index(sel, engine);
                 }
+                LLM_PROVIDER => {
+                    use crate::translation::LlmProvider;
+                    let provider = LlmProvider::from_u8(sel as u8);
+                    self.config.borrow_mut().translation.llm.set_provider(provider);
+                }
                 _ => return,
             }
             self.sync_translation_manager();
@@ -329,6 +334,17 @@ impl SettingsDialog {
             if !config.translation.deepl_api_key.is_empty() {
                 mgr.set_deepl_api_key(config.translation.deepl_api_key.clone());
             }
+
+            if !config.translation.papago_client_id.is_empty()
+                && !config.translation.papago_client_secret.is_empty()
+            {
+                mgr.set_papago_credentials(
+                    config.translation.papago_client_id.clone(),
+                    config.translation.papago_client_secret.clone(),
+                );
+            }
+
+            mgr.set_llm_api_key(config.translation.llm.api_key.clone());
         }
     }
 
@@ -476,6 +492,16 @@ impl SettingsDialog {
                 self.sync_translation_manager();
                 self.notify_change();
             }
+            PAPAGO_ID_EDIT => {
+                self.config.borrow_mut().translation.papago_client_id = text;
+                self.sync_translation_manager();
+                self.notify_change();
+            }
+            PAPAGO_SECRET_EDIT => {
+                self.config.borrow_mut().translation.papago_client_secret = text;
+                self.sync_translation_manager();
+                self.notify_change();
+            }
             EZTRANS_DLL_EDIT => {
                 self.config.borrow_mut().translation.eztrans_dll_path = text;
                 self.sync_translation_manager();
@@ -485,6 +511,35 @@ impl SettingsDialog {
                 self.config.borrow_mut().translation.eztrans_dat_path = text;
                 self.sync_translation_manager();
                 self.notify_change();
+            }
+            LLM_MODEL_EDIT => {
+                self.config.borrow_mut().translation.llm.model = text;
+                self.notify_change();
+            }
+            LLM_API_KEY_EDIT => {
+                self.config.borrow_mut().translation.llm.api_key = text;
+                self.sync_translation_manager();
+                self.notify_change();
+            }
+            LLM_BASE_URL_EDIT => {
+                self.config.borrow_mut().translation.llm.base_url = text;
+                self.notify_change();
+            }
+            LLM_SYSTEM_PROMPT_EDIT => {
+                self.config.borrow_mut().translation.llm.system_prompt = text;
+                self.notify_change();
+            }
+            LLM_TEMPERATURE_EDIT => {
+                if let Ok(v) = text.trim().parse::<f32>() {
+                    self.config.borrow_mut().translation.llm.temperature = v.clamp(0.0, 2.0);
+                    self.notify_change();
+                }
+            }
+            LLM_MAX_TOKENS_EDIT => {
+                if let Ok(v) = text.trim().parse::<u32>() {
+                    self.config.borrow_mut().translation.llm.max_tokens = v.clamp(1, 32_000);
+                    self.notify_change();
+                }
             }
             _ => {}
         }

@@ -584,16 +584,25 @@ impl App {
 
     /// 비동기 번역 요청
     fn request_translation_async(&mut self, text: &str) {
-        use crate::translation::{get_translation_manager, TranslationEngine};
+        use crate::translation::{get_translation_manager, EngineCredentials, TranslationEngine};
 
         let config = self.config.borrow();
         let engine = config.translation.get_engine();
         let source_lang = config.translation.get_source_language();
         let target_lang = config.translation.get_target_language();
-        let deepl_api_key = if engine == TranslationEngine::DeepL {
-            Some(config.translation.deepl_api_key.clone())
-        } else {
-            None
+        let credentials = match engine {
+            TranslationEngine::DeepL => EngineCredentials::DeepL {
+                keys: config.translation.deepl_effective_keys(),
+                strategy: config.translation.deepl_strategy(),
+            },
+            TranslationEngine::Papago => EngineCredentials::Papago {
+                client_id: config.translation.papago_client_id.clone(),
+                client_secret: config.translation.papago_client_secret.clone(),
+            },
+            TranslationEngine::Llm => {
+                EngineCredentials::Llm(config.translation.llm.to_call_params())
+            }
+            _ => EngineCredentials::None,
         };
 
         // EzTrans 초기화 (필요시)
@@ -629,7 +638,7 @@ impl App {
                 engine,
                 source_lang,
                 target_lang,
-                deepl_api_key,
+                credentials,
             );
         }
     }

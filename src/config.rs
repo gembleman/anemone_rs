@@ -124,10 +124,119 @@ impl Default for HookConfig {
     }
 }
 
+/// 글로서리(고정 번역 사전) 한 항목
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LlmGlossaryEntry {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub target: String,
+}
+
+/// LLM 번역 설정 (OpenAI 호환 / Anthropic / Gemini 공통)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LlmConfig {
+    /// 제공자: "openai", "anthropic", "gemini", "grok", "openrouter"
+    #[serde(default = "default_llm_provider")]
+    pub provider: String,
+    /// 모델 ID (비우면 제공자 기본값 사용)
+    #[serde(default)]
+    pub model: String,
+    /// API 키 (Anthropic은 x-api-key, 그 외는 Bearer)
+    #[serde(default)]
+    pub api_key: String,
+    /// Base URL (비우면 제공자 기본값 사용; OpenRouter 자체 호스팅 등에 사용)
+    #[serde(default)]
+    pub base_url: String,
+    /// 시스템 프롬프트 (`{source}`, `{target}` 치환)
+    #[serde(default = "default_llm_system_prompt")]
+    pub system_prompt: String,
+    /// 샘플링 온도
+    #[serde(default = "default_llm_temperature")]
+    pub temperature: f32,
+    /// 응답 최대 토큰
+    #[serde(default = "default_llm_max_tokens")]
+    pub max_tokens: u32,
+    /// 고정 번역 사전 (캐릭터 이름·고유명사 등)
+    #[serde(default)]
+    pub glossary: Vec<LlmGlossaryEntry>,
+    /// 자동 클립보드 번역 디바운스 (ms). 0이면 비활성.
+    /// 직전 요청과의 간격이 이 값 이하면 새 요청만 살아남고 이전 응답은 폐기된다.
+    #[serde(default = "default_llm_debounce_ms")]
+    pub debounce_ms: u32,
+}
+
+fn default_llm_provider() -> String {
+    "openai".to_string()
+}
+
+fn default_llm_system_prompt() -> String {
+    crate::translation::llm::DEFAULT_SYSTEM_PROMPT.to_string()
+}
+
+fn default_llm_temperature() -> f32 {
+    0.3
+}
+
+fn default_llm_max_tokens() -> u32 {
+    1024
+}
+
+fn default_llm_debounce_ms() -> u32 {
+    300
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_llm_provider(),
+            model: String::new(),
+            api_key: String::new(),
+            base_url: String::new(),
+            system_prompt: default_llm_system_prompt(),
+            temperature: default_llm_temperature(),
+            max_tokens: default_llm_max_tokens(),
+            glossary: Vec::new(),
+            debounce_ms: default_llm_debounce_ms(),
+        }
+    }
+}
+
+impl LlmConfig {
+    pub fn get_provider(&self) -> crate::translation::LlmProvider {
+        crate::translation::LlmProvider::from_str(&self.provider)
+    }
+
+    pub fn set_provider(&mut self, provider: crate::translation::LlmProvider) {
+        self.provider = provider.to_str().to_string();
+    }
+
+    /// 워커에 전달할 호출 파라미터 빌드
+    pub fn to_call_params(&self) -> crate::translation::llm::LlmCallParams {
+        crate::translation::llm::LlmCallParams {
+            provider: self.get_provider(),
+            model: self.model.clone(),
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            system_prompt: self.system_prompt.clone(),
+            temperature: self.temperature,
+            max_tokens: self.max_tokens,
+            glossary: self
+                .glossary
+                .iter()
+                .map(|e| crate::translation::llm::GlossaryEntry {
+                    source: e.source.clone(),
+                    target: e.target.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 /// 번역 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TranslationConfig {
-    /// 번역 엔진: "eztrans", "google", "deepl"
+    /// 번역 엔진: "eztrans", "google", "deepl", "papago", "llm"
     #[serde(default = "default_engine")]
     pub engine: String,
     /// 소스 언어 (ISO 639-1 코드): "ja", "ko", "en", "zh", etc.
@@ -142,9 +251,24 @@ pub struct TranslationConfig {
     /// EzTrans Dat 경로
     #[serde(default)]
     pub eztrans_dat_path: String,
-    /// DeepL API 키
+    /// DeepL API 키 (단일 키 — 하위 호환). `deepl_keys`가 비어 있을 때만 사용.
     #[serde(default)]
     pub deepl_api_key: String,
+    /// DeepL 보조 API 키 목록 (멀티 키 폴백). 비어 있지 않으면 `deepl_api_key`보다 우선.
+    #[serde(default)]
+    pub deepl_keys: Vec<String>,
+    /// DeepL 다중 키 전략: "failover" | "round-robin"
+    #[serde(default = "default_deepl_strategy")]
+    pub deepl_strategy: String,
+    /// Papago Naver Client ID
+    #[serde(default)]
+    pub papago_client_id: String,
+    /// Papago Naver Client Secret
+    #[serde(default)]
+    pub papago_client_secret: String,
+    /// LLM 설정
+    #[serde(default)]
+    pub llm: LlmConfig,
     /// 자동 언어 감지 활성화
     #[serde(default = "default_auto_detect")]
     pub auto_detect: bool,
@@ -164,6 +288,10 @@ fn default_target_lang() -> String {
 
 fn default_auto_detect() -> bool {
     true
+}
+
+fn default_deepl_strategy() -> String {
+    "failover".to_string()
 }
 
 impl TranslationConfig {
@@ -207,6 +335,8 @@ impl TranslationConfig {
             "eztrans" => 0,
             "google" => 1,
             "deepl" => 2,
+            "papago" => 3,
+            "llm" => 4,
             _ => 0,
         }
     }
@@ -217,6 +347,8 @@ impl TranslationConfig {
             0 => "eztrans".to_string(),
             1 => "google".to_string(),
             2 => "deepl".to_string(),
+            3 => "papago".to_string(),
+            4 => "llm".to_string(),
             _ => "eztrans".to_string(),
         }
     }
@@ -251,6 +383,33 @@ impl TranslationConfig {
         }
     }
 
+    /// DeepL 멀티 키 전략
+    pub fn deepl_strategy(&self) -> crate::translation::worker::DeepLStrategy {
+        use crate::translation::worker::DeepLStrategy;
+        match self.deepl_strategy.to_lowercase().as_str() {
+            "round-robin" | "roundrobin" | "rr" => DeepLStrategy::RoundRobin,
+            _ => DeepLStrategy::Failover,
+        }
+    }
+
+    /// 워커로 넘길 DeepL 키 목록 (보조 키가 있으면 그것을, 없으면 단일 키만)
+    ///
+    /// 빈 키는 제거해서 워커가 건너뛸 필요가 없게 한다.
+    pub fn deepl_effective_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = if !self.deepl_keys.is_empty() {
+            self.deepl_keys
+                .iter()
+                .filter(|k| !k.is_empty())
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if keys.is_empty() && !self.deepl_api_key.is_empty() {
+            keys.push(self.deepl_api_key.clone());
+        }
+        keys
+    }
 }
 
 impl Default for TranslationConfig {
@@ -262,6 +421,11 @@ impl Default for TranslationConfig {
             eztrans_dll_path: String::new(),
             eztrans_dat_path: String::new(),
             deepl_api_key: String::new(),
+            deepl_keys: Vec::new(),
+            deepl_strategy: default_deepl_strategy(),
+            papago_client_id: String::new(),
+            papago_client_secret: String::new(),
+            llm: LlmConfig::default(),
             auto_detect: true,
         }
     }

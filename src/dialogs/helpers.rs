@@ -435,6 +435,39 @@ pub unsafe fn create_edit(
     }
 }
 
+/// 멀티라인 에디트 컨트롤 생성 (수직 스크롤 + 줄바꿈 보존)
+// SAFETY: Caller must provide a valid parent HWND.
+pub unsafe fn create_multiline_edit(
+    parent: HWND,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    id: u16,
+    text: &str,
+) -> Result<HWND> {
+    let text_wide = to_wide(text);
+    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
+    unsafe {
+        create_child(
+            parent,
+            w!("EDIT"),
+            PCWSTR(text_wide.as_ptr()),
+            WINDOW_STYLE(
+                ES_MULTILINE as u32
+                    | ES_AUTOVSCROLL as u32
+                    | ES_WANTRETURN as u32
+                    | WS_CHILD.0
+                    | WS_VISIBLE.0
+                    | WS_VSCROLL.0
+                    | WS_TABSTOP.0,
+            ),
+            WS_EX_CLIENTEDGE,
+            x, y, w, h, id,
+        )
+    }
+}
+
 /// 리스트박스 생성
 // SAFETY: Caller must provide a valid parent HWND.
 pub unsafe fn create_listbox(
@@ -499,6 +532,10 @@ pub trait DialogControls {
 
     unsafe fn create_edit(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
         unsafe { create_edit(self.dialog_hwnd(), x, y, w, h, id, text) }
+    }
+
+    unsafe fn create_multiline_edit(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+        unsafe { create_multiline_edit(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 
     unsafe fn create_listbox(&self, x: i32, y: i32, w: i32, h: i32, id: u16) -> Result<HWND> {

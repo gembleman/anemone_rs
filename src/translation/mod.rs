@@ -4,6 +4,7 @@
 //! - EzTrans (eztrans-rs 라이브러리 사용)
 //! - Google Translate (HTTPS API)
 //! - DeepL (HTTPS API)
+//! - Papago (Naver HTTPS API)
 //!
 //! 비동기 번역 지원:
 //! - TranslationWorker: 별도 스레드에서 tokio 런타임 실행
@@ -14,6 +15,8 @@ mod detect;
 mod eztrans;
 pub mod google;
 mod http_common;
+pub mod llm;
+pub mod papago;
 pub mod worker;
 
 pub use deepl::DeepLTranslator;
@@ -21,7 +24,9 @@ pub use detect::is_source_language;
 pub use eztrans::EzTransTranslator;
 pub use google::GoogleTranslator;
 pub use isolang::Language;
-pub use worker::{TranslationWorker, take_all_responses};
+pub use llm::LlmProvider;
+pub use papago::PapagoTranslator;
+pub use worker::{EngineCredentials, TranslationWorker, take_all_responses};
 
 use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;
@@ -72,6 +77,9 @@ pub enum TranslationEngine {
     EzTrans = 0,
     Google = 1,
     DeepL = 2,
+    Papago = 3,
+    /// LLM 기반 번역 (제공자/모델은 LlmConfig에서 지정)
+    Llm = 4,
 }
 
 impl TranslationEngine {
@@ -80,6 +88,8 @@ impl TranslationEngine {
             0 => Self::EzTrans,
             1 => Self::Google,
             2 => Self::DeepL,
+            3 => Self::Papago,
+            4 => Self::Llm,
             _ => Self::EzTrans,
         }
     }
@@ -89,6 +99,8 @@ impl TranslationEngine {
             "eztrans" => Self::EzTrans,
             "google" => Self::Google,
             "deepl" => Self::DeepL,
+            "papago" => Self::Papago,
+            "llm" => Self::Llm,
             _ => Self::EzTrans,
         }
     }
@@ -98,6 +110,8 @@ impl TranslationEngine {
             Self::EzTrans => "eztrans",
             Self::Google => "google",
             Self::DeepL => "deepl",
+            Self::Papago => "papago",
+            Self::Llm => "llm",
         }
     }
 
@@ -106,6 +120,8 @@ impl TranslationEngine {
             Self::EzTrans => "EzTrans",
             Self::Google => "Google",
             Self::DeepL => "DeepL",
+            Self::Papago => "Papago",
+            Self::Llm => "LLM",
         }
     }
 
@@ -115,6 +131,9 @@ impl TranslationEngine {
             Self::EzTrans => &[Language::Jpn], // 일본어만
             Self::Google => &GOOGLE_SUPPORTED_LANGUAGES,
             Self::DeepL => &DEEPL_SUPPORTED_LANGUAGES,
+            Self::Papago => &PAPAGO_SUPPORTED_LANGUAGES,
+            // LLM은 프롬프트 기반이라 대부분의 언어 지원. Google 목록을 재사용.
+            Self::Llm => &GOOGLE_SUPPORTED_LANGUAGES,
         }
     }
 
@@ -124,6 +143,8 @@ impl TranslationEngine {
             Self::EzTrans => &[Language::Kor], // 한국어만
             Self::Google => &GOOGLE_SUPPORTED_LANGUAGES,
             Self::DeepL => &DEEPL_SUPPORTED_LANGUAGES,
+            Self::Papago => &PAPAGO_SUPPORTED_LANGUAGES,
+            Self::Llm => &GOOGLE_SUPPORTED_LANGUAGES,
         }
     }
 
@@ -174,6 +195,23 @@ pub static DEEPL_SUPPORTED_LANGUAGES: &[Language] = &[
     Language::Pol, // 폴란드어
     Language::Tur, // 터키어
     Language::Ukr, // 우크라이나어
+];
+
+/// Papago 지원 언어 (네이버 N2MT 기준)
+pub static PAPAGO_SUPPORTED_LANGUAGES: &[Language] = &[
+    Language::Kor, // 한국어
+    Language::Eng, // 영어
+    Language::Jpn, // 일본어
+    Language::Zho, // 중국어 (간체/번체)
+    Language::Vie, // 베트남어
+    Language::Tha, // 태국어
+    Language::Ind, // 인도네시아어
+    Language::Fra, // 프랑스어
+    Language::Spa, // 스페인어
+    Language::Rus, // 러시아어
+    Language::Deu, // 독일어
+    Language::Ita, // 이탈리아어
+    Language::Por, // 포르투갈어
 ];
 
 /// 언어 코드 헬퍼 함수들
@@ -259,6 +297,26 @@ pub mod lang_utils {
         }
     }
 
+    /// Papago API 언어 코드로 변환
+    pub fn to_papago_code(lang: Language) -> &'static str {
+        match lang {
+            Language::Kor => "ko",
+            Language::Eng => "en",
+            Language::Jpn => "ja",
+            Language::Zho => "zh-CN", // 간체 기본
+            Language::Vie => "vi",
+            Language::Tha => "th",
+            Language::Ind => "id",
+            Language::Fra => "fr",
+            Language::Spa => "es",
+            Language::Rus => "ru",
+            Language::Deu => "de",
+            Language::Ita => "it",
+            Language::Por => "pt",
+            _ => "en",
+        }
+    }
+
     /// 기본 언어 (일본어)
     pub fn default_source() -> Language {
         Language::Jpn
@@ -290,6 +348,9 @@ pub struct TranslationManager {
     eztrans: Option<EzTransTranslator>,
     google: GoogleTranslator,
     deepl: DeepLTranslator,
+    papago: PapagoTranslator,
+    /// LLM 호출에 필요한 키. 비어 있으면 미설정으로 간주.
+    llm_api_key: String,
     current_engine: TranslationEngine,
     source_lang: Language,
     target_lang: Language,
@@ -302,6 +363,8 @@ impl TranslationManager {
             eztrans: None,
             google: GoogleTranslator::new(),
             deepl: DeepLTranslator::new(String::new()),
+            papago: PapagoTranslator::new(String::new(), String::new()),
+            llm_api_key: String::new(),
             current_engine: TranslationEngine::EzTrans,
             source_lang: Language::Jpn,
             target_lang: Language::Kor,
@@ -325,6 +388,16 @@ impl TranslationManager {
     /// DeepL API 키 설정
     pub fn set_deepl_api_key(&mut self, api_key: String) {
         self.deepl = DeepLTranslator::new(api_key);
+    }
+
+    /// Papago 자격증명 설정
+    pub fn set_papago_credentials(&mut self, client_id: String, client_secret: String) {
+        self.papago.set_credentials(client_id, client_secret);
+    }
+
+    /// LLM API 키 설정 (사용 가능 여부 판정용)
+    pub fn set_llm_api_key(&mut self, api_key: String) {
+        self.llm_api_key = api_key;
     }
 
     /// 현재 엔진 설정
@@ -358,6 +431,8 @@ impl TranslationManager {
     }
 
     /// 번역 수행
+    ///
+    /// LLM 엔진은 비동기 워커(`TranslationWorker`)에서만 호출되므로 여기서는 미지원.
     pub fn translate(&self, text: &str) -> TranslationResult {
         match self.current_engine {
             TranslationEngine::EzTrans => {
@@ -375,6 +450,13 @@ impl TranslationManager {
                 self.deepl
                     .translate(text, self.source_lang, self.target_lang)
             }
+            TranslationEngine::Papago => {
+                self.papago
+                    .translate(text, self.source_lang, self.target_lang)
+            }
+            TranslationEngine::Llm => Err(TranslationError::Engine(
+                "LLM 엔진은 비동기 워커를 통해서만 호출 가능합니다.".to_string(),
+            )),
         }
     }
 
@@ -384,6 +466,8 @@ impl TranslationManager {
             TranslationEngine::EzTrans => self.eztrans.as_ref().is_some_and(|e| e.is_available()),
             TranslationEngine::Google => self.google.is_available(),
             TranslationEngine::DeepL => self.deepl.is_available(),
+            TranslationEngine::Papago => self.papago.is_available(),
+            TranslationEngine::Llm => !self.llm_api_key.is_empty(),
         }
     }
 }
