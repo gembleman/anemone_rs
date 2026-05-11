@@ -7,8 +7,8 @@
 //! - Papago (Naver HTTPS API)
 //!
 //! 비동기 번역 지원:
-//! - TranslationWorker: 별도 스레드에서 tokio 런타임 실행
-//! - Windows 메시지로 결과 전달 (UI 블로킹 없음)
+//! - `worker::TranslationDispatch`: 프로세스 단일 워커 스레드 + tokio 런타임
+//! - 호출자별 hwnd 라우팅. Windows 메시지로 결과 전달 (UI 블로킹 없음)
 
 pub mod deepl;
 mod detect;
@@ -23,7 +23,10 @@ pub use detect::is_source_language;
 pub use eztrans::EzTransTranslator;
 pub use isolang::Language;
 pub use llm::LlmProvider;
-pub use worker::{EngineCredentials, TranslationWorker, take_all_responses};
+pub use worker::{
+    EngineCredentials, take_response, translate as request_translation,
+    unregister_hwnd as unregister_translation_hwnd,
+};
 
 use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;

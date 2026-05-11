@@ -23,7 +23,7 @@ use crate::dialogs::{BacklogDialog, LogEntry, SettingsDialog, TranslateDialog, a
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
-use crate::translation::{TranslationWorker, take_all_responses};
+use crate::translation::{request_translation, take_response};
 use crate::tray::{self, TrayIcon};
 use crate::window::{self, DoubleBuffer, TextRenderStyle};
 
@@ -48,8 +48,6 @@ pub struct App {
     magnetic: Option<MagneticManager>,
     current_text: String,
     d2d_renderer: Option<D2DRenderer>,
-    /// 비동기 번역 워커
-    translation_worker: Option<TranslationWorker>,
     /// 대기 중인 번역의 원문 (번역 완료 시 백로그에 추가)
     pending_original_text: Option<String>,
 }
@@ -113,8 +111,7 @@ impl App {
             // 설정 로드 (파일이 없으면 기본값)
             let config = Rc::new(RefCell::new(Config::load_or_default()));
 
-            // 번역 워커 생성
-            let translation_worker = TranslationWorker::spawn(hwnd);
+            // 번역 디스패치는 프로세스 전역 싱글톤. 첫 요청 시 자동 spawn.
 
             let app = Rc::new(RefCell::new(App {
                 hwnd,
@@ -133,7 +130,6 @@ impl App {
                 magnetic: None,
                 current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
                 d2d_renderer: Some(d2d_renderer),
-                translation_worker: Some(translation_worker),
                 pending_original_text: None,
             }));
 
@@ -629,44 +625,48 @@ impl App {
             tracing::warn!("paint failed during translation: {e}");
         }
 
-        // 워커에 번역 요청
-        if let Some(ref mut worker) = self.translation_worker {
-            worker.translate(
-                text.to_string(),
-                engine,
-                source_lang,
-                target_lang,
-                credentials,
-            );
-        }
+        // 디스패치에 번역 요청 (워커는 프로세스 전역)
+        request_translation(
+            self.hwnd,
+            text.to_string(),
+            engine,
+            source_lang,
+            target_lang,
+            credentials,
+        );
     }
 
     /// 번역 완료 처리
-    fn handle_translation_complete(&mut self) {
-        let responses = take_all_responses();
+    ///
+    /// `WM_TRANSLATION_COMPLETE` 의 WPARAM 으로 전달된 `req_id` 에 해당하는
+    /// 응답만 꺼낸다. 디스패치가 hwnd 기준으로 라우팅하므로 다른 다이얼로그의
+    /// 응답이 섞일 일은 없지만, 동일 hwnd 에 누적된 응답 중에서도 정확히
+    /// 매칭된 한 건만 처리한다.
+    fn handle_translation_complete(&mut self, req_id: u64) {
+        let Some(response) = take_response(req_id) else {
+            return;
+        };
 
-        for response in responses {
-            let translation = match response.result {
-                Ok(translated) => {
-                    self.current_text = translated.clone();
-                    Some(translated)
-                }
-                Err(err) => {
-                    tracing::error!("Translation error: {}", err);
-                    if let Some(ref original) = self.pending_original_text {
-                        self.current_text = original.clone();
-                    }
-                    None
-                }
-            };
-
-            if let Some(original) = self.pending_original_text.take() {
-                let mut entry = LogEntry::new(original);
-                if let Some(trans) = translation {
-                    entry = entry.with_translation(trans);
-                }
-                add_to_backlog(entry);
+        let translation = match response.result {
+            Ok(translated) => {
+                self.current_text = translated.clone();
+                Some(translated)
             }
+            Err(err) => {
+                tracing::error!("Translation error: {}", err);
+                if let Some(ref original) = self.pending_original_text {
+                    self.current_text = original.clone();
+                }
+                None
+            }
+        };
+
+        if let Some(original) = self.pending_original_text.take() {
+            let mut entry = LogEntry::new(original);
+            if let Some(trans) = translation {
+                entry = entry.with_translation(trans);
+            }
+            add_to_backlog(entry);
         }
 
         if let Err(e) = self.paint() {
@@ -838,7 +838,7 @@ impl App {
                 }
 
                 _ if msg == WM_TRANSLATION_COMPLETE => {
-                    self.handle_translation_complete();
+                    self.handle_translation_complete(wparam.0 as u64);
                     Some(LRESULT(0))
                 }
 

@@ -26,8 +26,8 @@ use super::helpers::DialogControls;
 use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::{
-    get_eztrans_manager, Language, TranslationEngine,
-    TranslationWorker, take_all_responses,
+    get_eztrans_manager, request_translation, take_response, unregister_translation_hwnd,
+    Language, TranslationEngine,
 };
 
 // 컨트롤 ID
@@ -76,8 +76,6 @@ pub struct TranslateDialog {
     no_linefeed: bool,
     output_format: OutputFormat,
     engine_initialized: bool,
-    /// 비동기 번역 워커
-    translation_worker: Option<TranslationWorker>,
     /// 번역 진행 중 여부
     translating: bool,
 }
@@ -96,7 +94,6 @@ impl_dialog! {
     extra_style: WINDOW_STYLE::default(),
     params: (_parent: HWND, config: Rc<RefCell<Config>>),
     init: |hwnd, _parent, config| {
-        let translation_worker = TranslationWorker::spawn(hwnd);
         TranslateDialog {
             hwnd,
             config,
@@ -109,7 +106,6 @@ impl_dialog! {
             no_linefeed: false,
             output_format: OutputFormat::Normal,
             engine_initialized: false,
-            translation_worker: Some(translation_worker),
             translating: false,
         }
     },
@@ -247,8 +243,15 @@ impl TranslateDialog {
     /// 커스텀 메시지 핸들러
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
         if msg == WM_TRANSLATION_COMPLETE {
-            self.handle_translation_complete();
+            self.handle_translation_complete(wparam.0 as u64);
             return Some(LRESULT(0));
+        }
+
+        // 다이얼로그가 사라질 때 전역 번역 디스패치의 라우팅/대기 응답 정리.
+        // None 을 반환해 매크로 본체의 WM_DESTROY 처리( $INSTANCE 해제 )가 이어 실행되도록 한다.
+        if msg == WM_DESTROY {
+            unregister_translation_hwnd(self.hwnd);
+            return None;
         }
 
         // WM_COMMAND에서 EN_CHANGE 자동번역 처리
@@ -451,36 +454,32 @@ impl TranslateDialog {
         self.set_dest_text("[번역 중...]");
         self.translating = true;
 
-        if let Some(ref mut worker) = self.translation_worker {
-            worker.translate(text, engine, source_lang, target_lang, credentials);
-        }
+        request_translation(self.hwnd, text, engine, source_lang, target_lang, credentials);
     }
 
-    /// 번역 완료 처리
-    fn handle_translation_complete(&mut self) {
+    /// 번역 완료 처리. WPARAM 의 `req_id` 로 자신의 응답만 꺼낸다.
+    fn handle_translation_complete(&mut self, req_id: u64) {
+        let Some(response) = take_response(req_id) else {
+            return;
+        };
+
         self.translating = false;
 
-        let responses = take_all_responses();
-
-        for response in responses {
-            let result = match response.result {
-                Ok(translated) => {
-                    match self.output_format {
-                        OutputFormat::Normal => translated,
-                        OutputFormat::Brackets => format!("「{}」", translated),
-                        OutputFormat::NameSplit => {
-                            if let Some((name, rest)) = translated.split_once([':', '：']) {
-                                format!("{}\n{}", name.trim(), rest.trim())
-                            } else {
-                                translated
-                            }
-                        }
+        let result = match response.result {
+            Ok(translated) => match self.output_format {
+                OutputFormat::Normal => translated,
+                OutputFormat::Brackets => format!("「{}」", translated),
+                OutputFormat::NameSplit => {
+                    if let Some((name, rest)) = translated.split_once([':', '：']) {
+                        format!("{}\n{}", name.trim(), rest.trim())
+                    } else {
+                        translated
                     }
                 }
-                Err(err) => format!("[오류] {}", err),
-            };
-            self.set_dest_text(&result);
-        }
+            },
+            Err(err) => format!("[오류] {}", err),
+        };
+        self.set_dest_text(&result);
     }
 
     /// 번역 결과를 클립보드에 복사
