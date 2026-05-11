@@ -27,7 +27,7 @@ use crate::dialogs::{BacklogDialog, LogEntry, SettingsDialog, TranslateDialog, a
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
-use crate::translation::{request_translation, take_response};
+use crate::translation::{request_translation, take_response, unregister_translation_hwnd};
 use crate::tray::{self, TrayIcon};
 use crate::window::{self, TextRenderStyle};
 
@@ -981,6 +981,10 @@ impl App {
                     if let Err(e) = self.config.borrow().save() {
                         tracing::error!("설정 저장 실패: {}", e);
                     }
+                    // 클립보드 자동 번역으로 등록된 라우팅 슬롯 정리. shutdown()
+                    // 이전 in-flight 응답이 죽은 HWND 로 PostMessage 시도하는 것을
+                    // 막는다. (PostMessage 자체는 안전하지만 silent fail.)
+                    unregister_translation_hwnd(hwnd);
                     PostQuitMessage(0);
                     Some(LRESULT(0))
                 }
