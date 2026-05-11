@@ -372,7 +372,7 @@ impl App {
                 + render_style.outline2_size
                 + shadow_inflate
                 + 1) as f32;
-            if let Some(d2d) = self.d2d_renderer.as_ref() {
+            if let Some(d2d) = self.d2d_renderer.as_mut() {
                 match d2d.compute_text_line_rects(
                     &self.current_text,
                     &render_style,

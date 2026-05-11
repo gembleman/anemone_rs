@@ -216,6 +216,28 @@ impl IDWriteTextRenderer_Impl for OutlineTextRenderer_Impl {
 /// 위에 D2D Device 를 만들도록 한다. 같은 factory 트리 안에 머물러야
 /// brush/geometry/text-layout 같은 본 렌더러의 객체들이 합성 경로의
 /// `ID2D1DeviceContext` 위에서 거부되지 않는다 (D2DERR_WRONG_FACTORY 방지).
+/// 텍스트 layout / outline geometry 캐시 키.
+///
+/// layout/geometry 모양을 결정하는 입력만 포함 — 색상, 그림자 오프셋,
+/// outline 두께 등 "칠하기 단계" 인자는 무관. f32 max_width/height 는
+/// `to_bits()` 로 정확 비교 (NaN 가 들어올 일이 없는 사이즈 값들).
+#[derive(Clone, Eq, PartialEq, Hash)]
+struct TextLayoutKey {
+    text: String,
+    font_face: String,
+    font_size: i32,
+    font_style: u8,
+    max_width_bits: u32,
+    max_height_bits: u32,
+}
+
+/// 캐시 엔트리. outline geometry 는 첫 외곽선 그리기 호출 시 lazy 생성.
+struct TextLayoutCache {
+    key: TextLayoutKey,
+    layout: IDWriteTextLayout,
+    outline: Option<ID2D1PathGeometry>,
+}
+
 pub struct D2DRenderer {
     d2d_factory: ID2D1Factory1,
     dwrite_factory: IDWriteFactory,
@@ -223,6 +245,13 @@ pub struct D2DRenderer {
     brush_cache: HashMap<u32, ID2D1SolidColorBrush>,
     /// 외곽선 스트로크 스타일 캐시 (불변이므로 한 번만 생성)
     stroke_style: Option<ID2D1StrokeStyle>,
+    /// 텍스트 layout + outline geometry 캐시 (크기 1 LRU).
+    ///
+    /// 현재 앱은 한 번에 한 텍스트만 표시하므로 1 entry 로 충분. 키가
+    /// 일치하면 layout/geometry 재사용 → DirectWrite text shaping 과
+    /// glyph outline → PathGeometry 변환 (paint 핫패스의 다수 비용)
+    /// 을 건너뛴다.
+    text_cache: Option<TextLayoutCache>,
 }
 
 impl D2DRenderer {
@@ -257,6 +286,7 @@ impl D2DRenderer {
                 dwrite_factory,
                 brush_cache: HashMap::new(),
                 stroke_style: Some(stroke_style),
+                text_cache: None,
             })
         }
     }
@@ -298,8 +328,93 @@ impl D2DRenderer {
         Ok(brush)
     }
 
-    /// TextRenderStyle에서 IDWriteTextLayout 생성
-    fn create_text_layout(
+    /// 캐시 키 빌드.
+    fn make_text_key(
+        text: &str,
+        style: &TextRenderStyle,
+        max_width: f32,
+        max_height: f32,
+    ) -> TextLayoutKey {
+        TextLayoutKey {
+            text: text.to_string(),
+            font_face: style.font_face.clone(),
+            font_size: style.font_size,
+            font_style: style.font_style,
+            max_width_bits: max_width.to_bits(),
+            max_height_bits: max_height.to_bits(),
+        }
+    }
+
+    /// 캐시 hit 면 기존 layout, miss 면 새로 만들어 캐시 교체 후 반환.
+    /// 키가 바뀌면 outline geometry 도 같이 무효화된다.
+    fn get_or_create_layout(
+        &mut self,
+        text: &str,
+        style: &TextRenderStyle,
+        max_width: f32,
+        max_height: f32,
+    ) -> Result<IDWriteTextLayout> {
+        let key = Self::make_text_key(text, style, max_width, max_height);
+        if let Some(c) = &self.text_cache
+            && c.key == key
+        {
+            return Ok(c.layout.clone());
+        }
+        let layout = self.create_text_layout_uncached(text, style, max_width, max_height)?;
+        self.text_cache = Some(TextLayoutCache {
+            key,
+            layout: layout.clone(),
+            outline: None,
+        });
+        Ok(layout)
+    }
+
+    /// outline geometry 캐시 진입. 같은 키의 layout 기준으로 한 번만
+    /// `text_layout.Draw(OutlineTextRenderer)` 를 돌리고 그 결과를 보관.
+    /// outline 은 layout 원점 (0, 0) 기준으로 만들어 두고, 그리기 측에서
+    /// `SetTransform` 으로 (x, y) 평행이동만 곱해 재사용한다.
+    fn get_or_create_outline_geometry(
+        &mut self,
+        text: &str,
+        style: &TextRenderStyle,
+        max_width: f32,
+        max_height: f32,
+    ) -> Result<ID2D1PathGeometry> {
+        // layout 먼저 확보 (캐시 hit/miss 처리 포함).
+        let _ = self.get_or_create_layout(text, style, max_width, max_height)?;
+
+        if let Some(c) = &self.text_cache
+            && let Some(g) = &c.outline
+        {
+            return Ok(g.clone());
+        }
+
+        // outline geometry 신규 생성.
+        // SAFETY: d2d_factory 는 유효한 COM 객체. text_layout 도 위에서 확보.
+        let path_geometry: ID2D1PathGeometry = unsafe {
+            let geom: ID2D1PathGeometry = self.d2d_factory.CreatePathGeometry()?.into();
+            let sink = geom.Open()?;
+            let renderer: IDWriteTextRenderer =
+                OutlineTextRenderer::new(self.d2d_factory.clone(), sink.clone()).into();
+            let layout = self
+                .text_cache
+                .as_ref()
+                .expect("text_cache populated by get_or_create_layout")
+                .layout
+                .clone();
+            layout.Draw(None, &renderer, 0.0, 0.0)?;
+            sink.Close()?;
+            geom
+        };
+
+        if let Some(c) = self.text_cache.as_mut() {
+            c.outline = Some(path_geometry.clone());
+        }
+        Ok(path_geometry)
+    }
+
+    /// TextRenderStyle에서 IDWriteTextLayout 생성 (캐시 미경유 - 내부용).
+    fn create_text_layout_uncached(
         &self,
         text: &str,
         style: &TextRenderStyle,
@@ -423,7 +538,7 @@ impl D2DRenderer {
         max_height: f32,
         style: &TextRenderStyle,
     ) -> Result<()> {
-        let text_layout = self.create_text_layout(text, style, max_width, max_height)?;
+        let text_layout = self.get_or_create_layout(text, style, max_width, max_height)?;
         let outline_total = style.outline1_size + style.outline2_size;
 
         // SAFETY: target is a valid render target between BeginDraw/EndDraw.
@@ -436,7 +551,10 @@ impl D2DRenderer {
                 if outline_total > 0 {
                     self.draw_text_outline(
                         target,
-                        &text_layout,
+                        text,
+                        style,
+                        max_width,
+                        max_height,
                         shadow_x,
                         shadow_y,
                         outline_total,
@@ -457,7 +575,10 @@ impl D2DRenderer {
             if style.outline2_size > 0 && outline_total > 0 {
                 self.draw_text_outline(
                     target,
-                    &text_layout,
+                    text,
+                    style,
+                    max_width,
+                    max_height,
                     x,
                     y,
                     outline_total,
@@ -469,7 +590,10 @@ impl D2DRenderer {
             if style.outline1_size > 0 {
                 self.draw_text_outline(
                     target,
-                    &text_layout,
+                    text,
+                    style,
+                    max_width,
+                    max_height,
                     x,
                     y,
                     style.outline1_size,
@@ -491,45 +615,40 @@ impl D2DRenderer {
     }
 
     /// Geometry 기반 텍스트 외곽선 그리기.
-    /// IDWriteFontFace::GetGlyphRunOutline 을 사용해 정확한 벡터 외곽선 생성.
+    /// 캐시된 outline PathGeometry (origin=0,0 기준) 를 `SetTransform` 평행이동
+    /// 으로 (x, y) 에 그린다. paint 한 번에 최대 3 회 (shadow + outline2 +
+    /// outline1) 호출돼도 geometry 자체는 한 번만 만들어 재사용된다.
     fn draw_text_outline(
         &mut self,
         target: &ID2D1RenderTarget,
-        text_layout: &IDWriteTextLayout,
+        text: &str,
+        style: &TextRenderStyle,
+        max_width: f32,
+        max_height: f32,
         x: f32,
         y: f32,
         thickness: i32,
         color: u32,
     ) -> Result<()> {
-        // SAFETY: D2D factory and render target are valid COM objects. text_layout is a valid
-        // DirectWrite layout. The geometry, stroke style, and brush are created and used
-        // within this scope with valid parameters.
+        let path_geometry =
+            self.get_or_create_outline_geometry(text, style, max_width, max_height)?;
+
+        // SAFETY: target 은 BeginDraw/EndDraw 사이의 유효 render target. 본
+        // 메서드가 transform 을 임시로 평행이동으로 바꾼 뒤 항상 identity 로
+        // 복구한다 — `configure_frame` 의 가정 (identity transform) 유지.
         unsafe {
-            // 1. PathGeometry 생성 (Factory1::CreatePathGeometry → PathGeometry1
-            //    을 부모로 다운캐스트해 사용 — Open/DrawGeometry/FillGeometry 만 호출).
-            let path_geometry: ID2D1PathGeometry =
-                self.d2d_factory.CreatePathGeometry()?.into();
-            let sink = path_geometry.Open()?;
-
-            // 2. 커스텀 텍스트 렌더러로 글리프 아웃라인 추출
-            let renderer: IDWriteTextRenderer =
-                OutlineTextRenderer::new(self.d2d_factory.clone(), sink.clone()).into();
-
-            text_layout.Draw(None, &renderer, x, y)?;
-
-            sink.Close()?;
-
-            // 3. 외곽선 그리기 (캐시된 스트로크 스타일 사용)
             let brush = self.get_or_create_brush(target, color)?;
+            target.SetTransform(&Matrix3x2::translation(x, y));
+
             target.DrawGeometry(
                 &path_geometry,
                 &brush,
                 thickness as f32 * 2.0, // stroke는 양쪽으로 그려지므로 2배
                 self.stroke_style.as_ref(),
             );
-
-            // 5. 내부 채우기 (외곽선 색상으로)
             target.FillGeometry(&path_geometry, &brush, None);
+
+            target.SetTransform(&Matrix3x2::identity());
         }
 
         Ok(())
@@ -546,7 +665,7 @@ impl D2DRenderer {
     /// 는 outline/shadow 두께를 흡수하기 위한 사각형 확장 (px). 빈 텍스트
     /// 면 빈 Vec.
     pub fn compute_text_line_rects(
-        &self,
+        &mut self,
         text: &str,
         style: &TextRenderStyle,
         max_width: f32,
@@ -559,7 +678,7 @@ impl D2DRenderer {
             return Ok(Vec::new());
         }
 
-        let layout = self.create_text_layout(text, style, max_width, max_height)?;
+        let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
         let text_len: u32 = text.encode_utf16().count() as u32;
         if text_len == 0 {
             return Ok(Vec::new());
