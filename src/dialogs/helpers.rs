@@ -688,6 +688,18 @@ pub trait Dialog: Sized + 'static {
         None
     }
 
+    /// 인스턴스가 없는 상태에서 wndproc 가 메시지를 받았을 때 호출된다.
+    /// lparam 으로 박스 포인터를 받는 메시지를 쓰는 다이얼로그는, 이 hook 에서
+    /// 박스를 회수해 누수를 막을 수 있다. 기본 구현은 no-op.
+    fn on_orphan_message(_msg: u32, _w: WPARAM, _l: LPARAM) {}
+
+    /// `true` 이면 부모 윈도우 중앙에, `false` 이면 모니터 작업 영역 중앙에
+    /// 다이얼로그를 배치한다. 진행률 다이얼로그처럼 부모와 시각적으로 묶여야
+    /// 하는 경우에만 override 한다.
+    fn use_parent_centered() -> bool {
+        false
+    }
+
     /// 다이얼로그를 등록/생성/표시하고 hwnd 를 반환한다.
     fn show(parent: HWND, params: Self::Params) -> Result<HWND> {
         let opts = DialogWindowOptions {
@@ -703,7 +715,11 @@ pub trait Dialog: Sized + 'static {
         // 계약에 따라 호출자가 유효한 부모 핸들을 넘긴다고 가정한다.
         let hwnd = unsafe {
             register_dialog_class(opts.class_name, Self::wndproc_thunk)?;
-            create_dialog_window(&opts)?
+            if Self::use_parent_centered() {
+                create_dialog_window_centered_on_parent(&opts)?
+            } else {
+                create_dialog_window(&opts)?
+            }
         };
 
         let this = Self::init(hwnd, parent, params);
@@ -782,6 +798,11 @@ pub trait Dialog: Sized + 'static {
                     }
                     _ => {}
                 }
+            } else {
+                // 다이얼로그 인스턴스가 사라진 뒤 도착한 메시지. lparam 으로 박스
+                // 포인터를 넘기는 메시지를 쓰는 다이얼로그는 여기서 회수해야 누수가
+                // 발생하지 않는다.
+                Self::on_orphan_message(msg, wparam, lparam);
             }
 
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -809,148 +830,6 @@ macro_rules! define_dialog_instance {
             #[allow(non_upper_case_globals)]
             static $name: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<$Dialog>>>>
                 = const { std::cell::RefCell::new(None) };
-        }
-    };
-}
-
-// ============================================================
-// impl_dialog! 매크로 (구버전 — Dialog trait 로 점진 마이그레이션 중)
-// ============================================================
-
-/// 다이얼로그 보일러플레이트를 생성하는 매크로.
-///
-/// thread_local, show(), show_impl(), wndproc를 자동 생성한다.
-/// 각 다이얼로그는 `create_controls(&mut self)`, `handle_command(&mut self, id, notify_code)`,
-/// 그리고 선택적으로 `handle_message(&mut self, msg, wparam, lparam) -> Option<LRESULT>`를 구현한다.
-#[macro_export]
-macro_rules! impl_dialog {
-    (
-        dialog: $Dialog:ident,
-        instance: $INSTANCE:ident,
-        class_name: $class_name:expr,
-        title: $title:expr,
-        width: $width:expr,
-        height: $height:expr,
-        extra_style: $extra_style:expr,
-        params: ($parent_ident:ident : $parent_type:ty $(, $param_name:ident : $param_type:ty)*),
-        init: |$hwnd_arg:ident, $parent_arg:ident $(, $init_param:ident)*| $init_body:expr,
-    ) => {
-        thread_local! {
-            static $INSTANCE: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<$Dialog>>>> = const { std::cell::RefCell::new(None) };
-        }
-
-        #[allow(dead_code)]
-        impl $Dialog {
-            pub fn show($parent_arg: $parent_type $(, $param_name: $param_type)*) -> windows::core::Result<windows::Win32::Foundation::HWND> {
-                Self::show_impl($parent_arg $(, $param_name)*)
-            }
-
-            fn show_impl($parent_arg: $parent_type $(, $param_name: $param_type)*) -> windows::core::Result<windows::Win32::Foundation::HWND> {
-                use $crate::dialogs::helpers::{self, DialogWindowOptions};
-
-                // 호출자 메타변수($class_name, $title, $parent_arg 등)는 모두 안전
-                // 컨텍스트에서 옵션 구조체로 모은 뒤 unsafe 블록에는 지역 바인딩만
-                // 넘긴다. 호출자 코드가 매크로의 unsafe 권한을 상속받지 않도록 함.
-                let opts = DialogWindowOptions {
-                    class_name: $class_name,
-                    title: $title,
-                    width: $width,
-                    height: $height,
-                    parent: $parent_arg,
-                    extra_style: $extra_style,
-                };
-                let wndproc_fn = Self::wndproc;
-
-                // SAFETY: register_dialog_class / create_dialog_window 는 유효한 클래스
-                // 이름과 부모 핸들을 받는 한 안전한 Win32 래퍼다.
-                let $hwnd_arg = unsafe {
-                    helpers::register_dialog_class(opts.class_name, wndproc_fn)?;
-                    helpers::create_dialog_window(&opts)?
-                };
-
-                // $init_body 는 호출자가 제공한 임의 식이다. 안전 컨텍스트에서
-                // 평가해 매크로의 unsafe 가 호출자 코드까지 전파되지 않도록 한다.
-                let dialog = std::rc::Rc::new(std::cell::RefCell::new($init_body));
-
-                $INSTANCE.with(|cell| {
-                    *cell.borrow_mut() = Some(dialog.clone());
-                });
-
-                dialog.borrow_mut().create_controls()?;
-
-                let __hwnd_for_show = $hwnd_arg;
-                // SAFETY: 위에서 막 생성한 유효한 핸들이다.
-                unsafe {
-                    helpers::show_dialog_window(__hwnd_for_show);
-                }
-
-                Ok($hwnd_arg)
-            }
-
-            unsafe extern "system" fn wndproc(
-                hwnd: windows::Win32::Foundation::HWND,
-                msg: u32,
-                wparam: windows::Win32::Foundation::WPARAM,
-                lparam: windows::Win32::Foundation::LPARAM,
-            ) -> windows::Win32::Foundation::LRESULT {
-                unsafe {
-                    use windows::Win32::Foundation::{WPARAM, LPARAM, LRESULT};
-                    use windows::Win32::UI::WindowsAndMessaging::*;
-
-                    let instance = $INSTANCE.with(|cell| {
-                        let Ok(guard) = cell.try_borrow() else { return None; };
-                        guard.clone()
-                    });
-
-                    if let Some(dialog) = instance {
-                        // 먼저 커스텀 메시지 핸들러 확인
-                        if let Ok(mut d) = dialog.try_borrow_mut() {
-                            if let Some(result) = d.handle_message(msg, wparam, lparam) {
-                                return result;
-                            }
-                        }
-
-                        match msg {
-                            WM_COMMAND => {
-                                let id = (wparam.0 & 0xFFFF) as u16;
-                                let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-                                if let Ok(mut d) = dialog.try_borrow_mut() {
-                                    d.handle_command(id, notify_code);
-                                }
-                                return LRESULT(0);
-                            }
-
-                            WM_CLOSE => {
-                                let _ = DestroyWindow(hwnd);
-                                return LRESULT(0);
-                            }
-
-                            WM_DESTROY => {
-                                $INSTANCE.with(|cell| {
-                                    if let Ok(mut guard) = cell.try_borrow_mut() {
-                                        *guard = None;
-                                    }
-                                });
-                                return LRESULT(0);
-                            }
-
-                            WM_LBUTTONDOWN => {
-                                let _ = SendMessageW(
-                                    hwnd,
-                                    WM_NCLBUTTONDOWN,
-                                    Some(WPARAM(HTCAPTION as usize)),
-                                    Some(LPARAM(0)),
-                                );
-                                return LRESULT(0);
-                            }
-
-                            _ => {}
-                        }
-                    }
-
-                    DefWindowProcW(hwnd, msg, wparam, lparam)
-                }
-            }
         }
     };
 }
