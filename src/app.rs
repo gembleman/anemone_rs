@@ -24,7 +24,10 @@ use crate::constants::{
 use crate::d2d::D2DRenderer;
 use crate::d2d_composition::CompositionRenderer;
 use crate::dialogs::helpers::Dialog;
-use crate::dialogs::{BacklogDialog, LogEntry, SettingsDialog, TranslateDialog, add_to_backlog};
+use crate::dialogs::{
+    BacklogDialog, FileTransDialog, HookSettingsDialog, LogEntry, SettingsDialog,
+    TranslateDialog, add_to_backlog,
+};
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::{self, ContextMenu};
@@ -49,6 +52,8 @@ pub struct App {
     settings_hwnd: Option<HWND>,
     translate_hwnd: Option<HWND>,
     backlog_hwnd: Option<HWND>,
+    file_trans_hwnd: Option<HWND>,
+    hook_settings_hwnd: Option<HWND>,
     magnetic: Option<MagneticManager>,
     current_text: String,
     d2d_renderer: Option<D2DRenderer>,
@@ -144,6 +149,8 @@ impl App {
                 settings_hwnd: None,
                 translate_hwnd: None,
                 backlog_hwnd: None,
+                file_trans_hwnd: None,
+                hook_settings_hwnd: None,
                 magnetic: None,
                 current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
                 d2d_renderer: Some(d2d_renderer),
@@ -614,6 +621,12 @@ impl App {
             menu::id::BACKLOG => {
                 self.open_backlog_dialog();
             }
+            menu::id::FILE_TRANS => {
+                self.open_file_trans_dialog();
+            }
+            menu::id::HOOK_SETTINGS => {
+                self.open_hook_settings_dialog();
+            }
             menu::id::TEXT_SIZE_UP => {
                 let mut cfg = self.config.borrow_mut();
                 let new_size = (cfg.translation_style.size + 1).min(100);
@@ -716,6 +729,28 @@ impl App {
             &mut self.backlog_hwnd,
             "backlog",
             || BacklogDialog::show(main_hwnd, config),
+        );
+    }
+
+    /// 파일 번역 대화상자 열기
+    fn open_file_trans_dialog(&mut self) {
+        let main_hwnd = self.hwnd;
+        let config = self.config.clone();
+        Self::open_dialog_generic(
+            &mut self.file_trans_hwnd,
+            "file_trans",
+            || FileTransDialog::show(main_hwnd, config),
+        );
+    }
+
+    /// 후크 설정 대화상자 열기
+    fn open_hook_settings_dialog(&mut self) {
+        let main_hwnd = self.hwnd;
+        let config = self.config.clone();
+        Self::open_dialog_generic(
+            &mut self.hook_settings_hwnd,
+            "hook_settings",
+            || HookSettingsDialog::show(main_hwnd, config),
         );
     }
 

@@ -16,6 +16,8 @@ pub mod id {
     pub const SETTINGS: u16 = 108;
     pub const BACKLOG: u16 = 109;
     pub const TRANSLATE: u16 = 111;
+    pub const FILE_TRANS: u16 = 112;
+    pub const HOOK_SETTINGS: u16 = 113;
     pub const EXIT: u16 = 110;
 
     // 텍스트 크기 조절
@@ -67,7 +69,9 @@ impl ContextMenu {
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
             AppendMenuW(self.hmenu, MF_STRING, id::TRANSLATE as usize, w!("번역"))?;
+            AppendMenuW(self.hmenu, MF_STRING, id::FILE_TRANS as usize, w!("파일 번역"))?;
             AppendMenuW(self.hmenu, MF_STRING, id::BACKLOG as usize, w!("백로그"))?;
+            AppendMenuW(self.hmenu, MF_STRING, id::HOOK_SETTINGS as usize, w!("후크 설정"))?;
             AppendMenuW(self.hmenu, MF_STRING, id::SETTINGS as usize, w!("설정"))?;
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 

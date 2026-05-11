@@ -31,5 +31,7 @@ pub mod settings;
 pub mod translate;
 
 pub use backlog::{BacklogDialog, LogEntry, add_to_backlog};
+pub use file_trans::FileTransDialog;
+pub use hook_settings::HookSettingsDialog;
 pub use settings::SettingsDialog;
 pub use translate::TranslateDialog;
