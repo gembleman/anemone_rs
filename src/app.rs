@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::mem::zeroed;
 use std::ptr::null_mut;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use windows::{
     Win32::{
@@ -290,7 +291,7 @@ impl App {
         let text_style = &cfg.translation_style;
         let render_style = TextRenderStyle {
             font_size: text_style.size,
-            font_face: text_style.font_face.clone(),
+            font_face: Arc::from(text_style.font_face.as_str()),
             font_style: text_style.font_style,
             color: text_style.color_primary,
             outline1_size: text_style.outline1_size,
@@ -478,11 +479,24 @@ impl App {
             None
         };
 
+        // `ANEMONE_BENCH_PAINT_CACHE_MISS=1` 토글 — 매 iteration 마다
+        // current_text 끝에 카운터를 붙여 outline 비트맵 / layout /
+        // geometry 캐시를 강제 miss 시킨다. 항목 10 의 "miss 폭주" 위험 실측용.
+        let force_cache_miss = crate::bench::bench_force_cache_miss();
+        let saved_text = if force_cache_miss {
+            Some(self.current_text.clone())
+        } else {
+            None
+        };
+
         for _ in 0..WARMUP {
             if let Err(e) = self.paint() {
                 tracing::warn!("bench detailed warmup paint failed: {e}");
                 if let Some(s) = saved_style {
                     self.config.borrow_mut().translation_style = s;
+                }
+                if let Some(t) = saved_text {
+                    self.current_text = t;
                 }
                 return;
             }
@@ -490,7 +504,13 @@ impl App {
 
         let mut phased = crate::bench::PhasedBenchAccumulator::with_capacity(iters);
         let outer_timer = crate::bench::QpcTimer::new();
-        for _ in 0..iters {
+        for i in 0..iters {
+            // 매 iteration 마다 텍스트 변경 → 캐시 miss 강제.
+            // 카운터는 텍스트 끝 ("…#0", "#1", …) 에 붙여 layout box 크기
+            // 변동을 최소화 (자릿수 1 → 2 → 3 자리 전환점에서만 폭 변화).
+            if let Some(orig) = saved_text.as_ref() {
+                self.current_text = format!("{}#{}", orig, i);
+            }
             crate::bench::phase_begin();
             let t0 = outer_timer.now();
             if let Err(e) = self.paint() {
@@ -498,6 +518,9 @@ impl App {
                 crate::bench::phase_end(); // 슬롯 비워서 다음 측정 안전
                 if let Some(s) = saved_style {
                     self.config.borrow_mut().translation_style = s;
+                }
+                if let Some(t) = saved_text {
+                    self.current_text = t;
                 }
                 return;
             }
@@ -510,6 +533,9 @@ impl App {
 
         if let Some(s) = saved_style {
             self.config.borrow_mut().translation_style = s;
+        }
+        if let Some(t) = saved_text {
+            self.current_text = t;
         }
     }
 

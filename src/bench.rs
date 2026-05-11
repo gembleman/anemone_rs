@@ -352,3 +352,23 @@ pub fn bench_disable_outline() -> bool {
         Some("1") | Some("true")
     )
 }
+
+/// 벤치 측정 시 매 iteration 마다 텍스트를 살짝 바꿔 outline 비트맵 /
+/// layout / outline geometry 캐시 (항목 8, 10) 를 강제 miss 시킨다. 항목
+/// 10 알려진 한계 — "텍스트가 ms 단위로 폭주 변경되면 매 paint 가 캐시
+/// miss 가 되어 baseline 보다 느려질 위험" — 의 실측 검증용.
+///
+/// 효과 (`run_paint_bench_detailed` 측정 루프 안에서):
+/// - 매 iteration 진입 직전 `current_text` 끝에 카운터 (`#0`, `#1`, …)
+///   를 붙여 캐시 키를 매번 다르게 만든다.
+/// - 측정 종료 후 원래 텍스트로 복구한다.
+///
+/// 정상 paint 경로는 무변경 — bench 함수 안에서만 임시 mutate.
+pub fn bench_force_cache_miss() -> bool {
+    matches!(
+        std::env::var("ANEMONE_BENCH_PAINT_CACHE_MISS")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("true")
+    )
+}

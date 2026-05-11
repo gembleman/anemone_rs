@@ -1,12 +1,17 @@
 use std::mem::zeroed;
+use std::sync::Arc;
 
 use windows::Win32::{Foundation::*, Graphics::Gdi::ScreenToClient, UI::WindowsAndMessaging::*};
 
-/// 텍스트 렌더링 스타일
+/// 텍스트 렌더링 스타일.
+///
+/// `font_face` 는 `Arc<str>` — paint 핫패스에서 캐시 키 생성 시 String alloc
+/// 이 아니라 RC bump 로 끝나도록 한다. config 에서 paint 마다 새로 만들어
+/// 넘기는 구조라 매 paint 1 회 alloc 이 발생하던 비용을 제거.
 #[derive(Clone, Debug)]
 pub struct TextRenderStyle {
     pub font_size: i32,
-    pub font_face: String,
+    pub font_face: Arc<str>,
     pub font_style: u8, // 0: normal, 1: bold, 2: italic, 3: bold+italic
     pub color: u32,     // ARGB
     pub outline1_size: i32,
