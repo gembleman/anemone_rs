@@ -13,6 +13,7 @@ use crate::config::{ColorType, TextAlign, TextType};
 use crate::util::to_wide;
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
+use crate::dialogs::helpers::Dialog;
 
 /// +/- 버튼 처리 매크로: config에서 값을 읽고, 범위 내에서 증감 후, UI 업데이트
 macro_rules! handle_size_button {
