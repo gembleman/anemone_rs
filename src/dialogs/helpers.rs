@@ -673,36 +673,49 @@ macro_rules! impl_dialog {
         #[allow(dead_code)]
         impl $Dialog {
             pub fn show($parent_arg: $parent_type $(, $param_name: $param_type)*) -> windows::core::Result<windows::Win32::Foundation::HWND> {
-                unsafe { Self::show_impl($parent_arg $(, $param_name)*) }
+                Self::show_impl($parent_arg $(, $param_name)*)
             }
 
-            unsafe fn show_impl($parent_arg: $parent_type $(, $param_name: $param_type)*) -> windows::core::Result<windows::Win32::Foundation::HWND> {
+            fn show_impl($parent_arg: $parent_type $(, $param_name: $param_type)*) -> windows::core::Result<windows::Win32::Foundation::HWND> {
+                use $crate::dialogs::helpers::{self, DialogWindowOptions};
+
+                // 호출자 메타변수($class_name, $title, $parent_arg 등)는 모두 안전
+                // 컨텍스트에서 옵션 구조체로 모은 뒤 unsafe 블록에는 지역 바인딩만
+                // 넘긴다. 호출자 코드가 매크로의 unsafe 권한을 상속받지 않도록 함.
+                let opts = DialogWindowOptions {
+                    class_name: $class_name,
+                    title: $title,
+                    width: $width,
+                    height: $height,
+                    parent: $parent_arg,
+                    extra_style: $extra_style,
+                };
+                let wndproc_fn = Self::wndproc;
+
+                // SAFETY: register_dialog_class / create_dialog_window 는 유효한 클래스
+                // 이름과 부모 핸들을 받는 한 안전한 Win32 래퍼다.
+                let $hwnd_arg = unsafe {
+                    helpers::register_dialog_class(opts.class_name, wndproc_fn)?;
+                    helpers::create_dialog_window(&opts)?
+                };
+
+                // $init_body 는 호출자가 제공한 임의 식이다. 안전 컨텍스트에서
+                // 평가해 매크로의 unsafe 가 호출자 코드까지 전파되지 않도록 한다.
+                let dialog = std::rc::Rc::new(std::cell::RefCell::new($init_body));
+
+                $INSTANCE.with(|cell| {
+                    *cell.borrow_mut() = Some(dialog.clone());
+                });
+
+                dialog.borrow_mut().create_controls()?;
+
+                let __hwnd_for_show = $hwnd_arg;
+                // SAFETY: 위에서 막 생성한 유효한 핸들이다.
                 unsafe {
-                    use crate::dialogs::helpers::{self, DialogWindowOptions};
-
-                    helpers::register_dialog_class($class_name, Self::wndproc)?;
-
-                    let $hwnd_arg = helpers::create_dialog_window(&DialogWindowOptions {
-                        class_name: $class_name,
-                        title: $title,
-                        width: $width,
-                        height: $height,
-                        parent: $parent_arg,
-                        extra_style: $extra_style,
-                    })?;
-
-                    let dialog = std::rc::Rc::new(std::cell::RefCell::new($init_body));
-
-                    $INSTANCE.with(|cell| {
-                        *cell.borrow_mut() = Some(dialog.clone());
-                    });
-
-                    dialog.borrow_mut().create_controls()?;
-
-                    helpers::show_dialog_window($hwnd_arg);
-
-                    Ok($hwnd_arg)
+                    helpers::show_dialog_window(__hwnd_for_show);
                 }
+
+                Ok($hwnd_arg)
             }
 
             unsafe extern "system" fn wndproc(

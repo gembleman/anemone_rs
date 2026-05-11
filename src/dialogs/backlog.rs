@@ -107,11 +107,15 @@ impl_dialog! {
         // System32 한정 검색으로 DLL hijacking 방어 (cwd/PATH 무시).
         RICHEDIT_LOADED.with(|loaded| {
             if !*loaded.borrow() {
-                if let Err(e) = LoadLibraryExW(
-                    w!("Msftedit.dll"),
-                    None,
-                    LOAD_LIBRARY_SEARCH_SYSTEM32,
-                ) {
+                // SAFETY: System32 한정 검색 플래그를 쓰는 정적 DLL 이름 로드.
+                let load_result = unsafe {
+                    LoadLibraryExW(
+                        w!("Msftedit.dll"),
+                        None,
+                        LOAD_LIBRARY_SEARCH_SYSTEM32,
+                    )
+                };
+                if let Err(e) = load_result {
                     tracing::error!("Failed to load Msftedit.dll: {e}");
                 }
                 *loaded.borrow_mut() = true;
