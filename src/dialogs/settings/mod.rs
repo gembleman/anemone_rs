@@ -380,7 +380,7 @@ impl SettingsDialog {
         unsafe {
             let tab = TAB_TRANSLATION;
 
-            let h = self.create_group_box(tx, ty, 460, 160, "번역 설정")?;
+            let h = self.create_group_box(tx, ty, 460, 190, "번역 설정")?;
             self.register_control(tab, h);
 
             // 엔진 선택
@@ -429,6 +429,13 @@ impl SettingsDialog {
             let h = self.create_edit(tx + 95, ty + 88, 280, 22, ctrl_id::EZTRANS_DAT_EDIT, &dat_path)?;
             self.register_control(tab, h);
             let h = self.create_button(tx + 380, ty + 88, 70, 22, ctrl_id::EZTRANS_DAT_BROWSE, "찾아보기")?;
+            self.register_control(tab, h);
+
+            // DeepL API 키
+            let h = self.create_label(tx + 15, ty + 120, 80, 18, "DeepL API키:")?;
+            self.register_control(tab, h);
+            let api_key = self.config.borrow().translation.deepl_api_key.clone();
+            let h = self.create_edit(tx + 95, ty + 118, 355, 22, ctrl_id::DEEPL_API_KEY_EDIT, &api_key)?;
             self.register_control(tab, h);
 
             Ok(())

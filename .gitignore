@@ -1,5 +1,6 @@
 /target
 /.claude
-*.md
 *.env
 nul
+/docs
+*.md

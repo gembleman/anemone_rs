@@ -22,7 +22,8 @@ use super::helpers::DialogControls;
 
 use crate::config::Config;
 use crate::constants::{
-    CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CF_UNICODETEXT, WM_TRANSLATION_COMPLETE,
+    CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CF_UNICODETEXT,
+    WM_TRANSLATION_COMPLETE,
 };
 use crate::translation::{
     get_translation_manager, Language, TranslationEngine,
@@ -136,20 +137,10 @@ impl TranslateDialog {
             self.create_label(180, 28, 40, 18, "소스:")?;
             self.source_lang_combo =
                 DialogControls::create_combobox(self, 220, 25, 100, 150, ctrl_id::COMBO_SOURCE_LANG, &[], 0)?;
-            self.add_combobox_item(self.source_lang_combo, "일본어");
-            self.add_combobox_item(self.source_lang_combo, "한국어");
-            self.add_combobox_item(self.source_lang_combo, "영어");
-            self.add_combobox_item(self.source_lang_combo, "중국어(간체)");
-            self.add_combobox_item(self.source_lang_combo, "중국어(번체)");
 
             self.create_label(335, 28, 40, 18, "타겟:")?;
             self.target_lang_combo =
                 DialogControls::create_combobox(self, 375, 25, 100, 150, ctrl_id::COMBO_TARGET_LANG, &[], 0)?;
-            self.add_combobox_item(self.target_lang_combo, "일본어");
-            self.add_combobox_item(self.target_lang_combo, "한국어");
-            self.add_combobox_item(self.target_lang_combo, "영어");
-            self.add_combobox_item(self.target_lang_combo, "중국어(간체)");
-            self.add_combobox_item(self.target_lang_combo, "중국어(번체)");
 
             // 설정에서 초기값 로드
             {
@@ -159,6 +150,7 @@ impl TranslateDialog {
                     self.engine_combo, CB_SETCURSEL,
                     Some(WPARAM(config.translation.engine_as_u8() as usize)), None,
                 );
+                self.populate_language_combos(engine);
                 let _ = SendMessageW(
                     self.source_lang_combo, CB_SETCURSEL,
                     Some(WPARAM(config.translation.source_lang_index(engine))), None,
@@ -280,6 +272,25 @@ impl TranslateDialog {
         }
 
         None
+    }
+
+    /// 엔진에 맞게 언어 콤보박스 항목 갱신
+    fn populate_language_combos(&self, engine: TranslationEngine) {
+        use crate::translation::lang_utils;
+        // SAFETY: combo handles are valid controls from create_controls.
+        unsafe {
+            let _ = SendMessageW(self.source_lang_combo, CB_RESETCONTENT, None, None);
+            for &lang in engine.supported_source_languages() {
+                self.add_combobox_item(self.source_lang_combo, lang_utils::to_korean_name(lang));
+            }
+            let _ = SendMessageW(self.source_lang_combo, CB_SETCURSEL, Some(WPARAM(0)), None);
+
+            let _ = SendMessageW(self.target_lang_combo, CB_RESETCONTENT, None, None);
+            for &lang in engine.supported_target_languages() {
+                self.add_combobox_item(self.target_lang_combo, lang_utils::to_korean_name(lang));
+            }
+            let _ = SendMessageW(self.target_lang_combo, CB_SETCURSEL, Some(WPARAM(0)), None);
+        }
     }
 
     fn add_combobox_item(&self, combo: HWND, text: &str) {
@@ -576,6 +587,15 @@ impl TranslateDialog {
             COMBO_ENGINE | COMBO_SOURCE_LANG | COMBO_TARGET_LANG => {
                 // CBN_SELCHANGE
                 if notify_code == 1 {
+                    if cmd == COMBO_ENGINE {
+                        // SAFETY: engine_combo is a valid handle.
+                        let engine_idx = unsafe {
+                            SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8
+                        };
+                        let engine = TranslationEngine::from_u8(engine_idx);
+                        self.populate_language_combos(engine);
+                        self.engine_initialized = false;
+                    }
                     self.apply_current_settings();
                 }
             }

@@ -28,7 +28,6 @@ pub struct DoubleBuffer {
     hdc_mem: HDC,
     hbitmap: HBITMAP,
     hbitmap_old: HGDIOBJ,
-    bits: *mut u8,
     pub width: i32,
     pub height: i32,
 }
@@ -50,7 +49,6 @@ impl DoubleBuffer {
     pub fn new(hdc: HDC, width: i32, height: i32) -> Result<Self> {
         // SAFETY: hdc is a valid device context from the caller. CreateCompatibleDC,
         // CreateDIBSection, and SelectObject are standard GDI calls with valid parameters.
-        // The bits pointer is valid for width*height*4 bytes as long as hbitmap is alive.
         unsafe {
             let hdc_mem = CreateCompatibleDC(Some(hdc));
             if hdc_mem.is_invalid() {
@@ -74,22 +72,9 @@ impl DoubleBuffer {
                 hdc_mem,
                 hbitmap,
                 hbitmap_old,
-                bits: bits as *mut u8,
                 width,
                 height,
             })
-        }
-    }
-
-    pub fn clear(&mut self, r: u8, g: u8, b: u8, a: u8) {
-        // SAFETY: self.bits points to valid DIB section memory of width*height pixels.
-        // The slice is bounded by pixel_count which matches the allocated size.
-        unsafe {
-            let pixel_count = (self.width * self.height) as usize;
-            let pixels = std::slice::from_raw_parts_mut(self.bits as *mut u32, pixel_count);
-            // BGRA 순서 (DIB는 BGRA)
-            let color = ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
-            pixels.fill(color);
         }
     }
 
@@ -97,48 +82,6 @@ impl DoubleBuffer {
         self.hdc_mem
     }
 
-    /// 사각형 채우기 (ARGB)
-    pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
-        let a = ((color >> 24) & 0xFF) as u8;
-        let r = ((color >> 16) & 0xFF) as u8;
-        let g = ((color >> 8) & 0xFF) as u8;
-        let b = (color & 0xFF) as u8;
-        let bgra = ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
-
-        let width = self.width;
-        let height = self.height;
-
-        // SAFETY: self.bits points to valid DIB section memory of width*height pixels.
-        // Pixel indices are bounds-checked before access.
-        unsafe {
-            let pixel_count = (width * height) as usize;
-            let pixels = std::slice::from_raw_parts_mut(self.bits as *mut u32, pixel_count);
-
-            for py in y.max(0)..(y + h).min(height) {
-                for px in x.max(0)..(x + w).min(width) {
-                    let idx = (py * width + px) as usize;
-                    if idx < pixels.len() {
-                        pixels[idx] = bgra;
-                    }
-                }
-            }
-        }
-    }
-
-    /// 테두리 그리기 (ARGB)
-    pub fn draw_border(&mut self, thickness: i32, color: u32) {
-        let w = self.width;
-        let h = self.height;
-
-        // 상단
-        self.fill_rect(0, 0, w, thickness, color);
-        // 하단
-        self.fill_rect(0, h - thickness, w, thickness, color);
-        // 좌측
-        self.fill_rect(0, 0, thickness, h, color);
-        // 우측
-        self.fill_rect(w - thickness, 0, thickness, h, color);
-    }
 }
 
 /// 레이어드 윈도우 업데이트

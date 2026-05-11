@@ -2,7 +2,17 @@
 //!
 //! Google/DeepL 등 HTTP 기반 번역 엔진의 공통 패턴을 추출.
 
+use std::sync::OnceLock;
 use super::{TranslationError, TranslationResult};
+
+/// 프로세스 전역 reqwest::Client (connection pool 재사용)
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+pub fn shared_client() -> reqwest::Client {
+    SHARED_CLIENT
+        .get_or_init(|| reqwest::Client::new())
+        .clone()
+}
 
 /// HTTP 응답을 읽고 상태 코드를 검증한다.
 ///

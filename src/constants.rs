@@ -64,6 +64,7 @@ pub const MAX_RESPONSE_STORAGE: usize = 100;
 pub const CB_ADDSTRING: u32 = 0x0143;
 pub const CB_GETCURSEL: u32 = 0x0147;
 pub const CB_SETCURSEL: u32 = 0x014E;
+pub const CB_RESETCONTENT: u32 = 0x014B;
 pub const CBN_SELCHANGE: u32 = 1;
 
 // ── Win32 누락 상수: ListBox ────────────────────────────

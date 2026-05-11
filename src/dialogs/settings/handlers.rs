@@ -51,6 +51,12 @@ impl SettingsDialog {
             return;
         }
 
+        // Edit 컨트롤 포커스 해제 시 값 저장
+        if notify_code == EN_KILLFOCUS as u32 {
+            self.handle_edit_killfocus(cmd);
+            return;
+        }
+
         use ctrl_id::*;
 
         match cmd {
@@ -457,6 +463,46 @@ impl SettingsDialog {
 
             CoUninitialize();
             result
+        }
+    }
+
+    /// Edit 컨트롤 포커스 해제 시 값 저장
+    fn handle_edit_killfocus(&mut self, ctrl_id: u16) {
+        let text = self.get_control_text(ctrl_id);
+        use ctrl_id::*;
+        match ctrl_id {
+            DEEPL_API_KEY_EDIT => {
+                self.config.borrow_mut().translation.deepl_api_key = text;
+                self.sync_translation_manager();
+                self.notify_change();
+            }
+            EZTRANS_DLL_EDIT => {
+                self.config.borrow_mut().translation.eztrans_dll_path = text;
+                self.sync_translation_manager();
+                self.notify_change();
+            }
+            EZTRANS_DAT_EDIT => {
+                self.config.borrow_mut().translation.eztrans_dat_path = text;
+                self.sync_translation_manager();
+                self.notify_change();
+            }
+            _ => {}
+        }
+    }
+
+    /// Edit 컨트롤에서 텍스트 가져오기
+    fn get_control_text(&self, ctrl_id: u16) -> String {
+        // SAFETY: self.hwnd is valid; GetDlgItem returns a valid control handle.
+        unsafe {
+            let ctrl = match GetDlgItem(Some(self.hwnd), ctrl_id as i32) {
+                Ok(h) if !h.is_invalid() => h,
+                _ => return String::new(),
+            };
+            let len = GetWindowTextLengthW(ctrl);
+            if len == 0 { return String::new(); }
+            let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
+            GetWindowTextW(ctrl, &mut buffer);
+            String::from_utf16_lossy(&buffer[..len as usize])
         }
     }
 

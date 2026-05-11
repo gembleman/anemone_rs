@@ -308,8 +308,11 @@ impl TranslationManager {
         }
     }
 
-    /// EzTrans 초기화
+    /// EzTrans 초기화 (이미 초기화되었으면 스킵)
     pub fn init_eztrans(&mut self, dll_path: &str, dat_path: &str) -> Result<(), String> {
+        if self.eztrans.is_some() {
+            return Ok(());
+        }
         match EzTransTranslator::new(dll_path, dat_path) {
             Ok(engine) => {
                 self.eztrans = Some(engine);

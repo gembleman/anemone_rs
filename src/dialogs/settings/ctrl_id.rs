@@ -87,6 +87,7 @@ pub const EZTRANS_DLL_EDIT: u16 = 1264;
 pub const EZTRANS_DLL_BROWSE: u16 = 1265;
 pub const EZTRANS_DAT_EDIT: u16 = 1266;
 pub const EZTRANS_DAT_BROWSE: u16 = 1267;
+pub const DEEPL_API_KEY_EDIT: u16 = 1268;
 
 // 탭 컨트롤
 pub const TAB_CONTROL: u16 = 1290;

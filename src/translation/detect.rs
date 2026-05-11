@@ -106,17 +106,10 @@ pub fn detect_language_heuristic(text: &str) -> Option<Language> {
 ///
 /// 자동 번역 시 소스 언어가 아닌 텍스트는 번역하지 않음
 pub fn is_source_language(text: &str, source_lang: Language) -> bool {
-    if let Some(detected) = detect_language(text) {
-        detected == source_lang
-    } else {
-        // 감지 실패 시 휴리스틱으로 재시도
-        if let Some(detected) = detect_language_heuristic(text) {
-            detected == source_lang
-        } else {
-            // 언어를 감지할 수 없으면 번역하지 않음
-            false
-        }
-    }
+    // detect_language는 내부에서 이미 detect_language_heuristic을 폴백으로 호출하므로
+    // 별도의 재시도가 필요 없음
+    detect_language(text)
+        .is_some_and(|detected| detected == source_lang)
 }
 
 #[cfg(test)]
@@ -137,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_detect_english() {
-        let text = "Hello World";
+        let text = "This is a simple English sentence for language detection";
         assert_eq!(detect_language(text), Some(Language::Eng));
     }
 

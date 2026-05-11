@@ -54,6 +54,17 @@ pub async fn translate_async(
     target: Language,
     api_key: &str,
 ) -> TranslationResult {
+    translate_async_with_client(&super::http_common::shared_client(), text, source, target, api_key).await
+}
+
+/// 공유 Client를 받는 비동기 번역 함수
+pub async fn translate_async_with_client(
+    client: &reqwest::Client,
+    text: &str,
+    source: Language,
+    target: Language,
+    api_key: &str,
+) -> TranslationResult {
     validate_not_empty(text)?;
 
     if api_key.is_empty() {
@@ -78,7 +89,7 @@ pub async fn translate_async(
         ("target_lang", target_code),
     ];
 
-    let response = reqwest::Client::new()
+    let response = client
         .post(&url)
         .form(&params)
         .header("User-Agent", "AnemoneRS/1.0")
