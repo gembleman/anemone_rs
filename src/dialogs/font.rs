@@ -42,11 +42,14 @@ pub struct FontResult {
     pub face_name: String,
     /// 폰트 스타일 (bold, italic)
     pub style: FontStyle,
+    /// 선택된 포인트 크기 (pt)
+    pub point_size: i32,
 }
 
 impl FontResult {
-    /// LOGFONT에서 변환
-    pub fn from_logfont(lf: &LOGFONTW) -> Self {
+    /// CHOOSEFONT 결과에서 변환.
+    /// `cf.iPointSize` 는 1/10 pt 단위로 채워져 돌아온다.
+    fn from_choosefont(lf: &LOGFONTW, cf: &CHOOSEFONTW) -> Self {
         let face_name = String::from_utf16_lossy(
             &lf.lfFaceName[..lf
                 .lfFaceName
@@ -61,6 +64,7 @@ impl FontResult {
                 bold: lf.lfWeight >= 700,
                 italic: lf.lfItalic != 0,
             },
+            point_size: (cf.iPointSize + 5) / 10,
         }
     }
 }
@@ -136,7 +140,7 @@ impl FontDialog {
             cf.nFontType = SCREEN_FONTTYPE;
 
             if ChooseFontW(&mut cf).as_bool() {
-                Some(FontResult::from_logfont(&lf))
+                Some(FontResult::from_choosefont(&lf, &cf))
             } else {
                 None
             }

@@ -14,8 +14,8 @@ use windows::{
         },
         UI::Controls::*,
         UI::Controls::RichEdit::{
-            CFE_BOLD, CFM_BOLD, CFM_COLOR, CFM_SIZE, CHARFORMAT2W, EM_SETBKGNDCOLOR,
-            EM_SETCHARFORMAT, SCF_SELECTION,
+            CFE_BOLD, CFE_ITALIC, CFM_BOLD, CFM_COLOR, CFM_FACE, CFM_ITALIC, CFM_SIZE,
+            CHARFORMAT2W, EM_SETBKGNDCOLOR, EM_SETCHARFORMAT, SCF_SELECTION,
         },
         UI::WindowsAndMessaging::*,
     },
@@ -26,6 +26,7 @@ use crate::config::Config;
 use crate::define_dialog_instance;
 use crate::util::to_wide;
 use super::file_dialog::{FileFilter, save_file};
+use super::font::{FontDialog, FontDialogConfig, FontStyle};
 use super::helpers::{Dialog, DialogControls};
 
 // 컨트롤 ID
@@ -82,6 +83,12 @@ pub struct BacklogDialog {
     filter: BacklogFilter,
     add_linefeed: bool,
     entries: Vec<LogEntry>,
+    /// RichEdit 본문에 적용 중인 폰트 패밀리
+    font_face: Option<String>,
+    /// 본문 포인트 크기 (pt). yHeight 는 twip 단위라 *20.
+    font_point_size: i32,
+    /// 본문 italic 여부 (bold 는 [name] 강조 용도라 별도 유지)
+    font_italic: bool,
 }
 
 impl DialogControls for BacklogDialog {
@@ -136,6 +143,9 @@ impl Dialog for BacklogDialog {
             filter: BacklogFilter::All,
             add_linefeed: true,
             entries: Vec::new(),
+            font_face: None,
+            font_point_size: 10,
+            font_italic: false,
         }
     }
 
@@ -220,7 +230,7 @@ impl Dialog for BacklogDialog {
             RADIO_ALL => { self.filter = BacklogFilter::All; self.refresh_richedit(); }
             BTN_CLEAR => self.clear_richedit(),
             BTN_SAVE => self.save_to_file(),
-            BTN_FONT => { /* TODO: 폰트 선택 대화상자 */ }
+            BTN_FONT => self.choose_font(),
             _ => {}
         }
     }
@@ -284,13 +294,22 @@ impl BacklogDialog {
         unsafe {
             let mut cf = CHARFORMAT2W::default();
             cf.Base.cbSize = std::mem::size_of::<CHARFORMAT2W>() as u32;
-            cf.Base.dwMask = CFM_COLOR | CFM_SIZE;
+            cf.Base.dwMask = CFM_COLOR | CFM_SIZE | CFM_BOLD | CFM_ITALIC;
             cf.Base.crTextColor = COLORREF(color);
-            cf.Base.yHeight = 200;
+            cf.Base.yHeight = self.font_point_size.max(1) * 20; // pt → twip
 
             if bold {
-                cf.Base.dwMask |= CFM_BOLD;
                 cf.Base.dwEffects |= CFE_BOLD;
+            }
+            if self.font_italic {
+                cf.Base.dwEffects |= CFE_ITALIC;
+            }
+
+            if let Some(ref face) = self.font_face {
+                cf.Base.dwMask |= CFM_FACE;
+                let face_utf16: Vec<u16> = face.encode_utf16().collect();
+                let copy_len = face_utf16.len().min(cf.Base.szFaceName.len() - 1);
+                cf.Base.szFaceName[..copy_len].copy_from_slice(&face_utf16[..copy_len]);
             }
 
             let _ = SendMessageW(
@@ -322,6 +341,25 @@ impl BacklogDialog {
         for entry in &self.entries.clone() {
             self.append_entry_to_richedit(entry);
         }
+    }
+
+    /// 폰트 선택 대화상자
+    fn choose_font(&mut self) {
+        let cfg = FontDialogConfig {
+            initial_face: self.font_face.clone(),
+            initial_style: FontStyle { bold: false, italic: self.font_italic },
+            initial_point_size: self.font_point_size,
+            no_activate: false,
+        };
+
+        let Some(result) = FontDialog::show(self.hwnd, cfg) else { return; };
+
+        self.font_face = Some(result.face_name);
+        self.font_italic = result.style.italic;
+        if result.point_size > 0 {
+            self.font_point_size = result.point_size;
+        }
+        self.refresh_richedit();
     }
 
     /// 파일로 저장
