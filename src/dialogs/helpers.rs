@@ -214,9 +214,18 @@ pub unsafe fn show_dialog_window(hwnd: HWND) {
 // 컨트롤 생성 헬퍼
 // ============================================================
 
+/// 자식 컨트롤의 위치/크기/식별자 묶음 (96 DPI 디자인 단위).
+struct ChildSpec {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    id: u16,
+}
+
 /// 자식 컨트롤을 생성하고 기본 GUI 폰트를 설정한다.
 ///
-/// 좌표(`x`, `y`, `w`, `h`) 는 96 DPI 디자인 단위로 받으며, 부모 윈도우의 DPI 로
+/// `spec` 의 좌표는 96 DPI 디자인 단위로 받으며, 부모 윈도우의 DPI 로
 /// 자동 스케일링된다.
 // SAFETY: Caller must provide a valid parent HWND, class name, and text pointer.
 unsafe fn create_child(
@@ -225,11 +234,7 @@ unsafe fn create_child(
     text: PCWSTR,
     style: WINDOW_STYLE,
     ex_style: WINDOW_EX_STYLE,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
+    spec: ChildSpec,
 ) -> Result<HWND> {
     // SAFETY: parent is a valid window handle. CreateWindowExW creates a child control
     // with valid class and style. GetStockObject returns a valid font handle.
@@ -237,10 +242,10 @@ unsafe fn create_child(
         let hinst = GetModuleHandleW(None)?;
 
         let dpi = crate::dpi::dpi_for_window(parent);
-        let sx = crate::dpi::scale(x, dpi);
-        let sy = crate::dpi::scale(y, dpi);
-        let sw = crate::dpi::scale(w, dpi);
-        let sh = crate::dpi::scale(h, dpi);
+        let sx = crate::dpi::scale(spec.x, dpi);
+        let sy = crate::dpi::scale(spec.y, dpi);
+        let sw = crate::dpi::scale(spec.w, dpi);
+        let sh = crate::dpi::scale(spec.h, dpi);
 
         let hwnd = CreateWindowExW(
             ex_style,
@@ -252,7 +257,7 @@ unsafe fn create_child(
             sw,
             sh,
             Some(parent),
-            Some(HMENU(id as isize as *mut _)),
+            Some(HMENU(spec.id as isize as *mut _)),
             Some(hinst.into()),
             None,
         )?;
@@ -288,7 +293,7 @@ pub unsafe fn create_group_box(
             PCWSTR(text_wide.as_ptr()),
             WINDOW_STYLE(BS_GROUPBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
             WINDOW_EX_STYLE::default(),
-            x, y, w, h, 0,
+            ChildSpec { x, y, w, h, id: 0 },
         )
     }
 }
@@ -313,7 +318,7 @@ pub unsafe fn create_label(
             PCWSTR(text_wide.as_ptr()),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
             WINDOW_EX_STYLE::default(),
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )
     }
 }
@@ -338,7 +343,7 @@ pub unsafe fn create_button(
             PCWSTR(text_wide.as_ptr()),
             WINDOW_STYLE(BS_PUSHBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
             WINDOW_EX_STYLE::default(),
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )
     }
 }
@@ -365,7 +370,7 @@ pub unsafe fn create_checkbox(
             PCWSTR(text_wide.as_ptr()),
             WINDOW_STYLE(BS_AUTOCHECKBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
             WINDOW_EX_STYLE::default(),
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )?;
 
         if checked {
@@ -402,7 +407,7 @@ pub unsafe fn create_radio(
             PCWSTR(text_wide.as_ptr()),
             WINDOW_STYLE(BS_AUTORADIOBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
             WINDOW_EX_STYLE::default(),
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )?;
 
         if checked {
@@ -442,7 +447,7 @@ pub unsafe fn create_combobox(
                     | WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0,
             ),
             WINDOW_EX_STYLE::default(),
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )?;
 
         for item in items {
@@ -486,7 +491,7 @@ pub unsafe fn create_edit(
             PCWSTR(text_wide.as_ptr()),
             WINDOW_STYLE(ES_AUTOHSCROLL as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0),
             WS_EX_CLIENTEDGE,
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )
     }
 }
@@ -514,7 +519,7 @@ pub unsafe fn create_edit_numeric(
                     | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0,
             ),
             WS_EX_CLIENTEDGE,
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )
     }
 }
@@ -547,7 +552,7 @@ pub unsafe fn create_multiline_edit(
                     | WS_TABSTOP.0,
             ),
             WS_EX_CLIENTEDGE,
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )
     }
 }
@@ -573,7 +578,7 @@ pub unsafe fn create_listbox(
                     | WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0 | WS_TABSTOP.0,
             ),
             WS_EX_CLIENTEDGE,
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )
     }
 }
@@ -787,7 +792,7 @@ pub unsafe fn create_tab_control(
             w!(""),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPSIBLINGS.0),
             WINDOW_EX_STYLE::default(),
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )?;
 
         for (i, tab_text) in tabs.iter().enumerate() {
@@ -831,7 +836,7 @@ pub unsafe fn create_trackbar(
             w!(""),
             WINDOW_STYLE(TBS_HORZ | TBS_NOTICKS | WS_CHILD.0 | WS_VISIBLE.0),
             WINDOW_EX_STYLE::default(),
-            x, y, w, h, id,
+            ChildSpec { x, y, w, h, id },
         )?;
 
         let _ = SendMessageW(
