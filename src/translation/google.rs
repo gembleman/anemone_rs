@@ -63,18 +63,16 @@ fn parse_google_response(json: &str) -> TranslationResult {
 
     let mut result = String::with_capacity(json.len() / 4);
 
-    if let Some(outer) = value.as_array() {
-        if let Some(first) = outer.first() {
-            if let Some(translations) = first.as_array() {
-                for item in translations {
-                    if let Some(inner) = item.as_array() {
-                        if let Some(first_elem) = inner.first() {
-                            if let Some(translated) = first_elem.as_str() {
-                                result.push_str(translated);
-                            }
-                        }
-                    }
-                }
+    if let Some(outer) = value.as_array()
+        && let Some(first) = outer.first()
+        && let Some(translations) = first.as_array()
+    {
+        for item in translations {
+            if let Some(inner) = item.as_array()
+                && let Some(first_elem) = inner.first()
+                && let Some(translated) = first_elem.as_str()
+            {
+                result.push_str(translated);
             }
         }
     }

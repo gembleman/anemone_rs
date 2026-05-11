@@ -56,24 +56,22 @@ fn parse_deepl_response(json: &str) -> TranslationResult {
         serde_json::from_str(json).map_err(|e| TranslationError::Parse(e.to_string()))?;
 
     // translations[0].text 추출
-    if let Some(translations) = value.get("translations") {
-        if let Some(first) = translations.get(0) {
-            if let Some(text) = first.get("text") {
-                if let Some(s) = text.as_str() {
-                    return Ok(s.to_string());
-                }
-            }
-        }
+    if let Some(translations) = value.get("translations")
+        && let Some(first) = translations.get(0)
+        && let Some(text) = first.get("text")
+        && let Some(s) = text.as_str()
+    {
+        return Ok(s.to_string());
     }
 
     // 에러 메시지 확인
-    if let Some(message) = value.get("message") {
-        if let Some(s) = message.as_str() {
-            return Err(TranslationError::Api {
-                code: 0,
-                message: s.to_string(),
-            });
-        }
+    if let Some(message) = value.get("message")
+        && let Some(s) = message.as_str()
+    {
+        return Err(TranslationError::Api {
+            code: 0,
+            message: s.to_string(),
+        });
     }
 
     Err(TranslationError::Parse(

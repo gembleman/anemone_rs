@@ -12,9 +12,9 @@ use windows::{
 };
 
 use crate::config::{Config, LlmGlossaryEntry};
-use crate::impl_dialog;
+use crate::define_dialog_instance;
 use crate::util::to_wide;
-use super::helpers::DialogControls;
+use super::helpers::{Dialog, DialogControls};
 
 mod ctrl_id {
     pub const LIST: u16 = 7001;
@@ -38,22 +38,29 @@ impl DialogControls for GlossaryDialog {
     fn dialog_hwnd(&self) -> HWND { self.hwnd }
 }
 
-impl_dialog! {
-    dialog: GlossaryDialog,
-    instance: GLOSSARY_INSTANCE,
-    class_name: w!("AnemoneGlossaryClass"),
-    title: w!("LLM 글로서리 편집"),
-    width: 480,
-    height: 380,
-    extra_style: WINDOW_STYLE::default(),
-    params: (parent: HWND, config: Rc<RefCell<Config>>),
-    init: |hwnd, parent, config| {
+define_dialog_instance!(GLOSSARY_INSTANCE: GlossaryDialog);
+
+impl Dialog for GlossaryDialog {
+    type Params = Rc<RefCell<Config>>;
+
+    const CLASS_NAME: PCWSTR = w!("AnemoneGlossaryClass");
+    const TITLE: PCWSTR = w!("LLM 글로서리 편집");
+    const WIDTH: i32 = 480;
+    const HEIGHT: i32 = 380;
+    const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
+
+    fn instance_slot()
+        -> &'static std::thread::LocalKey<
+            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+        > {
+        &GLOSSARY_INSTANCE
+    }
+
+    fn init(hwnd: HWND, _parent: HWND, config: Self::Params) -> Self {
         let entries = config.borrow().translation.llm.glossary.clone();
         GlossaryDialog { hwnd, config, entries }
-    },
-}
+    }
 
-impl GlossaryDialog {
     fn create_controls(&mut self) -> Result<()> {
         // SAFETY: self.hwnd is a valid dialog window. All helper methods use this handle.
         unsafe {
@@ -74,10 +81,6 @@ impl GlossaryDialog {
             self.populate_listbox();
             Ok(())
         }
-    }
-
-    fn handle_message(&mut self, _msg: u32, _w: WPARAM, _l: LPARAM) -> Option<LRESULT> {
-        None
     }
 
     fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
@@ -106,7 +109,9 @@ impl GlossaryDialog {
             _ => {}
         }
     }
+}
 
+impl GlossaryDialog {
     fn add_or_update_entry(&mut self) {
         let src = self.get_control_text(ctrl_id::SOURCE_EDIT).trim().to_string();
         let tgt = self.get_control_text(ctrl_id::TARGET_EDIT).trim().to_string();

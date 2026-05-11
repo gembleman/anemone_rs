@@ -12,9 +12,9 @@ use windows::{
 };
 
 use crate::config::Config;
-use crate::impl_dialog;
+use crate::define_dialog_instance;
 use crate::util::to_wide;
-use super::helpers::DialogControls;
+use super::helpers::{Dialog, DialogControls};
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -42,26 +42,32 @@ impl DialogControls for HookSettingsDialog {
     fn dialog_hwnd(&self) -> HWND { self.hwnd }
 }
 
-impl_dialog! {
-    dialog: HookSettingsDialog,
-    instance: HOOK_SETTINGS_INSTANCE,
-    class_name: w!("AnemoneHookSettingsClass"),
-    title: w!("후크 설정"),
-    width: 450,
-    height: 350,
-    extra_style: WINDOW_STYLE::default(),
-    params: (parent: HWND, config: Rc<RefCell<Config>>),
-    init: |hwnd, parent, config| {
+define_dialog_instance!(HOOK_SETTINGS_INSTANCE: HookSettingsDialog);
+
+impl Dialog for HookSettingsDialog {
+    type Params = Rc<RefCell<Config>>;
+
+    const CLASS_NAME: PCWSTR = w!("AnemoneHookSettingsClass");
+    const TITLE: PCWSTR = w!("후크 설정");
+    const WIDTH: i32 = 450;
+    const HEIGHT: i32 = 350;
+    const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
+
+    fn instance_slot()
+        -> &'static std::thread::LocalKey<
+            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+        > {
+        &HOOK_SETTINGS_INSTANCE
+    }
+
+    fn init(hwnd: HWND, _parent: HWND, config: Self::Params) -> Self {
         let (active, inactive) = {
             let cfg = config.borrow();
             (cfg.hook.active_hooks.clone(), cfg.hook.inactive_hooks.clone())
         };
         HookSettingsDialog { hwnd, config, active_hooks: active, inactive_hooks: inactive }
-    },
-}
+    }
 
-impl HookSettingsDialog {
-    /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
         // SAFETY: self.hwnd is a valid dialog window handle. All helper methods
         // (create_group_box, create_listbox, create_button) use valid parent handle
@@ -99,6 +105,116 @@ impl HookSettingsDialog {
         None
     }
 
+    /// 명령 처리
+    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
+        use ctrl_id::*;
+
+        match cmd {
+            // SAFETY: self.hwnd is a valid dialog window handle.
+            BTN_CLOSE => unsafe {
+                let _ = DestroyWindow(self.hwnd);
+            },
+
+            BTN_APPLY => {
+                self.sync_from_listboxes();
+                {
+                    let mut cfg = self.config.borrow_mut();
+                    cfg.hook.active_hooks = self.active_hooks.clone();
+                    cfg.hook.inactive_hooks = self.inactive_hooks.clone();
+                }
+            }
+
+            BTN_TO_INACTIVE => {
+                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns valid
+                // listbox handles for known control IDs. All listbox operations use these
+                // valid handles with indices verified against LB_ERR before use.
+                unsafe {
+                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
+                        Ok(h) => h, Err(_) => return,
+                    };
+                    let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
+                        Ok(h) => h, Err(_) => return,
+                    };
+                    let sel = self.listbox_get_sel(active_lb);
+                    if sel == LB_ERR { return; }
+                    if let Some(text) = self.listbox_get_text(active_lb, sel) {
+                        self.listbox_delete_item(active_lb, sel);
+                        self.listbox_add_item(inactive_lb, &text);
+                        let count = self.listbox_get_count(active_lb);
+                        if count > 0 {
+                            let new_sel = if sel >= count { count - 1 } else { sel };
+                            self.listbox_set_sel(active_lb, new_sel);
+                        }
+                    }
+                }
+            }
+
+            BTN_TO_ACTIVE => {
+                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns valid
+                // listbox handles. All listbox operations use valid handles with indices
+                // verified against LB_ERR before use.
+                unsafe {
+                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
+                        Ok(h) => h, Err(_) => return,
+                    };
+                    let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
+                        Ok(h) => h, Err(_) => return,
+                    };
+                    let sel = self.listbox_get_sel(inactive_lb);
+                    if sel == LB_ERR { return; }
+                    if let Some(text) = self.listbox_get_text(inactive_lb, sel) {
+                        self.listbox_delete_item(inactive_lb, sel);
+                        self.listbox_add_item(active_lb, &text);
+                        let count = self.listbox_get_count(inactive_lb);
+                        if count > 0 {
+                            let new_sel = if sel >= count { count - 1 } else { sel };
+                            self.listbox_set_sel(inactive_lb, new_sel);
+                        }
+                    }
+                }
+            }
+
+            BTN_UP => {
+                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns a valid
+                // listbox handle. Selection index is verified > 0 before moving up.
+                unsafe {
+                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
+                        Ok(h) => h, Err(_) => return,
+                    };
+                    let sel = self.listbox_get_sel(active_lb);
+                    if sel == LB_ERR || sel == 0 { return; }
+                    if let Some(text) = self.listbox_get_text(active_lb, sel) {
+                        self.listbox_delete_item(active_lb, sel);
+                        self.listbox_insert_item(active_lb, sel - 1, &text);
+                        self.listbox_set_sel(active_lb, sel - 1);
+                    }
+                }
+            }
+
+            BTN_DOWN => {
+                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns a valid
+                // listbox handle. Selection index is verified < count-1 before moving down.
+                unsafe {
+                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
+                        Ok(h) => h, Err(_) => return,
+                    };
+                    let sel = self.listbox_get_sel(active_lb);
+                    let count = self.listbox_get_count(active_lb);
+                    if sel == LB_ERR || sel >= count - 1 { return; }
+                    if let Some(text) = self.listbox_get_text(active_lb, sel) {
+                        self.listbox_delete_item(active_lb, sel);
+                        self.listbox_insert_item(active_lb, sel + 1, &text);
+                        self.listbox_set_sel(active_lb, sel + 1);
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+}
+
+impl HookSettingsDialog {
     /// ListBox에 데이터 채우기
     fn populate_listboxes(&self) {
         // SAFETY: self.hwnd is a valid dialog window handle. GetDlgItem returns valid
@@ -239,114 +355,6 @@ impl HookSettingsDialog {
                     }
                 }
             }
-        }
-    }
-
-    /// 명령 처리
-    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
-        use ctrl_id::*;
-
-        match cmd {
-            // SAFETY: self.hwnd is a valid dialog window handle.
-            BTN_CLOSE => unsafe {
-                let _ = DestroyWindow(self.hwnd);
-            },
-
-            BTN_APPLY => {
-                self.sync_from_listboxes();
-                {
-                    let mut cfg = self.config.borrow_mut();
-                    cfg.hook.active_hooks = self.active_hooks.clone();
-                    cfg.hook.inactive_hooks = self.inactive_hooks.clone();
-                }
-            }
-
-            BTN_TO_INACTIVE => {
-                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns valid
-                // listbox handles for known control IDs. All listbox operations use these
-                // valid handles with indices verified against LB_ERR before use.
-                unsafe {
-                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
-                    };
-                    let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
-                    };
-                    let sel = self.listbox_get_sel(active_lb);
-                    if sel == LB_ERR { return; }
-                    if let Some(text) = self.listbox_get_text(active_lb, sel) {
-                        self.listbox_delete_item(active_lb, sel);
-                        self.listbox_add_item(inactive_lb, &text);
-                        let count = self.listbox_get_count(active_lb);
-                        if count > 0 {
-                            let new_sel = if sel >= count { count - 1 } else { sel };
-                            self.listbox_set_sel(active_lb, new_sel);
-                        }
-                    }
-                }
-            }
-
-            BTN_TO_ACTIVE => {
-                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns valid
-                // listbox handles. All listbox operations use valid handles with indices
-                // verified against LB_ERR before use.
-                unsafe {
-                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
-                    };
-                    let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
-                    };
-                    let sel = self.listbox_get_sel(inactive_lb);
-                    if sel == LB_ERR { return; }
-                    if let Some(text) = self.listbox_get_text(inactive_lb, sel) {
-                        self.listbox_delete_item(inactive_lb, sel);
-                        self.listbox_add_item(active_lb, &text);
-                        let count = self.listbox_get_count(inactive_lb);
-                        if count > 0 {
-                            let new_sel = if sel >= count { count - 1 } else { sel };
-                            self.listbox_set_sel(inactive_lb, new_sel);
-                        }
-                    }
-                }
-            }
-
-            BTN_UP => {
-                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns a valid
-                // listbox handle. Selection index is verified > 0 before moving up.
-                unsafe {
-                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
-                    };
-                    let sel = self.listbox_get_sel(active_lb);
-                    if sel == LB_ERR || sel == 0 { return; }
-                    if let Some(text) = self.listbox_get_text(active_lb, sel) {
-                        self.listbox_delete_item(active_lb, sel);
-                        self.listbox_insert_item(active_lb, sel - 1, &text);
-                        self.listbox_set_sel(active_lb, sel - 1);
-                    }
-                }
-            }
-
-            BTN_DOWN => {
-                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns a valid
-                // listbox handle. Selection index is verified < count-1 before moving down.
-                unsafe {
-                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
-                    };
-                    let sel = self.listbox_get_sel(active_lb);
-                    let count = self.listbox_get_count(active_lb);
-                    if sel == LB_ERR || sel >= count - 1 { return; }
-                    if let Some(text) = self.listbox_get_text(active_lb, sel) {
-                        self.listbox_delete_item(active_lb, sel);
-                        self.listbox_insert_item(active_lb, sel + 1, &text);
-                        self.listbox_set_sel(active_lb, sel + 1);
-                    }
-                }
-            }
-
-            _ => {}
         }
     }
 }

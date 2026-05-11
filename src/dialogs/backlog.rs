@@ -23,10 +23,10 @@ use windows::{
 };
 
 use crate::config::Config;
-use crate::impl_dialog;
+use crate::define_dialog_instance;
 use crate::util::to_wide;
 use super::file_dialog::{FileFilter, save_file};
-use super::helpers::DialogControls;
+use super::helpers::{Dialog, DialogControls};
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -92,16 +92,25 @@ thread_local! {
     static RICHEDIT_LOADED: RefCell<bool> = const { RefCell::new(false) };
 }
 
-impl_dialog! {
-    dialog: BacklogDialog,
-    instance: BACKLOG_INSTANCE,
-    class_name: w!("AnemoneBacklogClass"),
-    title: w!("백로그"),
-    width: BACKLOG_WIDTH,
-    height: BACKLOG_HEIGHT,
-    extra_style: WS_SIZEBOX,
-    params: (_parent: HWND, _config: Rc<RefCell<Config>>),
-    init: |hwnd, _parent, _config| {
+define_dialog_instance!(BACKLOG_INSTANCE: BacklogDialog);
+
+impl Dialog for BacklogDialog {
+    type Params = Rc<RefCell<Config>>;
+
+    const CLASS_NAME: PCWSTR = w!("AnemoneBacklogClass");
+    const TITLE: PCWSTR = w!("백로그");
+    const WIDTH: i32 = BACKLOG_WIDTH;
+    const HEIGHT: i32 = BACKLOG_HEIGHT;
+    const EXTRA_STYLE: WINDOW_STYLE = WS_SIZEBOX;
+
+    fn instance_slot()
+        -> &'static std::thread::LocalKey<
+            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+        > {
+        &BACKLOG_INSTANCE
+    }
+
+    fn init(hwnd: HWND, _parent: HWND, _config: Self::Params) -> Self {
         // RichEdit 4.1+ DLL 로드 (Msftedit.dll, Vista+)
         //
         // System32 한정 검색으로 DLL hijacking 방어 (cwd/PATH 무시).
@@ -128,11 +137,8 @@ impl_dialog! {
             add_linefeed: true,
             entries: Vec::new(),
         }
-    },
-}
+    }
 
-impl BacklogDialog {
-    /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
         // SAFETY: self.hwnd is a valid window handle from show_impl. CreateWindowExW and
         // SendMessageW use valid handles and parameters.
@@ -203,6 +209,24 @@ impl BacklogDialog {
         }
     }
 
+    /// 명령 처리
+    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
+        use ctrl_id::*;
+
+        match cmd {
+            CHK_LINEFEED => { self.add_linefeed = !self.add_linefeed; self.refresh_richedit(); }
+            RADIO_ORIGINAL => { self.filter = BacklogFilter::Original; self.refresh_richedit(); }
+            RADIO_TRANSLATION => { self.filter = BacklogFilter::Translation; self.refresh_richedit(); }
+            RADIO_ALL => { self.filter = BacklogFilter::All; self.refresh_richedit(); }
+            BTN_CLEAR => self.clear_richedit(),
+            BTN_SAVE => self.save_to_file(),
+            BTN_FONT => { /* TODO: 폰트 선택 대화상자 */ }
+            _ => {}
+        }
+    }
+}
+
+impl BacklogDialog {
     /// 로그 항목 추가
     pub fn add_entry(&mut self, entry: LogEntry) {
         self.entries.push(entry.clone());
@@ -337,22 +361,6 @@ impl BacklogDialog {
             Err(e) => {
                 tracing::error!("backlog save file create failed: {e}");
             }
-        }
-    }
-
-    /// 명령 처리
-    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
-        use ctrl_id::*;
-
-        match cmd {
-            CHK_LINEFEED => { self.add_linefeed = !self.add_linefeed; self.refresh_richedit(); }
-            RADIO_ORIGINAL => { self.filter = BacklogFilter::Original; self.refresh_richedit(); }
-            RADIO_TRANSLATION => { self.filter = BacklogFilter::Translation; self.refresh_richedit(); }
-            RADIO_ALL => { self.filter = BacklogFilter::All; self.refresh_richedit(); }
-            BTN_CLEAR => self.clear_richedit(),
-            BTN_SAVE => self.save_to_file(),
-            BTN_FONT => { /* TODO: 폰트 선택 대화상자 */ }
-            _ => {}
         }
     }
 

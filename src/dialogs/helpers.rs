@@ -645,7 +645,176 @@ pub trait DialogControls {
 }
 
 // ============================================================
-// impl_dialog! 매크로
+// Dialog 트레이트 (modal-less popup 다이얼로그 공통 보일러플레이트)
+// ============================================================
+
+/// 다이얼로그 메타데이터 + 생명주기 콜백을 묶은 트레이트.
+///
+/// 각 다이얼로그는 이 trait 를 구현하면 `show()` / `wndproc` 가 자동 제공된다.
+/// `INSTANCE_SLOT` 만은 다이얼로그 타입별로 별개의 `thread_local!` static 이
+/// 필요하므로 `define_dialog_instance!` 매크로로 선언한 뒤 `instance_slot()`
+/// 에서 반환하는 식으로 연결한다 (static 은 모노모피제이션을 따라가지 않음).
+pub trait Dialog: Sized + 'static {
+    /// `show()` 가 받는 추가 인자. 인자가 여러 개면 튜플로 모아 넘긴다.
+    /// 인자가 없으면 `()` 사용.
+    type Params;
+
+    const CLASS_NAME: PCWSTR;
+    const TITLE: PCWSTR;
+    const WIDTH: i32;
+    const HEIGHT: i32;
+    /// 추가 스타일 (WS_SIZEBOX 등). 기본 없음은 `WINDOW_STYLE(0)`.
+    const EXTRA_STYLE: WINDOW_STYLE;
+
+    /// 다이얼로그 타입별 thread-local 인스턴스 슬롯.
+    /// `define_dialog_instance!` 매크로로 선언한 static 을 반환한다.
+    #[allow(clippy::type_complexity)]
+    fn instance_slot()
+        -> &'static std::thread::LocalKey<
+            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+        >;
+
+    /// 윈도우 생성 직후 호출되어 자기 자신을 만든다.
+    /// `hwnd` 는 새로 만든 다이얼로그 윈도우, `parent` 는 부모.
+    fn init(hwnd: HWND, parent: HWND, params: Self::Params) -> Self;
+
+    fn create_controls(&mut self) -> Result<()>;
+
+    fn handle_command(&mut self, id: u16, notify_code: u32);
+
+    /// WM_COMMAND/WM_CLOSE/WM_DESTROY 이전에 호출되는 커스텀 메시지 후크.
+    /// `Some(LRESULT)` 를 반환하면 wndproc 가 그 값으로 즉시 반환한다.
+    fn handle_message(&mut self, _msg: u32, _w: WPARAM, _l: LPARAM) -> Option<LRESULT> {
+        None
+    }
+
+    /// 다이얼로그를 등록/생성/표시하고 hwnd 를 반환한다.
+    fn show(parent: HWND, params: Self::Params) -> Result<HWND> {
+        let opts = DialogWindowOptions {
+            class_name: Self::CLASS_NAME,
+            title: Self::TITLE,
+            width: Self::WIDTH,
+            height: Self::HEIGHT,
+            parent,
+            extra_style: Self::EXTRA_STYLE,
+        };
+
+        // SAFETY: 클래스 이름은 정적 PCWSTR, 부모는 호출자 책임. 본 trait 의
+        // 계약에 따라 호출자가 유효한 부모 핸들을 넘긴다고 가정한다.
+        let hwnd = unsafe {
+            register_dialog_class(opts.class_name, Self::wndproc_thunk)?;
+            create_dialog_window(&opts)?
+        };
+
+        let this = Self::init(hwnd, parent, params);
+        let dialog = std::rc::Rc::new(std::cell::RefCell::new(this));
+
+        Self::instance_slot().with(|cell| {
+            *cell.borrow_mut() = Some(dialog.clone());
+        });
+
+        dialog.borrow_mut().create_controls()?;
+
+        // SAFETY: 위에서 막 만든 유효 핸들.
+        unsafe {
+            show_dialog_window(hwnd);
+        }
+
+        Ok(hwnd)
+    }
+
+    /// 다이얼로그 wndproc. RegisterClassExW 에 `Self::wndproc_thunk` 가
+    /// 등록되어 모든 메시지가 이리로 들어온다.
+    ///
+    /// # Safety
+    /// Win32 가 wndproc 로 호출하므로 `extern "system"`. hwnd/wparam/lparam 은
+    /// OS 가 넘기는 값으로 유효성은 OS 가 보장한다.
+    unsafe extern "system" fn wndproc_thunk(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe {
+            let instance = Self::instance_slot().with(|cell| {
+                let Ok(guard) = cell.try_borrow() else {
+                    return None;
+                };
+                guard.clone()
+            });
+
+            if let Some(dialog) = instance {
+                if let Ok(mut d) = dialog.try_borrow_mut()
+                    && let Some(result) = d.handle_message(msg, wparam, lparam)
+                {
+                    return result;
+                }
+
+                match msg {
+                    WM_COMMAND => {
+                        let id = (wparam.0 & 0xFFFF) as u16;
+                        let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                        if let Ok(mut d) = dialog.try_borrow_mut() {
+                            d.handle_command(id, notify_code);
+                        }
+                        return LRESULT(0);
+                    }
+                    WM_CLOSE => {
+                        let _ = DestroyWindow(hwnd);
+                        return LRESULT(0);
+                    }
+                    WM_DESTROY => {
+                        Self::instance_slot().with(|cell| {
+                            if let Ok(mut guard) = cell.try_borrow_mut() {
+                                *guard = None;
+                            }
+                        });
+                        return LRESULT(0);
+                    }
+                    WM_LBUTTONDOWN => {
+                        let _ = SendMessageW(
+                            hwnd,
+                            WM_NCLBUTTONDOWN,
+                            Some(WPARAM(HTCAPTION as usize)),
+                            Some(LPARAM(0)),
+                        );
+                        return LRESULT(0);
+                    }
+                    _ => {}
+                }
+            }
+
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+    }
+}
+
+/// 다이얼로그 타입별 thread-local 인스턴스 슬롯을 선언한다.
+///
+/// trait 의 provided method 만으로는 정적 변수를 타입마다 분리할 수 없어서
+/// (모노모피제이션이 static 을 복제하지 않음) 이 미니 매크로로 선언한다.
+///
+/// 사용:
+/// ```ignore
+/// define_dialog_instance!(GLOSSARY_INSTANCE: GlossaryDialog);
+/// impl Dialog for GlossaryDialog {
+///     fn instance_slot() -> &'static ... { &GLOSSARY_INSTANCE }
+///     // ...
+/// }
+/// ```
+#[macro_export]
+macro_rules! define_dialog_instance {
+    ($name:ident : $Dialog:ty) => {
+        thread_local! {
+            #[allow(non_upper_case_globals)]
+            static $name: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<$Dialog>>>>
+                = const { std::cell::RefCell::new(None) };
+        }
+    };
+}
+
+// ============================================================
+// impl_dialog! 매크로 (구버전 — Dialog trait 로 점진 마이그레이션 중)
 // ============================================================
 
 /// 다이얼로그 보일러플레이트를 생성하는 매크로.
