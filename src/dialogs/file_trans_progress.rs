@@ -484,7 +484,7 @@ impl FileTransProgressDialog {
         // SAFETY: All Win32 API calls use valid system-provided parameters.
         unsafe {
             // 진행률 메시지 범위 체크
-            if msg >= WM_PROGRESS_TOTAL_SIZE && msg <= WM_PROGRESS_ERROR {
+            if (WM_PROGRESS_TOTAL_SIZE..=WM_PROGRESS_ERROR).contains(&msg) {
                 let mut handled = false;
                 PROGRESS_INSTANCE.with(|cell| {
                     if let Ok(mut guard) = cell.try_borrow_mut() {

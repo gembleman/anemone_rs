@@ -4,7 +4,7 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -288,7 +288,7 @@ fn send_progress_message(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) {
 }
 
 /// 파일명 전송
-fn send_filename(hwnd: HWND, path: &PathBuf) {
+fn send_filename(hwnd: HWND, path: &Path) {
     let filename = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())

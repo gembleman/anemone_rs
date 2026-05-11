@@ -261,8 +261,8 @@ impl BacklogDialog {
             cf.Base.yHeight = 200;
 
             if bold {
-                cf.Base.dwMask = cf.Base.dwMask | CFM_BOLD;
-                cf.Base.dwEffects = cf.Base.dwEffects | CFE_BOLD;
+                cf.Base.dwMask |= CFM_BOLD;
+                cf.Base.dwEffects |= CFE_BOLD;
             }
 
             let _ = SendMessageW(
