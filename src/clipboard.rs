@@ -2,14 +2,12 @@ use windows::Win32::{
     Foundation::*,
     System::DataExchange::*,
     System::Memory::{GlobalLock, GlobalUnlock},
-    UI::WindowsAndMessaging::*,
 };
 
 use crate::constants::CF_UNICODETEXT;
 
 pub struct ClipboardWatcher {
     hwnd: HWND,
-    next_viewer: HWND,
     watching: bool,
     ignore_next: bool,
 }
@@ -18,7 +16,6 @@ impl ClipboardWatcher {
     pub fn new(hwnd: HWND) -> Self {
         Self {
             hwnd,
-            next_viewer: HWND::default(),
             watching: false,
             ignore_next: false,
         }
@@ -26,25 +23,28 @@ impl ClipboardWatcher {
 
     pub fn start(&mut self) {
         if !self.watching {
-            // SAFETY: self.hwnd is a valid window handle. SetClipboardViewer registers this
-            // window in the clipboard viewer chain.
+            // SAFETY: self.hwnd is a valid window handle. AddClipboardFormatListener
+            // registers this window for WM_CLIPBOARDUPDATE notifications (Vista+).
             unsafe {
-                self.next_viewer = SetClipboardViewer(self.hwnd)
-                    .inspect_err(|e| tracing::warn!("SetClipboardViewer failed: {e}"))
-                    .unwrap_or_default();
+                if let Err(e) = AddClipboardFormatListener(self.hwnd) {
+                    tracing::warn!("AddClipboardFormatListener failed: {e}");
+                    return;
+                }
             }
             self.watching = true;
-            self.ignore_next = true; // 초기 알림 무시
+            // 일부 환경에서 등록 직후 초기 WM_CLIPBOARDUPDATE 가 들어올 수 있어
+            // 첫 알림은 무시한다.
+            self.ignore_next = true;
         }
     }
 
     pub fn stop(&mut self) {
         if self.watching {
-            // SAFETY: self.hwnd and self.next_viewer are valid handles from SetClipboardViewer.
+            // SAFETY: self.hwnd is a valid handle previously registered via
+            // AddClipboardFormatListener.
             unsafe {
-                let _ = ChangeClipboardChain(self.hwnd, self.next_viewer);
+                let _ = RemoveClipboardFormatListener(self.hwnd);
             }
-            self.next_viewer = HWND::default();
             self.watching = false;
         }
     }
@@ -58,49 +58,13 @@ impl ClipboardWatcher {
         self.watching
     }
 
-    /// WM_DRAWCLIPBOARD 처리
-    pub fn on_draw_clipboard(&mut self) -> Option<String> {
-        // 다음 뷰어에게 전달
-        if !self.next_viewer.is_invalid() {
-            // SAFETY: self.next_viewer is a valid window handle from the clipboard chain.
-            unsafe {
-                let _ = SendMessageW(
-                    self.next_viewer,
-                    WM_DRAWCLIPBOARD,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(0)),
-                );
-            }
-        }
-
-        // 무시 플래그 체크
+    /// WM_CLIPBOARDUPDATE 처리
+    pub fn on_clipboard_update(&mut self) -> Option<String> {
         if self.ignore_next {
             self.ignore_next = false;
             return None;
         }
-
-        // 클립보드 텍스트 읽기
         self.get_text()
-    }
-
-    /// WM_CHANGECBCHAIN 처리
-    pub fn on_change_chain(&mut self, wparam: WPARAM, lparam: LPARAM) {
-        let removed = HWND(wparam.0 as *mut _);
-        let next = HWND(lparam.0 as *mut _);
-
-        if removed == self.next_viewer {
-            self.next_viewer = next;
-        } else if !self.next_viewer.is_invalid() {
-            // SAFETY: self.next_viewer is a valid window handle. Forwarding chain message.
-            unsafe {
-                let _ = SendMessageW(
-                    self.next_viewer,
-                    WM_CHANGECBCHAIN,
-                    Some(wparam),
-                    Some(lparam),
-                );
-            }
-        }
     }
 
     /// 클립보드에서 텍스트 읽기

@@ -1,7 +1,7 @@
 //! 번역 대화상자
 //!
 //! 수동 번역 입력을 위한 대화상자.
-//! Edit 컨트롤 서브클래싱으로 Ctrl+A 전체 선택 지원.
+//! Edit 컨트롤 서브클래싱(Comctl32 v6 `SetWindowSubclass`)으로 Ctrl+A 전체 선택 지원.
 //! 번역 엔진 선택 (EzTrans, Google, DeepL) 및 언어 선택 지원.
 
 use std::cell::RefCell;
@@ -11,7 +11,9 @@ use windows::{
     Win32::{
         Foundation::*, Graphics::Gdi::*, System::DataExchange::*,
         System::LibraryLoader::GetModuleHandleW, System::Memory::*, UI::Controls::*,
-        UI::Input::KeyboardAndMouse::*, UI::WindowsAndMessaging::*,
+        UI::Input::KeyboardAndMouse::*,
+        UI::Shell::{DefSubclassProc, SetWindowSubclass},
+        UI::WindowsAndMessaging::*,
     },
     core::*,
 };
@@ -48,6 +50,12 @@ mod ctrl_id {
     pub const COMBO_TARGET_LANG: u16 = 2022;
 }
 
+// 서브클래스 ID (uIdSubclass): 컨트롤별로 구분
+mod subclass_id {
+    pub const SOURCE_EDIT: usize = 1;
+    pub const DEST_EDIT: usize = 2;
+}
+
 /// 출력 형식
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
@@ -70,8 +78,6 @@ pub struct TranslateDialog {
     one_go: bool,
     no_linefeed: bool,
     output_format: OutputFormat,
-    original_source_proc: isize,
-    original_dest_proc: isize,
     engine_initialized: bool,
     /// 비동기 번역 워커
     translation_worker: Option<TranslationWorker>,
@@ -106,8 +112,6 @@ impl_dialog! {
             one_go: false,
             no_linefeed: false,
             output_format: OutputFormat::Normal,
-            original_source_proc: 0,
-            original_dest_proc: 0,
             engine_initialized: false,
             translation_worker: Some(translation_worker),
             translating: false,
@@ -119,8 +123,8 @@ impl TranslateDialog {
     /// 컨트롤 생성
     fn create_controls(&mut self) -> Result<()> {
         // SAFETY: self.hwnd is a valid window handle from show_impl. All CreateWindowExW
-        // and SendMessageW calls use valid handles. SetWindowLongW/SetWindowLongPtrW replaces
-        // the edit control's wndproc with a valid function pointer for subclassing.
+        // and SendMessageW calls use valid handles. SetWindowSubclass installs a Comctl32
+        // subclass for the edit controls and is auto-cleaned up on control destruction.
         unsafe {
             let hinst = GetModuleHandleW(None)?;
             let hfont = GetStockObject(DEFAULT_GUI_FONT);
@@ -184,19 +188,13 @@ impl TranslateDialog {
             let _ = SendMessageW(self.source_edit, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
             let _ = SendMessageW(self.source_edit, EM_SETLIMITTEXT, Some(WPARAM(0)), Some(LPARAM(0)));
 
-            // 서브클래싱
-            #[cfg(target_pointer_width = "64")]
-            {
-                self.original_source_proc = SetWindowLongPtrW(
-                    self.source_edit, GWLP_WNDPROC, Self::edit_subclass_proc as isize,
-                );
-            }
-            #[cfg(target_pointer_width = "32")]
-            {
-                self.original_source_proc = SetWindowLongW(
-                    self.source_edit, GWLP_WNDPROC, Self::edit_subclass_proc as i32,
-                ) as isize;
-            }
+            // 서브클래싱 (Comctl32 v6 SetWindowSubclass)
+            let _ = SetWindowSubclass(
+                self.source_edit,
+                Some(Self::edit_subclass_proc),
+                subclass_id::SOURCE_EDIT,
+                0,
+            );
 
             // ====== 번역 결과 그룹 ======
             self.create_group_box(10, 200, 475, 130, "번역 결과")?;
@@ -217,19 +215,13 @@ impl TranslateDialog {
             let _ = SendMessageW(self.dest_edit, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
             let _ = SendMessageW(self.dest_edit, EM_SETLIMITTEXT, Some(WPARAM(0)), Some(LPARAM(0)));
 
-            // 서브클래싱
-            #[cfg(target_pointer_width = "64")]
-            {
-                self.original_dest_proc = SetWindowLongPtrW(
-                    self.dest_edit, GWLP_WNDPROC, Self::edit_subclass_proc as isize,
-                );
-            }
-            #[cfg(target_pointer_width = "32")]
-            {
-                self.original_dest_proc = SetWindowLongW(
-                    self.dest_edit, GWLP_WNDPROC, Self::edit_subclass_proc as i32,
-                ) as isize;
-            }
+            // 서브클래싱 (Comctl32 v6 SetWindowSubclass)
+            let _ = SetWindowSubclass(
+                self.dest_edit,
+                Some(Self::edit_subclass_proc),
+                subclass_id::DEST_EDIT,
+                0,
+            );
 
             // ====== 옵션 그룹 ======
             self.create_group_box(10, 335, 230, 90, "옵션")?;
@@ -309,44 +301,25 @@ impl TranslateDialog {
     }
 
     /// Edit 서브클래스 프로시저 (Ctrl+A 지원)
+    ///
+    /// Comctl32 v6 `SetWindowSubclass`용 SUBCLASSPROC. `DefSubclassProc`가 다음 서브클래스/
+    /// 원본 wndproc로 자동 체이닝해주고, 컨트롤 파괴 시 OS가 서브클래스를 정리한다.
     // SAFETY: This is a subclassed Win32 window procedure. The system provides valid params.
     unsafe extern "system" fn edit_subclass_proc(
         hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
+        _uid_subclass: usize, _ref_data: usize,
     ) -> LRESULT {
-        // SAFETY: hwnd is a valid edit control. original_proc is a valid function pointer
-        // saved during subclassing. The transmute converts isize back to WNDPROC which
-        // was the original window procedure.
+        // SAFETY: hwnd is a valid edit control owned by this dialog while subclassed.
         unsafe {
-            if msg == WM_KEYDOWN {
-                if wparam.0 == 'A' as usize {
-                    let ctrl_pressed = (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
-                    if ctrl_pressed {
-                        let _ = SendMessageW(hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
-                        return LRESULT(0);
-                    }
-                }
+            if msg == WM_KEYDOWN
+                && wparam.0 == 'A' as usize
+                && (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0
+            {
+                let _ = SendMessageW(hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+                return LRESULT(0);
             }
 
-            let original_proc = TRANSLATE_INSTANCE.with(|cell| {
-                let Ok(guard) = cell.try_borrow() else { return 0; };
-                if let Some(ref dialog) = *guard {
-                    if let Ok(dialog_ref) = dialog.try_borrow() {
-                        if hwnd == dialog_ref.source_edit {
-                            return dialog_ref.original_source_proc;
-                        } else if hwnd == dialog_ref.dest_edit {
-                            return dialog_ref.original_dest_proc;
-                        }
-                    }
-                }
-                0
-            });
-
-            if original_proc != 0 {
-                let proc: WNDPROC = std::mem::transmute(original_proc);
-                return CallWindowProcW(proc, hwnd, msg, wparam, lparam);
-            }
-
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+            DefSubclassProc(hwnd, msg, wparam, lparam)
         }
     }
 

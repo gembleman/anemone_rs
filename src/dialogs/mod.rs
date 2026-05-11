@@ -20,6 +20,7 @@ pub mod helpers;
 
 pub mod backlog;
 pub mod color;
+pub mod file_dialog;
 pub mod file_trans;
 pub mod file_trans_progress;
 pub mod file_trans_thread;

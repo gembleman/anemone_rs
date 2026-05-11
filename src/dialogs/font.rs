@@ -71,7 +71,10 @@ impl FontResult {
     }
 
     /// LOGFONT로 변환
-    pub fn to_logfont(&self, hdc: HDC) -> LOGFONTW {
+    ///
+    /// `hwnd` 의 DPI 를 사용해 포인트 → 픽셀 변환. Per-Monitor V2 환경에서는
+    /// 윈도우가 위치한 모니터의 DPI 로 계산해 모니터 간 이동 시에도 정확하다.
+    pub fn to_logfont(&self, hwnd: HWND) -> LOGFONTW {
         // SAFETY: LOGFONTW is a plain data struct; zeroed memory is a valid representation.
         let mut lf: LOGFONTW = unsafe { zeroed() };
 
@@ -85,12 +88,8 @@ impl FontResult {
         lf.lfItalic = if self.style.italic { 1 } else { 0 };
 
         // 높이 (포인트 크기 -> 픽셀)
-        // SAFETY: hdc is a valid device context obtained from the caller's HDC parameter.
-        // GetDeviceCaps with LOGPIXELSY returns the vertical DPI.
-        lf.lfHeight = unsafe {
-            let dpi = GetDeviceCaps(Some(hdc), LOGPIXELSY);
-            -((self.point_size * dpi) / 72)
-        };
+        let dpi = crate::dpi::dpi_for_window(hwnd) as i32;
+        lf.lfHeight = -((self.point_size * dpi) / 72);
 
         lf
     }
@@ -128,8 +127,8 @@ impl FontDialog {
     unsafe fn show_impl(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> {
         // SAFETY: hwnd is a valid window handle. CHOOSEFONTW is initialized with correct
         // lStructSize, valid owner handle, and valid lpLogFont pointer to stack-allocated
-        // LOGFONTW. zeroed() produces valid default state. GetDC/ReleaseDC pair uses valid
-        // hwnd. The hook procedure pointer (if set) is a valid extern "system" fn.
+        // LOGFONTW. zeroed() produces valid default state. The hook procedure pointer
+        // (if set) is a valid extern "system" fn.
         unsafe {
             let mut lf: LOGFONTW = zeroed();
 
@@ -144,15 +143,13 @@ impl FontDialog {
             lf.lfWeight = if config.initial_style.bold { 700 } else { 400 };
             lf.lfItalic = if config.initial_style.italic { 1 } else { 0 };
 
-            // 포인트 크기를 픽셀로 변환
-            let hdc = GetDC(Some(hwnd));
+            // 포인트 크기를 픽셀로 변환 (Per-Monitor V2 정확도)
             if config.initial_point_size > 0 {
-                let dpi = GetDeviceCaps(Some(hdc), LOGPIXELSY);
+                let dpi = crate::dpi::dpi_for_window(hwnd) as i32;
                 lf.lfHeight = -((config.initial_point_size * dpi) / 72);
             } else {
                 lf.lfHeight = -16; // 기본 12pt 정도
             }
-            ReleaseDC(Some(hwnd), hdc);
 
             let mut cf: CHOOSEFONTW = zeroed();
             cf.lStructSize = std::mem::size_of::<CHOOSEFONTW>() as u32;

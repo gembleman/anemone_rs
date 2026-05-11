@@ -18,7 +18,7 @@ use windows::{
 };
 
 use crate::config::{Config, TextAlign};
-use crate::constants::{CB_ADDSTRING, CB_RESETCONTENT, CB_SETCURSEL, TBM_GETPOS_VAL, TCM_GETCURSEL, TCN_SELCHANGE};
+use crate::constants::{CB_ADDSTRING, CB_RESETCONTENT, CB_SETCURSEL, TBM_GETPOS_VAL, TCN_SELCHANGE};
 use crate::impl_dialog;
 use crate::translation::{TranslationEngine, lang_utils};
 use crate::util::to_wide;

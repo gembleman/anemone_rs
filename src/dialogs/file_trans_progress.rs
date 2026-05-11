@@ -8,8 +8,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::{
     Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW, UI::Controls::*,
-        UI::Input::KeyboardAndMouse::EnableWindow, UI::WindowsAndMessaging::*,
+        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
+        System::Com::{CLSCTX_ALL, CoCreateInstance},
+        UI::Controls::*, UI::Input::KeyboardAndMouse::EnableWindow,
+        UI::Shell::{
+            ITaskbarList3, TBPF_ERROR, TBPF_NOPROGRESS, TBPF_NORMAL, TBPF_PAUSED, TaskbarList,
+        },
+        UI::WindowsAndMessaging::*,
     },
     core::*,
 };
@@ -58,6 +63,8 @@ pub struct FileTransProgressDialog {
     total_text: HWND,
     cancel_btn: HWND,
     state: ProgressState,
+    /// 작업 표시줄 진행률 인터페이스 (Win7+). 실패해도 다이얼로그 자체는 동작해야 하므로 Option.
+    taskbar: Option<ITaskbarList3>,
 }
 
 thread_local! {
@@ -85,6 +92,29 @@ impl FileTransProgressDialog {
                 extra_style: WINDOW_STYLE::default(),
             })?;
 
+            // 작업 표시줄 진행률 인터페이스 초기화.
+            // CoInitializeEx 는 메인 스레드(STA)에서 file_dialog 경로를 통해 이미 호출되었을 수
+            // 있지만, 우리는 그에 의존하지 않고 HrInit 실패까지만 Option 으로 흡수한다.
+            // (CoCreateInstance 가 RPC_E_CHANGED_MODE 등으로 실패하면 그냥 None 으로 둔다.)
+            let taskbar: Option<ITaskbarList3> =
+                match CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_ALL) {
+                    Ok(t) => match t.HrInit() {
+                        Ok(()) => {
+                            // 부모 윈도우에 진행 중 상태 표시 시작
+                            let _ = t.SetProgressState(parent_hwnd, TBPF_NORMAL);
+                            Some(t)
+                        }
+                        Err(e) => {
+                            tracing::warn!("ITaskbarList3::HrInit failed: {e}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!("CoCreateInstance(TaskbarList) failed: {e}");
+                        None
+                    }
+                };
+
             // 인스턴스 생성
             let mut dialog = Box::new(FileTransProgressDialog {
                 hwnd,
@@ -103,6 +133,7 @@ impl FileTransProgressDialog {
                     current_line: 0,
                     list_size: 0,
                 },
+                taskbar,
             });
 
             // 컨트롤 생성
@@ -365,11 +396,27 @@ impl FileTransProgressDialog {
                         self.state.current_line, self.state.total_lines
                     );
                     Self::set_text(self.total_text, &text);
+
+                    // 작업 표시줄 진행률 갱신 (전체 라인 기준 — 가장 안정적인 단조 증가 신호).
+                    if let Some(ref tb) = self.taskbar {
+                        if self.state.total_lines > 0 {
+                            let _ = tb.SetProgressValue(
+                                self.parent_hwnd,
+                                self.state.current_line.max(0) as u64,
+                                self.state.total_lines as u64,
+                            );
+                        }
+                    }
                 }
                 WM_PROGRESS_COMPLETE => {
                     Self::set_text(self.name_text, "완료!");
                     Self::set_text(self.progress_text, "번역 완료");
                     let _ = EnableWindow(self.cancel_btn, false);
+
+                    // 작업 표시줄 진행률 해제
+                    if let Some(ref tb) = self.taskbar {
+                        let _ = tb.SetProgressState(self.parent_hwnd, TBPF_NOPROGRESS);
+                    }
 
                     // 완료 메시지
                     let _ = MessageBoxW(
@@ -399,6 +446,12 @@ impl FileTransProgressDialog {
                     Self::set_text(self.name_text, "오류 발생");
                     let _ = EnableWindow(self.cancel_btn, false);
 
+                    // 작업 표시줄 진행률을 ERROR 상태로 잠깐 표시한 뒤
+                    // MessageBox 가 닫히고 다이얼로그가 파괴되며 WM_DESTROY 에서 정리한다.
+                    if let Some(ref tb) = self.taskbar {
+                        let _ = tb.SetProgressState(self.parent_hwnd, TBPF_ERROR);
+                    }
+
                     let msg_wide = to_wide(&error_msg);
                     let _ = MessageBoxW(
                         Some(self.hwnd),
@@ -421,6 +474,11 @@ impl FileTransProgressDialog {
         unsafe {
             let _ = EnableWindow(self.cancel_btn, false);
             Self::set_text(self.progress_text, "취소 중...");
+            // 작업 표시줄을 PAUSED 로 표시 — 실제 종료/정리는 워커 스레드가
+            // 취소 토큰을 감지해 WM_PROGRESS_ERROR 를 보낼 때 마무리된다.
+            if let Some(ref tb) = self.taskbar {
+                let _ = tb.SetProgressState(self.parent_hwnd, TBPF_PAUSED);
+            }
         }
     }
 
@@ -469,6 +527,12 @@ impl FileTransProgressDialog {
                 WM_DESTROY => {
                     PROGRESS_INSTANCE.with(|cell| {
                         if let Ok(mut guard) = cell.try_borrow_mut() {
+                            if let Some(ref dialog) = *guard {
+                                // 안전 그물: 어떤 경로로 파괴되든 작업 표시줄 진행률을 비운다.
+                                if let Some(ref tb) = dialog.taskbar {
+                                    let _ = tb.SetProgressState(dialog.parent_hwnd, TBPF_NOPROGRESS);
+                                }
+                            }
                             *guard = None;
                         }
                     });

@@ -10,9 +10,8 @@ use std::time::SystemTime;
 use windows::{
     Win32::{
         Foundation::*,
-        System::LibraryLoader::{GetModuleHandleW, LoadLibraryW},
-        UI::Controls::Dialogs::{
-            GetSaveFileNameW, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+        System::LibraryLoader::{
+            GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
         },
         UI::Controls::*,
         UI::WindowsAndMessaging::*,
@@ -27,6 +26,7 @@ use crate::constants::{
 };
 use crate::impl_dialog;
 use crate::util::to_wide;
+use super::file_dialog::{FileFilter, save_file};
 use super::helpers::DialogControls;
 
 // 컨트롤 ID
@@ -152,11 +152,17 @@ impl_dialog! {
     extra_style: WS_SIZEBOX,
     params: (parent: HWND, config: Rc<RefCell<Config>>),
     init: |hwnd, parent, config| {
-        // RichEdit DLL 로드
+        // RichEdit 4.1+ DLL 로드 (Msftedit.dll, Vista+)
+        //
+        // System32 한정 검색으로 DLL hijacking 방어 (cwd/PATH 무시).
         RICHEDIT_LOADED.with(|loaded| {
             if !*loaded.borrow() {
-                if let Err(e) = LoadLibraryW(w!("Riched20.dll")) {
-                    tracing::error!("Failed to load Riched20.dll: {e}");
+                if let Err(e) = LoadLibraryExW(
+                    w!("Msftedit.dll"),
+                    None,
+                    LOAD_LIBRARY_SEARCH_SYSTEM32,
+                ) {
+                    tracing::error!("Failed to load Msftedit.dll: {e}");
                 }
                 *loaded.borrow_mut() = true;
             }
@@ -183,10 +189,10 @@ impl BacklogDialog {
             let dpi = crate::dpi::dpi_for_window(self.hwnd);
             let s = |v: i32| crate::dpi::scale(v, dpi);
 
-            // RichEdit 컨트롤 생성
+            // RichEdit 4.1+ 컨트롤 생성 (MSFTEDIT_CLASS)
             self.richedit = CreateWindowExW(
                 WS_EX_CLIENTEDGE,
-                w!("RichEdit20W"),
+                w!("RICHEDIT50W"),
                 w!(""),
                 WINDOW_STYLE(
                     WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0 | WS_HSCROLL.0
@@ -343,57 +349,40 @@ impl BacklogDialog {
 
     /// 파일로 저장
     fn save_to_file(&self) {
-        // SAFETY: self.hwnd is a valid window handle. OPENFILENAMEW is properly initialized
-        // with correct lStructSize. GetSaveFileNameW writes to the filename buffer within
-        // nMaxFile bounds.
-        unsafe {
-            use std::io::Write;
+        use std::io::Write;
 
-            let mut filename: [u16; 260] = [0; 260];
-            let filter: Vec<u16> = "텍스트 파일 (*.txt)\0*.txt\0모든 파일 (*.*)\0*.*\0\0"
-                .encode_utf16().collect();
+        let filters = [
+            FileFilter { name: "텍스트 파일 (*.txt)", spec: "*.txt" },
+            FileFilter { name: "모든 파일 (*.*)", spec: "*.*" },
+        ];
+        let Some(path) = save_file(self.hwnd, "백로그 저장", &filters, Some("txt"), None) else {
+            return;
+        };
 
-            let mut ofn = OPENFILENAMEW {
-                lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-                hwndOwner: self.hwnd,
-                lpstrFilter: PCWSTR(filter.as_ptr()),
-                lpstrFile: PWSTR(filename.as_mut_ptr()),
-                nMaxFile: 260,
-                Flags: OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
-                lpstrDefExt: w!("txt"),
-                ..Default::default()
-            };
-
-            if !GetSaveFileNameW(&mut ofn).as_bool() { return; }
-
-            let len = filename.iter().position(|&c| c == 0).unwrap_or(filename.len());
-            let path = String::from_utf16_lossy(&filename[..len]);
-
-            let mut content = String::new();
-            for entry in &self.entries {
-                if let Some(ref name) = entry.name {
-                    content.push_str(&format!("[{}] ", name));
-                }
-                content.push_str(&entry.original);
-                content.push_str("\r\n");
-                if let Some(ref trans) = entry.translation {
-                    content.push_str(trans);
-                    content.push_str("\r\n");
-                }
+        let mut content = String::new();
+        for entry in &self.entries {
+            if let Some(ref name) = entry.name {
+                content.push_str(&format!("[{}] ", name));
+            }
+            content.push_str(&entry.original);
+            content.push_str("\r\n");
+            if let Some(ref trans) = entry.translation {
+                content.push_str(trans);
                 content.push_str("\r\n");
             }
+            content.push_str("\r\n");
+        }
 
-            match std::fs::File::create(&path) {
-                Ok(mut file) => {
-                    if let Err(e) = file.write_all(&[0xEF, 0xBB, 0xBF])
-                        .and_then(|_| file.write_all(content.as_bytes()))
-                    {
-                        tracing::error!("backlog save write failed: {e}");
-                    }
+        match std::fs::File::create(&path) {
+            Ok(mut file) => {
+                if let Err(e) = file.write_all(&[0xEF, 0xBB, 0xBF])
+                    .and_then(|_| file.write_all(content.as_bytes()))
+                {
+                    tracing::error!("backlog save write failed: {e}");
                 }
-                Err(e) => {
-                    tracing::error!("backlog save file create failed: {e}");
-                }
+            }
+            Err(e) => {
+                tracing::error!("backlog save file create failed: {e}");
             }
         }
     }

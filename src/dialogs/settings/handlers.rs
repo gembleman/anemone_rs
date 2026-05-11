@@ -447,123 +447,18 @@ impl SettingsDialog {
 
     /// 제목 지정 폴더 브라우저 열기
     fn browse_folder_with_title(&self, title: &str) -> Option<String> {
-        use windows::Win32::System::Com::{
-            CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
-        };
-        use windows::Win32::UI::Shell::{
-            FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem, SIGDN_FILESYSPATH,
-        };
-
-        // SAFETY: COM is initialized for this thread. IFileOpenDialog and IShellItem are
-        // valid COM objects. CoTaskMemFree frees memory allocated by GetDisplayName.
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-
-            let result = {
-                let dialog: IFileOpenDialog =
-                    match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}");
-                            return None;
-                        }
-                    };
-
-                if let Err(e) = dialog.SetOptions(FOS_PICKFOLDERS) {
-                    tracing::warn!("SetOptions failed: {e}");
-                }
-                let title_wide = to_wide(title);
-                if let Err(e) = dialog.SetTitle(PCWSTR(title_wide.as_ptr())) {
-                    tracing::warn!("SetTitle failed: {e}");
-                }
-
-                if dialog.Show(Some(self.hwnd)).is_err() {
-                    return None;
-                }
-
-                let item: IShellItem = match dialog.GetResult() {
-                    Ok(i) => i,
-                    Err(_) => return None,
-                };
-
-                let path_ptr = match item.GetDisplayName(SIGDN_FILESYSPATH) {
-                    Ok(p) => p,
-                    Err(_) => return None,
-                };
-
-                let path = path_ptr.to_string().inspect_err(|e| tracing::warn!("Path conversion failed: {e}")).ok();
-                windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
-                path
-            };
-
-            CoUninitialize();
-            result
-        }
+        crate::dialogs::file_dialog::pick_folder(self.hwnd, title)
+            .map(|p| p.to_string_lossy().into_owned())
     }
 
     /// DLL 파일 브라우저 열기
     fn browse_dll_file(&self, title: &str) -> Option<String> {
-        use windows::Win32::System::Com::{
-            CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
-        };
-        use windows::Win32::UI::Shell::{
-            FileOpenDialog, IFileOpenDialog, IShellItem, SIGDN_FILESYSPATH,
-        };
-        use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
-
-        // SAFETY: COM is initialized for this thread. IFileOpenDialog and IShellItem are
-        // valid COM objects. Filter strings are valid null-terminated UTF-16.
-        // CoTaskMemFree frees memory allocated by GetDisplayName.
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-
-            let result = {
-                let dialog: IFileOpenDialog =
-                    match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}");
-                            return None;
-                        }
-                    };
-
-                let title_wide = to_wide(title);
-                if let Err(e) = dialog.SetTitle(PCWSTR(title_wide.as_ptr())) {
-                    tracing::warn!("SetTitle failed: {e}");
-                }
-
-                let filter_name = to_wide("DLL 파일");
-                let filter_spec = to_wide("*.dll");
-                let filters = [COMDLG_FILTERSPEC {
-                    pszName: PCWSTR(filter_name.as_ptr()),
-                    pszSpec: PCWSTR(filter_spec.as_ptr()),
-                }];
-                if let Err(e) = dialog.SetFileTypes(&filters) {
-                    tracing::warn!("SetFileTypes failed: {e}");
-                }
-
-                if dialog.Show(Some(self.hwnd)).is_err() {
-                    return None;
-                }
-
-                let item: IShellItem = match dialog.GetResult() {
-                    Ok(i) => i,
-                    Err(_) => return None,
-                };
-
-                let path_ptr = match item.GetDisplayName(SIGDN_FILESYSPATH) {
-                    Ok(p) => p,
-                    Err(_) => return None,
-                };
-
-                let path = path_ptr.to_string().inspect_err(|e| tracing::warn!("Path conversion failed: {e}")).ok();
-                windows::Win32::System::Com::CoTaskMemFree(Some(path_ptr.0 as *const _));
-                path
-            };
-
-            CoUninitialize();
-            result
-        }
+        let filters = [crate::dialogs::file_dialog::FileFilter {
+            name: "DLL 파일",
+            spec: "*.dll",
+        }];
+        crate::dialogs::file_dialog::open_file(self.hwnd, title, &filters)
+            .map(|p| p.to_string_lossy().into_owned())
     }
 
     /// Edit 컨트롤 포커스 해제 시 값 저장

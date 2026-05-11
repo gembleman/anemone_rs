@@ -13,7 +13,7 @@ use windows::{
     core::*,
 };
 
-use crate::constants::{CB_ADDSTRING, CB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, TCM_INSERTITEMW};
+use crate::constants::{CB_ADDSTRING, CB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY};
 use crate::util::to_wide;
 
 /// 다이얼로그 공용 한글 폰트 (Malgun Gothic 9pt).
@@ -54,23 +54,6 @@ pub fn dialog_font() -> HFONT {
         hfont
     })
 }
-
-// ── Tab Control 구조체 ──────────────────────────────────
-
-/// TCITEMW (Win32 Tab Control item)
-#[repr(C)]
-pub struct TCITEMW {
-    pub mask: u32,
-    pub dw_state: u32,
-    pub dw_state_mask: u32,
-    pub psz_text: *mut u16,
-    pub cch_text_max: i32,
-    pub i_image: i32,
-    pub l_param: isize,
-}
-
-/// TCIF_TEXT mask
-pub const TCIF_TEXT: u32 = 0x0001;
 
 /// 표준 다이얼로그 윈도우 클래스를 등록한다.
 ///
@@ -139,10 +122,26 @@ pub unsafe fn create_dialog_window(opts: &DialogWindowOptions) -> Result<HWND> {
         let dpi = crate::dpi::dpi_for_window(opts.parent);
         let w = crate::dpi::scale(opts.width, dpi);
         let h = crate::dpi::scale(opts.height, dpi);
-        let cx = GetSystemMetrics(SM_CXSCREEN);
-        let cy = GetSystemMetrics(SM_CYSCREEN);
-        let x = (cx - w) / 2;
-        let y = (cy - h) / 2;
+
+        // 부모 윈도우가 위치한 모니터의 작업 영역(작업 표시줄 제외) 중앙에 배치.
+        // 다중 모니터 / Per-Monitor V2 환경에서 primary 모니터로 튀는 문제를 방지.
+        let monitor = MonitorFromWindow(opts.parent, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let work = if GetMonitorInfoW(monitor, &mut mi).as_bool() {
+            mi.rcWork
+        } else {
+            RECT {
+                left: 0,
+                top: 0,
+                right: GetSystemMetrics(SM_CXSCREEN),
+                bottom: GetSystemMetrics(SM_CYSCREEN),
+            }
+        };
+        let x = work.left + (work.right - work.left - w) / 2;
+        let y = work.top + (work.bottom - work.top - h) / 2;
 
         let hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW,
@@ -796,12 +795,9 @@ pub unsafe fn create_tab_control(
             let mut text_wide = to_wide(tab_text);
             let item = TCITEMW {
                 mask: TCIF_TEXT,
-                dw_state: 0,
-                dw_state_mask: 0,
-                psz_text: text_wide.as_mut_ptr(),
-                cch_text_max: 0,
-                i_image: -1,
-                l_param: 0,
+                pszText: PWSTR(text_wide.as_mut_ptr()),
+                iImage: -1,
+                ..Default::default()
             };
             let _ = SendMessageW(
                 hwnd,

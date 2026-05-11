@@ -535,7 +535,7 @@ impl App {
     }
 
     fn handle_clipboard_change(&mut self) {
-        if let Some(text) = self.clipboard.on_draw_clipboard() {
+        if let Some(text) = self.clipboard.on_clipboard_update() {
             // 클립보드 텍스트 처리
             tracing::debug!("Clipboard: {}", text);
 
@@ -764,6 +764,34 @@ impl App {
                     Some(LRESULT(0))
                 }
 
+                WM_DPICHANGED => {
+                    // Per-Monitor V2: 모니터 간 이동 또는 OS DPI 변경 시 호출된다.
+                    // wParam 하위 워드 = 새 DPI. lParam = Windows 가 제안하는 RECT(논리 좌표는 아니고
+                    // 새 DPI 에 맞춰 스케일된 화면 좌표). 자식 컨트롤이 없는 D2D 레이어드 윈도우이므로
+                    // 권장 RECT 로 위치/크기를 갱신하고 render target 을 무효화하면 충분하다.
+                    if lparam.0 != 0 {
+                        let rect = &*(lparam.0 as *const RECT);
+                        let w = rect.right - rect.left;
+                        let h = rect.bottom - rect.top;
+                        let _ = SetWindowPos(
+                            hwnd,
+                            None,
+                            rect.left,
+                            rect.top,
+                            w,
+                            h,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
+                    if let Some(ref mut renderer) = self.d2d_renderer {
+                        renderer.invalidate_target();
+                    }
+                    if let Err(e) = self.paint() {
+                        tracing::warn!("paint failed on DPI change: {e}");
+                    }
+                    Some(LRESULT(0))
+                }
+
                 WM_RBUTTONUP | WM_NCRBUTTONUP => {
                     self.handle_right_click(hwnd, msg, lparam);
                     Some(LRESULT(0))
@@ -801,13 +829,8 @@ impl App {
                     Some(LRESULT(0))
                 }
 
-                WM_DRAWCLIPBOARD => {
+                WM_CLIPBOARDUPDATE => {
                     self.handle_clipboard_change();
-                    Some(LRESULT(0))
-                }
-
-                WM_CHANGECBCHAIN => {
-                    self.clipboard.on_change_chain(wparam, lparam);
                     Some(LRESULT(0))
                 }
 
@@ -885,8 +908,8 @@ impl App {
             }
 
             // App 인스턴스가 필요한 메시지: dispatch_message로 위임
-            // WM_DRAWCLIPBOARD는 borrow 실패 시 지연 처리
-            if msg == WM_DRAWCLIPBOARD {
+            // WM_CLIPBOARDUPDATE는 borrow 실패 시 지연 처리
+            if msg == WM_CLIPBOARDUPDATE {
                 if let Ok(mut app_ref) = app.try_borrow_mut() {
                     // SAFETY: Valid system parameters forwarded to dispatch_message.
                     if let Some(result) = unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) } {

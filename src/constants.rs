@@ -30,7 +30,7 @@ pub const WM_TRAY_ICON: u32 = WM_USER + 1;
 /// 번역 완료 알림 (워커 → UI)
 pub const WM_TRANSLATION_COMPLETE: u32 = WM_USER + 100;
 
-/// 지연된 클립보드 처리 (SetClipboardViewer 재진입 방지용)
+/// 지연된 클립보드 처리 (RefCell try_borrow_mut 실패 시 재시도용)
 pub const WM_DEFERRED_CLIPBOARD: u32 = WM_USER + 200;
 
 // ── 파일 번역 진행률 메시지 ─────────────────────────────
@@ -102,7 +102,11 @@ pub const SCF_SELECTION: u32 = 0x0001;
 
 // ── Win32 누락 상수: TrackBar ───────────────────────────
 
-/// TBM_GETPOS (windows crate 0.62에서 누락)
+/// `TBM_GETPOS` (= `WM_USER`).
+///
+/// `windows` 0.62 의 `Win32::UI::Controls` 에 다른 `TBM_*` 상수는 모두 있지만
+/// 정작 `TBM_GETPOS` 만 누락되어 직접 정의한다. 상위 windows crate 가 추가하면
+/// 이 상수를 제거하고 `windows::Win32::UI::Controls::TBM_GETPOS` 로 교체할 것.
 pub const TBM_GETPOS_VAL: u32 = 1024;
 
 // ── Win32 누락 상수: Static ─────────────────────────────
@@ -110,10 +114,11 @@ pub const TBM_GETPOS_VAL: u32 = 1024;
 pub const SS_LEFT: u32 = 0x00000000;
 
 // ── Win32 누락 상수: Tab Control ────────────────────────
+//
+// `TCM_INSERTITEMW`, `TCM_GETCURSEL` 는 `windows` crate 의
+// `Win32::UI::Controls` 에서 직접 노출되므로 여기서는 정의하지 않는다.
+// `TCN_FIRST`/`TCN_SELCHANGE` 는 i32 부호 통지 코드라 별도 유지.
 
-pub const TCM_FIRST: u32 = 0x1300;
-pub const TCM_INSERTITEMW: u32 = TCM_FIRST + 62;
-pub const TCM_GETCURSEL: u32 = TCM_FIRST + 11;
 pub const TCN_FIRST: i32 = -550;
 pub const TCN_SELCHANGE: i32 = TCN_FIRST - 1;
 

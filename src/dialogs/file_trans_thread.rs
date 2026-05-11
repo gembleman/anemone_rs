@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
+    System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState},
     UI::WindowsAndMessaging::PostMessageW,
 };
 
@@ -21,8 +22,38 @@ use crate::constants::{
 use crate::util::to_wide;
 use super::file_trans::{FileTransJobData, WriteType};
 
+/// 시스템 절전 진입을 차단하는 RAII 가드.
+///
+/// 생성 시 `ES_CONTINUOUS | ES_SYSTEM_REQUIRED` 로 sleep 을 막고,
+/// drop 시 `ES_CONTINUOUS` 로 복원해 다시 OS 기본 동작에 맡긴다.
+/// `ES_DISPLAY_REQUIRED` 는 일부러 빼서 모니터 절전은 허용한다 — 사용자가
+/// 자리를 비웠을 때까지 화면 켜두는 건 과한 동작이라 판단.
+struct SleepBlocker;
+
+impl SleepBlocker {
+    fn new() -> Self {
+        // SAFETY: SetThreadExecutionState 는 부수효과 없는 kernel32 호출.
+        unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+        }
+        Self
+    }
+}
+
+impl Drop for SleepBlocker {
+    fn drop(&mut self) {
+        // SAFETY: SetThreadExecutionState 는 부수효과 없는 kernel32 호출.
+        unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS);
+        }
+    }
+}
+
 /// 파일 번역 스레드 메인 함수
 pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
+    // 긴 배치 번역 중 OS 가 절전으로 진입하지 않도록 함수 전체 동안 가드 유지.
+    let _sleep_guard = SleepBlocker::new();
+
     // isize를 HWND로 변환
     let progress_hwnd = HWND(job_data.progress_hwnd as *mut std::ffi::c_void);
 

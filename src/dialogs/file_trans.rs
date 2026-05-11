@@ -1,7 +1,7 @@
 //! 파일 번역 대화상자
 //!
 //! 다중 파일 선택 및 배치 번역 기능.
-//! GetOpenFileNameW + OFN_ALLOWMULTISELECT 사용.
+//! Common Item Dialog (IFileOpenDialog / IFileSaveDialog) 사용.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -14,10 +14,6 @@ use windows::{
         Foundation::*,
         Graphics::Gdi::*,
         System::LibraryLoader::GetModuleHandleW,
-        UI::Controls::Dialogs::{
-            GetOpenFileNameW, GetSaveFileNameW, OFN_ALLOWMULTISELECT, OFN_EXPLORER,
-            OFN_FILEMUSTEXIST, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
-        },
         UI::Input::KeyboardAndMouse::EnableWindow,
         UI::WindowsAndMessaging::*,
     },
@@ -27,6 +23,7 @@ use windows::{
 use crate::config::Config;
 use crate::impl_dialog;
 use crate::util::to_wide;
+use super::file_dialog::{FileFilter, open_files_multi, save_file};
 use super::file_trans_progress::FileTransProgressDialog;
 use super::helpers::DialogControls;
 
@@ -254,81 +251,42 @@ impl FileTransDialog {
         }
     }
 
-    /// 다중 선택 파일 경로 파싱
-    fn parse_multi_select_paths(buffer: &[u16]) -> Vec<PathBuf> {
-        let mut paths = Vec::new();
-        let first_null = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
-        if first_null == 0 { return paths; }
-
-        let directory = String::from_utf16_lossy(&buffer[..first_null]);
-        let second_start = first_null + 1;
-        if second_start >= buffer.len() || buffer[second_start] == 0 {
-            paths.push(PathBuf::from(&directory));
-            return paths;
-        }
-
-        let dir = PathBuf::from(&directory);
-        let mut pos = second_start;
-        while pos < buffer.len() && buffer[pos] != 0 {
-            let end = buffer[pos..]
-                .iter()
-                .position(|&c| c == 0)
-                .map(|i| pos + i)
-                .unwrap_or(buffer.len());
-            let filename = String::from_utf16_lossy(&buffer[pos..end]);
-            paths.push(dir.join(&filename));
-            pos = end + 1;
-            if pos >= buffer.len() || buffer[pos] == 0 { break; }
-        }
-        paths
-    }
-
     /// 입력 파일 선택 (다중 선택)
     fn browse_input_files(&mut self) {
-        // SAFETY: self.hwnd is a valid dialog window handle used as owner. OPENFILENAMEW is
-        // initialized with correct lStructSize, valid filter/file buffer pointers with
-        // sufficient sizes. The file buffer lives for the duration of GetOpenFileNameW.
+        let filters = [
+            FileFilter { name: "텍스트 파일 (*.txt)", spec: "*.txt" },
+            FileFilter { name: "모든 파일 (*.*)", spec: "*.*" },
+        ];
+        let picked = open_files_multi(self.hwnd, "입력 파일 선택", &filters);
+        if picked.is_empty() {
+            return;
+        }
+
+        self.input_files = picked;
+        self.output_files.clear();
+
+        for input in &self.input_files {
+            let stem = input.file_stem().unwrap_or_default().to_string_lossy();
+            let parent = input.parent().unwrap_or(std::path::Path::new(""));
+            let output = parent.join(format!("{}_번역.txt", stem));
+            self.output_files.push(output);
+        }
+
+        let input_display: Vec<String> = self.input_files.iter()
+            .map(|p| p.to_string_lossy().to_string()).collect();
+        let output_display: Vec<String> = self.output_files.iter()
+            .map(|p| p.to_string_lossy().to_string()).collect();
+
+        // SAFETY: load_edit/save_edit/save_browser_btn are valid control handles
+        // from create_controls.
         unsafe {
-            let mut file_buffer: Vec<u16> = vec![0; 32767];
-            let filter: Vec<u16> = "텍스트 파일 (*.txt)\0*.txt\0모든 파일 (*.*)\0*.*\0\0"
-                .encode_utf16()
-                .collect();
+            Self::set_edit_text(self.load_edit, &input_display.join(", "));
+            Self::set_edit_text(self.save_edit, &output_display.join(", "));
+            let _ = EnableWindow(self.save_browser_btn, self.input_files.len() == 1);
+        }
 
-            let mut ofn = OPENFILENAMEW {
-                lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-                hwndOwner: self.hwnd,
-                lpstrFilter: PCWSTR(filter.as_ptr()),
-                lpstrFile: PWSTR(file_buffer.as_mut_ptr()),
-                nMaxFile: file_buffer.len() as u32,
-                Flags: OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST,
-                ..Default::default()
-            };
-
-            if GetOpenFileNameW(&mut ofn).as_bool() {
-                self.input_files = Self::parse_multi_select_paths(&file_buffer);
-                self.output_files.clear();
-
-                for input in &self.input_files {
-                    let stem = input.file_stem().unwrap_or_default().to_string_lossy();
-                    let parent = input.parent().unwrap_or(std::path::Path::new(""));
-                    let output = parent.join(format!("{}_번역.txt", stem));
-                    self.output_files.push(output);
-                }
-
-                let input_display: Vec<String> = self.input_files.iter()
-                    .map(|p| p.to_string_lossy().to_string()).collect();
-                let output_display: Vec<String> = self.output_files.iter()
-                    .map(|p| p.to_string_lossy().to_string()).collect();
-
-                Self::set_edit_text(self.load_edit, &input_display.join(", "));
-                Self::set_edit_text(self.save_edit, &output_display.join(", "));
-
-                let _ = EnableWindow(self.save_browser_btn, self.input_files.len() == 1);
-
-                if let Some(first_file) = self.input_files.first() {
-                    self.show_preview(first_file);
-                }
-            }
+        if let Some(first_file) = self.input_files.first() {
+            self.show_preview(first_file);
         }
     }
 
@@ -336,43 +294,20 @@ impl FileTransDialog {
     fn browse_output_file(&mut self) {
         if self.input_files.len() != 1 { return; }
 
-        // SAFETY: self.hwnd is a valid dialog window handle used as owner. OPENFILENAMEW is
-        // initialized with correct lStructSize, valid filter/file buffer pointers. The
-        // file buffer is stack-allocated with sufficient size for a single file path.
-        unsafe {
-            let mut file_buffer: [u16; 260] = [0; 260];
-            if let Some(current) = self.output_files.first() {
-                let current_wide: Vec<u16> = current
-                    .to_string_lossy()
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-                let copy_len = current_wide.len().min(file_buffer.len() - 1);
-                file_buffer[..copy_len].copy_from_slice(&current_wide[..copy_len]);
-            }
+        let filters = [
+            FileFilter { name: "텍스트 파일 (*.txt)", spec: "*.txt" },
+            FileFilter { name: "모든 파일 (*.*)", spec: "*.*" },
+        ];
+        let initial = self.output_files.first().map(|p| p.as_path());
+        let Some(path) = save_file(self.hwnd, "출력 파일 위치", &filters, Some("txt"), initial)
+        else {
+            return;
+        };
 
-            let filter: Vec<u16> = "텍스트 파일 (*.txt)\0*.txt\0모든 파일 (*.*)\0*.*\0\0"
-                .encode_utf16()
-                .collect();
-
-            let mut ofn = OPENFILENAMEW {
-                lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-                hwndOwner: self.hwnd,
-                lpstrFilter: PCWSTR(filter.as_ptr()),
-                lpstrFile: PWSTR(file_buffer.as_mut_ptr()),
-                nMaxFile: 260,
-                Flags: OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT,
-                lpstrDefExt: w!("txt"),
-                ..Default::default()
-            };
-
-            if GetSaveFileNameW(&mut ofn).as_bool() {
-                let len = file_buffer.iter().position(|&c| c == 0).unwrap_or(file_buffer.len());
-                let path = String::from_utf16_lossy(&file_buffer[..len]);
-                self.output_files[0] = PathBuf::from(&path);
-                Self::set_edit_text(self.save_edit, &path);
-            }
-        }
+        let path_str = path.to_string_lossy().to_string();
+        self.output_files[0] = path;
+        // SAFETY: save_edit is a valid control handle from create_controls.
+        unsafe { Self::set_edit_text(self.save_edit, &path_str); }
     }
 
     /// 파일 미리보기 (처음 7줄)

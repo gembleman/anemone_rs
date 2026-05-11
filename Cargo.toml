@@ -19,6 +19,7 @@ features = [
     "Win32_UI_Accessibility",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_System_Power",
     "Win32_System_Com",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
@@ -30,7 +31,7 @@ features = [
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "1.0"
+toml = "1.1"
 windows-numerics = "0.3"
 windows-core = "0.62"
 eztrans-rs = { path = "../eztrans-rs" }
@@ -38,13 +39,13 @@ whatlang = "0.18"
 isolang = { version = "2.4", features = ["serde", "english_names"] }
 
 # Error handling & logging
-thiserror = "2"
+thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
 # Async translation support
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
-reqwest = { version = "0.13", features = ["json", "native-tls", "form"], default-features = false }
+tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "macros"] }
+reqwest = { version = "0.13.3", features = ["json", "native-tls", "form"], default-features = false }
 
 [build-dependencies]
 winresource = "0.1"
