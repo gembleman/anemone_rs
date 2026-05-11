@@ -671,7 +671,7 @@ impl Config {
         }
 
         // 파일 로드 시도
-        match Self::load_from_file(&path) {
+        match Self::load_from_file(path) {
             Ok(config) => {
                 tracing::info!("설정 로드됨: {}", path.display());
                 config
@@ -682,7 +682,7 @@ impl Config {
 
                 // 손상된 설정 파일 백업
                 let backup_path = path.with_extension("toml.bak");
-                if let Err(backup_err) = std::fs::copy(&path, &backup_path) {
+                if let Err(backup_err) = std::fs::copy(path, &backup_path) {
                     tracing::error!("설정 파일 백업 실패: {}", backup_err);
                 } else {
                     tracing::info!("기존 설정 파일 백업됨: {}", backup_path.display());
@@ -701,7 +701,7 @@ impl Config {
     /// 기본 경로에 설정 저장
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::default_config_path();
-        self.save_to_file(&path)?;
+        self.save_to_file(path)?;
         tracing::debug!("설정 저장됨: {}", path.display());
         Ok(())
     }

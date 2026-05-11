@@ -119,11 +119,11 @@ impl TranslationEngine {
     pub fn supported_source_languages(&self) -> &'static [Language] {
         match self {
             Self::EzTrans => &[Language::Jpn], // 일본어만
-            Self::Google => &GOOGLE_SUPPORTED_LANGUAGES,
-            Self::DeepL => &DEEPL_SUPPORTED_LANGUAGES,
-            Self::Papago => &PAPAGO_SUPPORTED_LANGUAGES,
+            Self::Google => GOOGLE_SUPPORTED_LANGUAGES,
+            Self::DeepL => DEEPL_SUPPORTED_LANGUAGES,
+            Self::Papago => PAPAGO_SUPPORTED_LANGUAGES,
             // LLM은 프롬프트 기반이라 대부분의 언어 지원. Google 목록을 재사용.
-            Self::Llm => &GOOGLE_SUPPORTED_LANGUAGES,
+            Self::Llm => GOOGLE_SUPPORTED_LANGUAGES,
         }
     }
 
@@ -131,10 +131,10 @@ impl TranslationEngine {
     pub fn supported_target_languages(&self) -> &'static [Language] {
         match self {
             Self::EzTrans => &[Language::Kor], // 한국어만
-            Self::Google => &GOOGLE_SUPPORTED_LANGUAGES,
-            Self::DeepL => &DEEPL_SUPPORTED_LANGUAGES,
-            Self::Papago => &PAPAGO_SUPPORTED_LANGUAGES,
-            Self::Llm => &GOOGLE_SUPPORTED_LANGUAGES,
+            Self::Google => GOOGLE_SUPPORTED_LANGUAGES,
+            Self::DeepL => DEEPL_SUPPORTED_LANGUAGES,
+            Self::Papago => PAPAGO_SUPPORTED_LANGUAGES,
+            Self::Llm => GOOGLE_SUPPORTED_LANGUAGES,
         }
     }
 }
