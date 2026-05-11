@@ -39,7 +39,10 @@ mod ctrl_id {
 }
 
 const PROGRESS_WIDTH: i32 = 450;
-const PROGRESS_HEIGHT: i32 = 200;
+// WIDTH / HEIGHT 는 캡션·테두리를 포함한 전체 윈도우 크기다. 캡션(~24~30px)+테두리(~2px)
+// 가 클라이언트에서 차감되므로, 취소 버튼 하단 Y=180 이 잘리지 않으려면 캡션 여유까지
+// 합쳐 220 이상이 필요. 200 일 때는 일부 윈도우 테마에서 버튼 하단 ~8px 가 잘릴 수 있다.
+const PROGRESS_HEIGHT: i32 = 220;
 
 /// 진행률 대화상자 상태
 struct ProgressState {
