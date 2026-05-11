@@ -23,7 +23,7 @@ impl FontStyle {
         }
     }
 
-    pub fn to_bits(&self) -> u8 {
+    pub fn to_bits(self) -> u8 {
         let mut bits = 0u8;
         if self.bold {
             bits |= 1;
