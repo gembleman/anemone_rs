@@ -516,10 +516,10 @@ pub struct D2DRenderer {
     text_cache: Option<TextLayoutCache>,
     /// outline+shadow 비트맵 캐시 (크기 1 LRU).
     ///
-    /// paint 1 회의 GPU 명령을 9 개 (Clear + 3×DrawGeometry + 3×FillGeometry
-    /// + 2×DrawTextLayout) 에서 3 개 (Clear + DrawBitmap + DrawTextLayout)
-    /// 로 줄인다. paint floor 의 ~95% 를 차지하던 outline stroke+fill 비용
-    /// 제거가 핵심.
+    /// paint 1 회의 GPU 명령을 9 개 (Clear + 3×DrawGeometry +
+    /// 3×FillGeometry + 2×DrawTextLayout) 에서 3 개
+    /// (Clear + DrawBitmap + DrawTextLayout) 로 줄인다. paint floor 의 ~95% 를
+    /// 차지하던 outline stroke+fill 비용 제거가 핵심.
     outline_bitmap: Option<OutlineBitmap>,
     /// 캐시 miss 비율 추적 — 폭주 시 비트맵 경로 우회.
     miss_tracker: MissTracker,

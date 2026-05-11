@@ -150,8 +150,8 @@ fn calculate_total_lines(files: &[PathBuf]) -> i32 {
 
 /// 단일 파일 처리
 fn process_single_file(
-    input_path: &PathBuf,
-    output_path: &PathBuf,
+    input_path: &Path,
+    output_path: &Path,
     job_data: &FileTransJobData,
     progress_hwnd: HWND,
     global_current: &mut i32,
