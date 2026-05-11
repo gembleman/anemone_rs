@@ -12,9 +12,6 @@ use windows::{
 };
 
 use crate::config::{Config, LlmGlossaryEntry};
-use crate::constants::{
-    LB_ADDSTRING, LB_DELETESTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL,
-};
 use crate::impl_dialog;
 use crate::util::to_wide;
 use super::helpers::DialogControls;

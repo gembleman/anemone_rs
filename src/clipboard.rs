@@ -2,9 +2,8 @@ use windows::Win32::{
     Foundation::*,
     System::DataExchange::*,
     System::Memory::{GlobalLock, GlobalUnlock},
+    System::Ole::CF_UNICODETEXT,
 };
-
-use crate::constants::CF_UNICODETEXT;
 
 pub struct ClipboardWatcher {
     hwnd: HWND,
@@ -70,21 +69,23 @@ impl ClipboardWatcher {
     /// 클립보드에서 텍스트 읽기
     pub fn get_text(&self) -> Option<String> {
         // SAFETY: OpenClipboard/CloseClipboard are called in matched pairs. GetClipboardData
-        // returns a valid handle when CF_UNICODETEXT is available. GlobalLock/GlobalUnlock
-        // are called in pairs. The transmute converts HANDLE to HGLOBAL which have the same
-        // representation. The pointer from GlobalLock is valid until GlobalUnlock.
+        // returns a HANDLE which we wrap into HGLOBAL — both are `*mut c_void` newtypes for
+        // the same kernel handle representation. GlobalLock/GlobalUnlock are paired and the
+        // returned pointer is valid until GlobalUnlock.
         unsafe {
             if OpenClipboard(Some(self.hwnd)).is_err() {
                 return None;
             }
 
+            let format = CF_UNICODETEXT.0 as u32;
             let result = (|| {
-                if IsClipboardFormatAvailable(CF_UNICODETEXT).is_err() {
+                if IsClipboardFormatAvailable(format).is_err() {
                     return None;
                 }
 
-                let handle = GetClipboardData(CF_UNICODETEXT).ok()?;
-                let ptr = GlobalLock(std::mem::transmute(handle)) as *const u16;
+                let handle = GetClipboardData(format).ok()?;
+                let hglobal = windows::Win32::Foundation::HGLOBAL(handle.0);
+                let ptr = GlobalLock(hglobal) as *const u16;
                 if ptr.is_null() {
                     return None;
                 }
@@ -98,7 +99,7 @@ impl ClipboardWatcher {
                 let slice = std::slice::from_raw_parts(ptr, len);
                 let text = String::from_utf16_lossy(slice);
 
-                let _ = GlobalUnlock(std::mem::transmute(handle));
+                let _ = GlobalUnlock(hglobal);
                 Some(text)
             })();
 

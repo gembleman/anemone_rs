@@ -18,7 +18,7 @@ use windows::{
 };
 
 use crate::config::{Config, TextAlign};
-use crate::constants::{CB_ADDSTRING, CB_RESETCONTENT, CB_SETCURSEL, TBM_GETPOS_VAL, TCN_SELCHANGE};
+use crate::constants::TBM_GETPOS_VAL;
 use crate::impl_dialog;
 use crate::translation::{TranslationEngine, lang_utils};
 use crate::util::to_wide;
@@ -740,7 +740,6 @@ impl SettingsDialog {
             // 초기 항목 채우기
             {
                 let cfg = self.config.borrow();
-                use crate::constants::LB_ADDSTRING;
                 for k in &cfg.translation.deepl_keys {
                     let kw = to_wide(k);
                     let _ = SendMessageW(listbox, LB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(kw.as_ptr() as isize)));
@@ -917,7 +916,7 @@ impl SettingsDialog {
                 // SAFETY: lparam points to a valid NMHDR struct from the system.
                 unsafe {
                     let nmhdr = &*(lparam.0 as *const NMHDR);
-                    if nmhdr.code == TCN_SELCHANGE as u32 {
+                    if nmhdr.code == TCN_SELCHANGE {
                         if let Ok(tab_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32) {
                             let sel = SendMessageW(
                                 tab_hwnd,

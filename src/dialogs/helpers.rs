@@ -13,7 +13,6 @@ use windows::{
     core::*,
 };
 
-use crate::constants::{CB_ADDSTRING, CB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY};
 use crate::util::to_wide;
 
 /// 다이얼로그 공용 한글 폰트 (Malgun Gothic 9pt).
@@ -570,7 +569,7 @@ pub unsafe fn create_listbox(
             w!("LISTBOX"),
             w!(""),
             WINDOW_STYLE(
-                LBS_NOTIFY | LBS_NOINTEGRALHEIGHT
+                LBS_NOTIFY as u32 | LBS_NOINTEGRALHEIGHT as u32
                     | WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0 | WS_TABSTOP.0,
             ),
             WS_EX_CLIENTEDGE,

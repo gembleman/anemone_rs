@@ -59,47 +59,6 @@ pub const WM_PROGRESS_ERROR: u32 = WM_USER + 308;
 /// 번역 응답 저장소 최대 크기 (초과 시 오래된 항목 제거)
 pub const MAX_RESPONSE_STORAGE: usize = 100;
 
-// ── Win32 누락 상수: ComboBox ───────────────────────────
-
-pub const CB_ADDSTRING: u32 = 0x0143;
-pub const CB_GETCURSEL: u32 = 0x0147;
-pub const CB_SETCURSEL: u32 = 0x014E;
-pub const CB_RESETCONTENT: u32 = 0x014B;
-pub const CBN_SELCHANGE: u32 = 1;
-
-// ── Win32 누락 상수: ListBox ────────────────────────────
-
-pub const LB_ADDSTRING: u32 = 0x0180;
-pub const LB_INSERTSTRING: u32 = 0x0181;
-pub const LB_DELETESTRING: u32 = 0x0182;
-pub const LB_SETCURSEL: u32 = 0x0186;
-pub const LB_GETCURSEL: u32 = 0x0188;
-pub const LB_GETTEXT: u32 = 0x0189;
-pub const LB_GETTEXTLEN: u32 = 0x018A;
-pub const LB_GETCOUNT: u32 = 0x018B;
-pub const LB_ERR: i32 = -1;
-
-pub const LBS_NOTIFY: u32 = 0x0001;
-pub const LBS_NOINTEGRALHEIGHT: u32 = 0x0100;
-
-// ── Win32 누락 상수: RichEdit ───────────────────────────
-
-pub const EM_REPLACESEL: u32 = 0x00C2;
-pub const EM_SCROLLCARET: u32 = 0x00B7;
-pub const EM_SETCHARFORMAT: u32 = WM_USER + 68;
-pub const EM_SETBKGNDCOLOR: u32 = WM_USER + 67;
-
-// CHARFORMAT2W 마스크
-pub const CFM_BOLD: u32 = 0x00000001;
-pub const CFM_COLOR: u32 = 0x40000000;
-pub const CFM_SIZE: u32 = 0x80000000;
-
-// CHARFORMAT2W 효과
-pub const CFE_BOLD: u32 = 0x00000001;
-
-// 선택 범위
-pub const SCF_SELECTION: u32 = 0x0001;
-
 // ── Win32 누락 상수: TrackBar ───────────────────────────
 
 /// `TBM_GETPOS` (= `WM_USER`).
@@ -108,32 +67,6 @@ pub const SCF_SELECTION: u32 = 0x0001;
 /// 정작 `TBM_GETPOS` 만 누락되어 직접 정의한다. 상위 windows crate 가 추가하면
 /// 이 상수를 제거하고 `windows::Win32::UI::Controls::TBM_GETPOS` 로 교체할 것.
 pub const TBM_GETPOS_VAL: u32 = 1024;
-
-// ── Win32 누락 상수: Static ─────────────────────────────
-
-pub const SS_LEFT: u32 = 0x00000000;
-
-// ── Win32 누락 상수: Tab Control ────────────────────────
-//
-// `TCM_INSERTITEMW`, `TCM_GETCURSEL` 는 `windows` crate 의
-// `Win32::UI::Controls` 에서 직접 노출되므로 여기서는 정의하지 않는다.
-// `TCN_FIRST`/`TCN_SELCHANGE` 는 i32 부호 통지 코드라 별도 유지.
-
-pub const TCN_FIRST: i32 = -550;
-pub const TCN_SELCHANGE: i32 = TCN_FIRST - 1;
-
-// ── Win32 누락 상수: Clipboard ──────────────────────────
-
-pub const CF_UNICODETEXT: u32 = 13;
-
-// ── Win32 누락 상수: WinEvent ───────────────────────────
-
-pub const EVENT_SYSTEM_MINIMIZESTART: u32 = 0x0016;
-pub const EVENT_SYSTEM_MINIMIZEEND: u32 = 0x0017;
-pub const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
-pub const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800B;
-pub const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
-pub const WINEVENT_SKIPOWNPROCESS: u32 = 0x0002;
 
 // ── Win32 누락 상수: 색상 대화상자 ──────────────────────
 

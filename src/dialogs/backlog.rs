@@ -14,16 +14,16 @@ use windows::{
             GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
         },
         UI::Controls::*,
+        UI::Controls::RichEdit::{
+            CFE_BOLD, CFM_BOLD, CFM_COLOR, CFM_SIZE, CHARFORMAT2W, EM_SETBKGNDCOLOR,
+            EM_SETCHARFORMAT, SCF_SELECTION,
+        },
         UI::WindowsAndMessaging::*,
     },
     core::*,
 };
 
 use crate::config::Config;
-use crate::constants::{
-    CFE_BOLD, CFM_BOLD, CFM_COLOR, CFM_SIZE, EM_REPLACESEL, EM_SCROLLCARET, EM_SETBKGNDCOLOR,
-    EM_SETCHARFORMAT, SCF_SELECTION,
-};
 use crate::impl_dialog;
 use crate::util::to_wide;
 use super::file_dialog::{FileFilter, save_file};
@@ -80,46 +80,6 @@ impl LogEntry {
     pub fn with_translation(mut self, translation: String) -> Self {
         self.translation = Some(translation);
         self
-    }
-}
-
-/// CHARFORMAT2W 구조체 (windows crate에서 직접 사용하기 어려워 수동 정의)
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct CHARFORMAT2W {
-    cb_size: u32,
-    dw_mask: u32,
-    dw_effects: u32,
-    y_height: i32,
-    y_offset: i32,
-    cr_text_color: u32,
-    b_char_set: u8,
-    b_pitch_and_family: u8,
-    sz_face_name: [u16; 32],
-    w_weight: u16,
-    s_spacing: i16,
-    cr_back_color: u32,
-    lcid: u32,
-    dw_reserved: u32,
-    s_style: i16,
-    w_kerning: u16,
-    b_underline_type: u8,
-    b_animation: u8,
-    b_rev_author: u8,
-    b_reserved1: u8,
-}
-
-impl Default for CHARFORMAT2W {
-    fn default() -> Self {
-        Self {
-            cb_size: std::mem::size_of::<CHARFORMAT2W>() as u32,
-            dw_mask: 0, dw_effects: 0, y_height: 0, y_offset: 0,
-            cr_text_color: 0, b_char_set: 0, b_pitch_and_family: 0,
-            sz_face_name: [0; 32], w_weight: 0, s_spacing: 0,
-            cr_back_color: 0, lcid: 0, dw_reserved: 0,
-            s_style: 0, w_kerning: 0, b_underline_type: 0,
-            b_animation: 0, b_rev_author: 0, b_reserved1: 0,
-        }
     }
 }
 
@@ -302,18 +262,19 @@ impl BacklogDialog {
 
     /// 스타일 텍스트 추가
     unsafe fn append_styled_text(&self, text: &str, color: u32, bold: bool) {
-        // SAFETY: self.richedit is a valid RichEdit control. CHARFORMAT2W is properly
-        // initialized with correct cbSize. The pointer cast to isize for LPARAM is valid
-        // because the CHARFORMAT2W struct lives on the stack for the duration of the call.
+        // SAFETY: self.richedit is a valid RichEdit control. CHARFORMAT2W::default() zeroes
+        // the struct; we then fill in cbSize and the masked fields. The pointer cast to
+        // isize for LPARAM is valid because the struct lives on the stack for the call.
         unsafe {
             let mut cf = CHARFORMAT2W::default();
-            cf.dw_mask = CFM_COLOR | CFM_SIZE;
-            cf.cr_text_color = color;
-            cf.y_height = 200;
+            cf.Base.cbSize = std::mem::size_of::<CHARFORMAT2W>() as u32;
+            cf.Base.dwMask = CFM_COLOR | CFM_SIZE;
+            cf.Base.crTextColor = COLORREF(color);
+            cf.Base.yHeight = 200;
 
             if bold {
-                cf.dw_mask |= CFM_BOLD;
-                cf.dw_effects |= CFE_BOLD;
+                cf.Base.dwMask = cf.Base.dwMask | CFM_BOLD;
+                cf.Base.dwEffects = cf.Base.dwEffects | CFE_BOLD;
             }
 
             let _ = SendMessageW(

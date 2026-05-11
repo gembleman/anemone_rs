@@ -10,7 +10,7 @@ static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 pub fn shared_client() -> reqwest::Client {
     SHARED_CLIENT
-        .get_or_init(|| reqwest::Client::new())
+        .get_or_init(reqwest::Client::new)
         .clone()
 }
 

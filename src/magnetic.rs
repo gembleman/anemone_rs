@@ -14,10 +14,6 @@ use windows::{
 };
 
 use crate::config::Config;
-use crate::constants::{
-    EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
-    EVENT_SYSTEM_MINIMIZESTART, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
-};
 
 /// 자석 상태
 pub struct MagnetState {

@@ -24,7 +24,7 @@ use crate::constants::{
     WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
     WM_PROGRESS_UPDATE,
 };
-use crate::constants::SS_LEFT;
+use windows::Win32::System::SystemServices::SS_LEFT;
 use crate::util::to_wide;
 use super::helpers::{self, DialogWindowOptions};
 
@@ -93,9 +93,8 @@ impl FileTransProgressDialog {
             })?;
 
             // 작업 표시줄 진행률 인터페이스 초기화.
-            // CoInitializeEx 는 메인 스레드(STA)에서 file_dialog 경로를 통해 이미 호출되었을 수
-            // 있지만, 우리는 그에 의존하지 않고 HrInit 실패까지만 Option 으로 흡수한다.
-            // (CoCreateInstance 가 RPC_E_CHANGED_MODE 등으로 실패하면 그냥 None 으로 둔다.)
+            // UI 스레드는 main()에서 STA 로 1회 초기화되어 있다. CoCreateInstance / HrInit
+            // 실패는 모두 Option 으로 흡수해 작업표시줄 진행률 없이 동작하도록 한다.
             let taskbar: Option<ITaskbarList3> =
                 match CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_ALL) {
                     Ok(t) => match t.HrInit() {
@@ -170,7 +169,7 @@ impl FileTransProgressDialog {
                 WINDOW_EX_STYLE::default(),
                 w!("STATIC"),
                 w!("대기 중..."),
-                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | SS_LEFT as u32),
+                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | SS_LEFT.0),
                 s(20),
                 s(25),
                 s(405),
@@ -211,7 +210,7 @@ impl FileTransProgressDialog {
                 WINDOW_EX_STYLE::default(),
                 w!("STATIC"),
                 w!("0/0"),
-                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | SS_LEFT as u32),
+                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | SS_LEFT.0),
                 s(20),
                 s(105),
                 s(200),
@@ -233,7 +232,7 @@ impl FileTransProgressDialog {
                 WINDOW_EX_STYLE::default(),
                 w!("STATIC"),
                 w!("파일: 0/0"),
-                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | SS_LEFT as u32),
+                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | SS_LEFT.0),
                 s(230),
                 s(105),
                 s(90),
@@ -255,7 +254,7 @@ impl FileTransProgressDialog {
                 WINDOW_EX_STYLE::default(),
                 w!("STATIC"),
                 w!("전체: 0/0"),
-                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | SS_LEFT as u32),
+                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | SS_LEFT.0),
                 s(330),
                 s(105),
                 s(95),

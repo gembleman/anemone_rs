@@ -27,9 +27,7 @@ impl TrayIcon {
     }
 
     pub fn create(&mut self, hwnd: HWND, icon_id: u32) -> Result<()> {
-        // SAFETY: hwnd is a valid window handle from the caller. write_unaligned is used
-        // because szTip may be unaligned in the packed NOTIFYICONDATAW struct. The copy
-        // length is bounded to the szTip buffer size (128 u16 elements).
+        // SAFETY: hwnd is a valid window handle from the caller.
         unsafe {
             let hinstance = GetModuleHandleW(None)?;
 
@@ -44,16 +42,7 @@ impl TrayIcon {
             self.nid.hIcon =
                 icon.unwrap_or_else(|_| LoadIconW(None, IDI_APPLICATION).unwrap_or_default());
 
-            // 툴팁 설정
-            let tip = "아네모네";
-            let tip_wide = to_wide(tip);
-            // packed struct 문제 회피: write_unaligned 사용 (정렬되지 않은 주소 접근)
-            let sz_tip_ptr = addr_of_mut!(self.nid.szTip) as *mut u16;
-            let sz_tip_len = 128; // NOTIFYICONDATAW.szTip의 고정 크기
-            let copy_len = tip_wide.len().min(sz_tip_len);
-            for i in 0..copy_len {
-                write_unaligned(sz_tip_ptr.add(i), tip_wide[i]);
-            }
+            set_sz_tip(addr_of_mut!(self.nid.szTip), "아네모네");
 
             if !Shell_NotifyIconW(NIM_ADD, &self.nid).as_bool() {
                 tracing::warn!("Shell_NotifyIconW(NIM_ADD) failed during create");
@@ -88,18 +77,9 @@ impl TrayIcon {
     }
 
     pub fn update_tooltip(&mut self, tip: &str) {
-        // SAFETY: write_unaligned is used because szTip may be unaligned in the packed struct.
-        // The copy length is bounded to the szTip buffer size (128 u16 elements).
-        unsafe {
-            let tip_wide = to_wide(tip);
-            // packed struct 문제 회피: write_unaligned 사용 (정렬되지 않은 주소 접근)
-            let sz_tip_ptr = addr_of_mut!(self.nid.szTip) as *mut u16;
-            let sz_tip_len = 128; // NOTIFYICONDATAW.szTip의 고정 크기
-            let copy_len = tip_wide.len().min(sz_tip_len);
-            for i in 0..copy_len {
-                write_unaligned(sz_tip_ptr.add(i), tip_wide[i]);
-            }
-        }
+        // SAFETY: self.nid 는 zeroed 로 초기화된 유효한 구조체이며 packed 필드는
+        // raw pointer 로 접근한다.
+        unsafe { set_sz_tip(addr_of_mut!(self.nid.szTip), tip) };
 
         if self.registered {
             // SAFETY: self.nid was initialized in create() and is still valid.
@@ -109,6 +89,28 @@ impl TrayIcon {
                 }
             }
         }
+    }
+}
+
+/// `NOTIFYICONDATAW.szTip` ([u16; 128]) 채우기. 항상 null 종결을 보장한다.
+///
+/// # Safety
+/// `ptr` 은 `[u16; 128]` 을 가리키는 유효한 쓰기 가능 포인터여야 한다. 정렬은
+/// 요구하지 않는다 (packed struct 필드 대응을 위해 `write_unaligned` 사용).
+unsafe fn set_sz_tip(ptr: *mut [u16; 128], tip: &str) {
+    const CAP: usize = 128;
+    let base = ptr as *mut u16;
+    let tip_wide = to_wide(tip);
+    // 마지막 한 칸은 null 종결자용으로 비워둔다.
+    let copy_len = tip_wide.len().min(CAP - 1);
+    for i in 0..copy_len {
+        // SAFETY: base 는 [u16; 128] 의 첫 원소를 가리키며 i < 128 이다.
+        unsafe { write_unaligned(base.add(i), tip_wide[i]) };
+    }
+    // 나머지는 0 으로 채워 null 종결.
+    for i in copy_len..CAP {
+        // SAFETY: 위와 동일.
+        unsafe { write_unaligned(base.add(i), 0) };
     }
 }
 

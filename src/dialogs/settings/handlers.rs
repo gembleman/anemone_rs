@@ -9,7 +9,6 @@ use windows::{
 
 use super::ctrl_id;
 use super::SettingsDialog;
-use crate::constants::{CB_GETCURSEL, CBN_SELCHANGE};
 use crate::config::{ColorType, TextAlign, TextType};
 use crate::util::to_wide;
 use crate::dialogs::color::ColorDialog;
@@ -230,7 +229,7 @@ impl SettingsDialog {
             let key_wide = to_wide(&key);
             let _ = SendMessageW(
                 listbox,
-                crate::constants::LB_ADDSTRING,
+                LB_ADDSTRING,
                 Some(WPARAM(0)),
                 Some(LPARAM(key_wide.as_ptr() as isize)),
             );
@@ -248,11 +247,11 @@ impl SettingsDialog {
                 Ok(h) if !h.is_invalid() => h,
                 _ => return,
             };
-            let sel = SendMessageW(listbox, crate::constants::LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32;
-            if sel == crate::constants::LB_ERR { return; }
+            let sel = SendMessageW(listbox, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32;
+            if sel == LB_ERR { return; }
             let _ = SendMessageW(
                 listbox,
-                crate::constants::LB_DELETESTRING,
+                LB_DELETESTRING,
                 Some(WPARAM(sel as usize)),
                 Some(LPARAM(0)),
             );

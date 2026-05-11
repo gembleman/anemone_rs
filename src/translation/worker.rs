@@ -77,14 +77,13 @@ pub struct TranslationResponse {
     pub result: TranslationResult,
 }
 
-/// 응답 저장소 (thread-safe)
-static RESPONSE_STORAGE: std::sync::OnceLock<Arc<Mutex<Vec<TranslationResponse>>>> =
+/// 응답 저장소 (thread-safe). `OnceLock` 자체가 `'static` 참조를 돌려주므로
+/// `Arc` 없이 `&'static Mutex<_>` 로 충분하다.
+static RESPONSE_STORAGE: std::sync::OnceLock<Mutex<Vec<TranslationResponse>>> =
     std::sync::OnceLock::new();
 
-fn get_response_storage() -> Arc<Mutex<Vec<TranslationResponse>>> {
-    RESPONSE_STORAGE
-        .get_or_init(|| Arc::new(Mutex::new(Vec::new())))
-        .clone()
+fn get_response_storage() -> &'static Mutex<Vec<TranslationResponse>> {
+    RESPONSE_STORAGE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 /// 응답 저장 (MAX_RESPONSE_STORAGE 초과 시 오래된 항목 제거)

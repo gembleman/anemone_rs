@@ -36,6 +36,26 @@ fn harden_dll_search_path() {
     }
 }
 
+/// UI 스레드를 STA 로 한 번만 초기화한다.
+///
+/// 파일 다이얼로그(Common Item Dialog), 작업표시줄 진행률(ITaskbarList3),
+/// 셸 아이템 등 모든 COM 사용 경로의 공통 전제. 다이얼로그마다 init/uninit
+/// 짝짓는 모델은 다른 COM 객체의 수명을 무너뜨릴 수 있어 사용하지 않는다.
+/// 프로세스 종료 시 OS 가 정리하므로 명시적 `CoUninitialize` 는 생략한다.
+fn init_com_sta() {
+    use windows::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
+    };
+    // SAFETY: 메인 스레드에서 가장 먼저 한 번만 호출한다. 이미 다른 모드로
+    // 초기화되어 있다면 RPC_E_CHANGED_MODE 가 반환되지만, 그래도 무시한다.
+    unsafe {
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        if hr.is_err() {
+            tracing::warn!("CoInitializeEx returned {hr:?}");
+        }
+    }
+}
+
 fn main() {
     // 가장 먼저 DLL 검색 경로를 잠근다 (다른 의존성 초기화 전에).
     harden_dll_search_path();
@@ -44,6 +64,9 @@ fn main() {
         .with_max_level(tracing::Level::DEBUG)
         .with_target(false)
         .init();
+
+    // UI 스레드 COM(STA) 1회 초기화 — 모든 다이얼로그/셸 호출의 공통 전제.
+    init_com_sta();
 
     if let Err(e) = App::run() {
         tracing::error!("Error: {e}");

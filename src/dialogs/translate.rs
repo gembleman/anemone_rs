@@ -10,7 +10,8 @@ use std::rc::Rc;
 use windows::{
     Win32::{
         Foundation::*, Graphics::Gdi::*, System::DataExchange::*,
-        System::LibraryLoader::GetModuleHandleW, System::Memory::*, UI::Controls::*,
+        System::LibraryLoader::GetModuleHandleW, System::Memory::*,
+        System::Ole::CF_UNICODETEXT, UI::Controls::*,
         UI::Input::KeyboardAndMouse::*,
         UI::Shell::{DefSubclassProc, SetWindowSubclass},
         UI::WindowsAndMessaging::*,
@@ -23,10 +24,7 @@ use crate::impl_dialog;
 use super::helpers::DialogControls;
 
 use crate::config::Config;
-use crate::constants::{
-    CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CF_UNICODETEXT,
-    WM_TRANSLATION_COMPLETE,
-};
+use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::{
     get_translation_manager, Language, TranslationEngine,
     TranslationWorker, take_all_responses,
@@ -550,7 +548,7 @@ impl TranslateDialog {
                 if !ptr.is_null() {
                     std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
                     let _ = GlobalUnlock(hmem);
-                    if let Err(e) = SetClipboardData(CF_UNICODETEXT, Some(HANDLE(hmem.0))) {
+                    if let Err(e) = SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hmem.0))) {
                         tracing::warn!("SetClipboardData failed: {e}");
                     }
                 }

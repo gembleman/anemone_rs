@@ -7,10 +7,7 @@
 use std::path::PathBuf;
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Com::{
-    CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance,
-    CoInitializeEx, CoTaskMemFree, CoUninitialize,
-};
+use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
     FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
@@ -81,37 +78,31 @@ unsafe fn shell_item_to_path(item: &IShellItem) -> Option<PathBuf> {
 ///
 /// `title`/`filters` 는 비어 있어도 된다. 반환 `None` 은 취소 또는 실패.
 pub fn open_file(hwnd: HWND, title: &str, filters: &[FileFilter]) -> Option<PathBuf> {
-    // SAFETY: COM 초기화/해제 짝, 모든 COM 인터페이스는 함수 안에서만 사용.
+    // SAFETY: UI 스레드는 main()에서 STA 로 1회 초기화되어 있다. 모든 COM
+    // 인터페이스는 이 함수 안에서만 사용되고 Drop 시 자동 Release 된다.
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)
+            .inspect_err(|e| tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}"))
+            .ok()?;
 
-        let result = (|| -> Option<PathBuf> {
-            let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)
-                .inspect_err(|e| tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}"))
-                .ok()?;
+        if !title.is_empty() {
+            let title_w = to_wide(title);
+            let _ = dialog.SetTitle(PCWSTR(title_w.as_ptr()));
+        }
 
-            if !title.is_empty() {
-                let title_w = to_wide(title);
-                let _ = dialog.SetTitle(PCWSTR(title_w.as_ptr()));
-            }
+        let storage = build_filters(filters);
+        if !storage.specs.is_empty() {
+            let _ = dialog.SetFileTypes(&storage.specs);
+        }
 
-            let storage = build_filters(filters);
-            if !storage.specs.is_empty() {
-                let _ = dialog.SetFileTypes(&storage.specs);
-            }
+        let _ = dialog.SetOptions(FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST);
 
-            let _ = dialog.SetOptions(FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST);
+        if dialog.Show(Some(hwnd)).is_err() {
+            return None;
+        }
 
-            if dialog.Show(Some(hwnd)).is_err() {
-                return None;
-            }
-
-            let item: IShellItem = dialog.GetResult().ok()?;
-            shell_item_to_path(&item)
-        })();
-
-        CoUninitialize();
-        result
+        let item: IShellItem = dialog.GetResult().ok()?;
+        shell_item_to_path(&item)
     }
 }
 
@@ -119,88 +110,73 @@ pub fn open_file(hwnd: HWND, title: &str, filters: &[FileFilter]) -> Option<Path
 ///
 /// 취소 시 빈 벡터를 반환한다.
 pub fn open_files_multi(hwnd: HWND, title: &str, filters: &[FileFilter]) -> Vec<PathBuf> {
-    // SAFETY: COM 초기화/해제 짝, 모든 COM 인터페이스는 함수 안에서만 사용.
+    // SAFETY: UI 스레드는 main()에서 STA 로 1회 초기화되어 있다.
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-
-        let result: Vec<PathBuf> = (|| -> Vec<PathBuf> {
-            let dialog: IFileOpenDialog = match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)
-            {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}");
-                    return Vec::new();
-                }
-            };
-
-            if !title.is_empty() {
-                let title_w = to_wide(title);
-                let _ = dialog.SetTitle(PCWSTR(title_w.as_ptr()));
-            }
-
-            let storage = build_filters(filters);
-            if !storage.specs.is_empty() {
-                let _ = dialog.SetFileTypes(&storage.specs);
-            }
-
-            let _ = dialog.SetOptions(
-                FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST | FOS_ALLOWMULTISELECT,
-            );
-
-            if dialog.Show(Some(hwnd)).is_err() {
+        let dialog: IFileOpenDialog = match CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}");
                 return Vec::new();
             }
+        };
 
-            let items = match dialog.GetResults() {
-                Ok(a) => a,
-                Err(_) => return Vec::new(),
-            };
+        if !title.is_empty() {
+            let title_w = to_wide(title);
+            let _ = dialog.SetTitle(PCWSTR(title_w.as_ptr()));
+        }
 
-            let count = items.GetCount().unwrap_or(0);
-            let mut paths = Vec::with_capacity(count as usize);
-            for i in 0..count {
-                if let Ok(item) = items.GetItemAt(i) {
-                    if let Some(p) = shell_item_to_path(&item) {
-                        paths.push(p);
-                    }
+        let storage = build_filters(filters);
+        if !storage.specs.is_empty() {
+            let _ = dialog.SetFileTypes(&storage.specs);
+        }
+
+        let _ = dialog.SetOptions(
+            FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST | FOS_ALLOWMULTISELECT,
+        );
+
+        if dialog.Show(Some(hwnd)).is_err() {
+            return Vec::new();
+        }
+
+        let items = match dialog.GetResults() {
+            Ok(a) => a,
+            Err(_) => return Vec::new(),
+        };
+
+        let count = items.GetCount().unwrap_or(0);
+        let mut paths = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            if let Ok(item) = items.GetItemAt(i) {
+                if let Some(p) = shell_item_to_path(&item) {
+                    paths.push(p);
                 }
             }
-            paths
-        })();
-
-        CoUninitialize();
-        result
+        }
+        paths
     }
 }
 
 /// 폴더 선택 다이얼로그.
 pub fn pick_folder(hwnd: HWND, title: &str) -> Option<PathBuf> {
-    // SAFETY: COM 초기화/해제 짝, 모든 COM 인터페이스는 함수 안에서만 사용.
+    // SAFETY: UI 스레드는 main()에서 STA 로 1회 초기화되어 있다.
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)
+            .inspect_err(|e| tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}"))
+            .ok()?;
 
-        let result = (|| -> Option<PathBuf> {
-            let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)
-                .inspect_err(|e| tracing::warn!("CoCreateInstance(FileOpenDialog) failed: {e}"))
-                .ok()?;
+        let _ = dialog.SetOptions(FOS_PICKFOLDERS);
 
-            let _ = dialog.SetOptions(FOS_PICKFOLDERS);
+        if !title.is_empty() {
+            let title_w = to_wide(title);
+            let _ = dialog.SetTitle(PCWSTR(title_w.as_ptr()));
+        }
 
-            if !title.is_empty() {
-                let title_w = to_wide(title);
-                let _ = dialog.SetTitle(PCWSTR(title_w.as_ptr()));
-            }
+        if dialog.Show(Some(hwnd)).is_err() {
+            return None;
+        }
 
-            if dialog.Show(Some(hwnd)).is_err() {
-                return None;
-            }
-
-            let item: IShellItem = dialog.GetResult().ok()?;
-            shell_item_to_path(&item)
-        })();
-
-        CoUninitialize();
-        result
+        let item: IShellItem = dialog.GetResult().ok()?;
+        shell_item_to_path(&item)
     }
 }
 
@@ -215,58 +191,51 @@ pub fn save_file(
     default_ext: Option<&str>,
     initial: Option<&std::path::Path>,
 ) -> Option<PathBuf> {
-    // SAFETY: COM 초기화/해제 짝, 모든 COM 인터페이스는 함수 안에서만 사용.
+    // SAFETY: UI 스레드는 main()에서 STA 로 1회 초기화되어 있다.
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)
+            .inspect_err(|e| tracing::warn!("CoCreateInstance(FileSaveDialog) failed: {e}"))
+            .ok()?;
 
-        let result = (|| -> Option<PathBuf> {
-            let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)
-                .inspect_err(|e| tracing::warn!("CoCreateInstance(FileSaveDialog) failed: {e}"))
-                .ok()?;
+        if !title.is_empty() {
+            let title_w = to_wide(title);
+            let _ = dialog.SetTitle(PCWSTR(title_w.as_ptr()));
+        }
 
-            if !title.is_empty() {
-                let title_w = to_wide(title);
-                let _ = dialog.SetTitle(PCWSTR(title_w.as_ptr()));
+        let storage = build_filters(filters);
+        if !storage.specs.is_empty() {
+            let _ = dialog.SetFileTypes(&storage.specs);
+        }
+
+        if let Some(ext) = default_ext {
+            let ext_w = to_wide(ext);
+            let _ = dialog.SetDefaultExtension(PCWSTR(ext_w.as_ptr()));
+        }
+
+        if let Some(path) = initial {
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                let name_w = to_wide(name);
+                let _ = dialog.SetFileName(PCWSTR(name_w.as_ptr()));
             }
-
-            let storage = build_filters(filters);
-            if !storage.specs.is_empty() {
-                let _ = dialog.SetFileTypes(&storage.specs);
-            }
-
-            if let Some(ext) = default_ext {
-                let ext_w = to_wide(ext);
-                let _ = dialog.SetDefaultExtension(PCWSTR(ext_w.as_ptr()));
-            }
-
-            if let Some(path) = initial {
-                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                    let name_w = to_wide(name);
-                    let _ = dialog.SetFileName(PCWSTR(name_w.as_ptr()));
-                }
-                if let Some(folder) = path.parent().and_then(|s| s.to_str()) {
-                    if !folder.is_empty() {
-                        let folder_w = to_wide(folder);
-                        let item: windows::core::Result<IShellItem> =
-                            SHCreateItemFromParsingName(PCWSTR(folder_w.as_ptr()), None);
-                        if let Ok(item) = item {
-                            let _ = dialog.SetFolder(&item);
-                        }
+            if let Some(folder) = path.parent().and_then(|s| s.to_str()) {
+                if !folder.is_empty() {
+                    let folder_w = to_wide(folder);
+                    let item: windows::core::Result<IShellItem> =
+                        SHCreateItemFromParsingName(PCWSTR(folder_w.as_ptr()), None);
+                    if let Ok(item) = item {
+                        let _ = dialog.SetFolder(&item);
                     }
                 }
             }
+        }
 
-            let _ = dialog.SetOptions(FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT);
+        let _ = dialog.SetOptions(FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT);
 
-            if dialog.Show(Some(hwnd)).is_err() {
-                return None;
-            }
+        if dialog.Show(Some(hwnd)).is_err() {
+            return None;
+        }
 
-            let item: IShellItem = dialog.GetResult().ok()?;
-            shell_item_to_path(&item)
-        })();
-
-        CoUninitialize();
-        result
+        let item: IShellItem = dialog.GetResult().ok()?;
+        shell_item_to_path(&item)
     }
 }
