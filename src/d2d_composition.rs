@@ -56,6 +56,7 @@ use windows::{
             DirectComposition::*,
             Dxgi::{Common::*, *},
         },
+        System::Threading::WaitForSingleObjectEx,
         UI::WindowsAndMessaging::GetClientRect,
     },
     core::*,
@@ -71,14 +72,28 @@ pub struct CompositionRenderer {
     _d3d_device: ID3D11Device,
     /// D2D 디바이스 컨텍스트. 호출자에게 노출되는 그리기 인터페이스.
     d2d_context: ID2D1DeviceContext,
-    /// composition 용 swap chain (no-hwnd, flip + premultiplied alpha)
-    swap_chain: IDXGISwapChain1,
+    /// composition 용 swap chain (no-hwnd, flip + premultiplied alpha).
+    ///
+    /// `IDXGISwapChain2` 인 이유: `FRAME_LATENCY_WAITABLE_OBJECT` 패턴에서
+    /// `GetFrameLatencyWaitableObject` / `SetMaximumFrameLatency` 가 V2 에서
+    /// 도입됐다. `CreateSwapChainForComposition` 자체는 V1 을 반환하므로
+    /// 생성 직후 cast 한다.
+    swap_chain: IDXGISwapChain2,
     /// swap chain back buffer 를 wrap 한 D2D 비트맵. resize 시 재생성.
     ///
     /// `Option` 인 이유: `ResizeBuffers` 가 outstanding back buffer reference 를
     /// 거부 (DXGI_ERROR_INVALID_CALL) 하므로 호출 전에 이 필드도 `None` 으로
     /// drop 시켜야 한다. 정상 상태에서는 항상 `Some`.
     bitmap: Option<ID2D1Bitmap1>,
+    /// `FRAME_LATENCY_WAITABLE_OBJECT` 핸들. `WaitForSingleObjectEx` 로 다음
+    /// back buffer 가 사용 가능해질 때까지 paint 진입점에서 명시 대기한다.
+    ///
+    /// 이 wait 가 없으면 DXGI 가 다음 `BeginDraw`/`EndDraw` 내부에서 동일
+    /// 대기를 수행해 EndDraw 가 ~1 ms 스톨한다 (측정 결과). wait 를 paint
+    /// 진입점으로 옮기면 EndDraw 가 순수 명령 flush 비용만 남고, 입력→화면
+    /// latency 도 1 프레임 감소한다. `IDXGISwapChain2::GetFrameLatencyWaitable
+    /// Object` 가 `HANDLE` 을 새 ref-count 로 반환하므로 `Drop` 에서 `CloseHandle`.
+    frame_latency_handle: HANDLE,
 
     // ── DirectComposition 트리 ────────────────────────
     /// DComp 디바이스. `Commit` 메서드 보유.
@@ -142,15 +157,29 @@ impl CompositionRenderer {
                 Scaling: DXGI_SCALING_STRETCH,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
                 AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED, // 핵심: per-pixel α
-                Flags: 0,
+                // FRAME_LATENCY_WAITABLE_OBJECT — IDXGISwapChain2 의 frame
+                // latency wait 핸들 사용. Microsoft 공식 권장 패턴 (DXGI 1.3).
+                // ResizeBuffers 시에도 같은 flag 를 재지정해야 한다.
+                Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
             };
 
             // 4. composition swap chain 생성 (HWND 와 비결합)
-            let swap_chain = dxgi_factory.CreateSwapChainForComposition(
+            let swap_chain_v1 = dxgi_factory.CreateSwapChainForComposition(
                 &dxgi_device,
                 &desc,
                 None, // 출력 제한 없음
             )?;
+            // V1 → V2 cast (frame latency API 는 V2 에서 도입).
+            let swap_chain: IDXGISwapChain2 = swap_chain_v1.cast()?;
+            // 최대 큐잉 프레임 = 1: 가장 낮은 latency. 본 앱은 paint 가 이벤트
+            // 기반이라 매 vsync 마다 호출되지 않으므로 CPU/GPU 병렬화 마진이
+            // 필요 없다.
+            swap_chain.SetMaximumFrameLatency(1)?;
+            // wait 핸들 — Drop 에서 CloseHandle 책임.
+            let frame_latency_handle = swap_chain.GetFrameLatencyWaitableObject();
+            if frame_latency_handle.is_invalid() {
+                return Err(Error::from_hresult(E_FAIL));
+            }
 
             // 5. D2D device + context — factory 는 호출자가 보유한 D2DRenderer 의
             //    것을 그대로 사용한다 (factory 통일 → WRONG_FACTORY 회피).
@@ -188,10 +217,30 @@ impl CompositionRenderer {
                 d2d_context,
                 swap_chain,
                 bitmap: Some(bitmap),
+                frame_latency_handle,
                 dcomp_device,
                 _dcomp_target: dcomp_target,
                 _dcomp_visual: dcomp_visual,
             })
+        }
+    }
+
+    /// 다음 back buffer 가 사용 가능해질 때까지 대기.
+    ///
+    /// paint 진입 직후 [`Self::begin_draw`] 이전에 호출한다. 이 wait 가 없으면
+    /// DXGI 가 `EndDraw` 내부에서 동일 대기를 수행해 ~1 ms 스톨을 만든다 (측정
+    /// 결과). 명시적으로 wait 를 분리해 두면 EndDraw 가 순수 명령 flush 비용만
+    /// 남아 paint 의 phase 별 비용 분포가 정직해진다.
+    ///
+    /// `timeout_ms` 는 비정상 상태 (GPU TDR 등) 안전망. 0 ms 가 정상 (이미
+    /// ready) 또는 1 frame (~16 ms) 이내가 일반적이므로 1000 ms 면 충분.
+    /// `WAIT_OBJECT_0` 외의 반환 값은 별도 처리하지 않는다 (다음 paint 에서
+    /// 자연 복구).
+    pub fn wait_for_back_buffer(&self, timeout_ms: u32) {
+        // SAFETY: frame_latency_handle 은 생성자에서 GetFrameLatencyWaitable
+        // Object 가 반환한 유효 핸들. drop 시 CloseHandle.
+        unsafe {
+            let _ = WaitForSingleObjectEx(self.frame_latency_handle, timeout_ms, false);
         }
     }
 
@@ -216,13 +265,30 @@ impl CompositionRenderer {
     ///
     /// device-lost (`D2DERR_RECREATE_TARGET`) 시 `Err` 를 반환한다. 호출자는
     /// 스택을 새로 만들어야 한다 (현재 PoC 에서는 재생성 로직 미포함).
+    ///
+    /// 본 앱은 phase 측정 편의를 위해 `end_draw()` + `present()` 를 분리
+    /// 호출한다 — 이 메서드는 PoC smoke example 호환 용도로 유지.
+    #[allow(dead_code)]
     pub fn end_draw_and_present(&self, sync_interval: u32) -> Result<()> {
-        // SAFETY: BeginDraw 와 짝. Present 는 매 프레임 호출.
-        unsafe {
-            self.d2d_context.EndDraw(None, None)?;
-            self.swap_chain.Present(sync_interval, DXGI_PRESENT::default()).ok()?;
-        }
-        Ok(())
+        self.end_draw()?;
+        self.present(sync_interval)
+    }
+
+    /// `BeginDraw` 의 짝. D2D 명령을 GPU 큐에 flush 하지만 화면에는 아직
+    /// 띄우지 않는다. 벤치마크에서 "그리기" 와 "Present" 비용을 분리 측정할
+    /// 때 사용. 정상 운용 경로는 [`Self::end_draw_and_present`] 가 호출한다.
+    pub fn end_draw(&self) -> Result<()> {
+        // SAFETY: BeginDraw 와 짝. tag 출력은 None — 본 앱은 D2D tag 미사용.
+        unsafe { self.d2d_context.EndDraw(None, None) }
+    }
+
+    /// swap chain back buffer 를 화면에 제출.
+    ///
+    /// `end_draw_and_present` 의 Present 단독 호출 버전. 벤치마크에서
+    /// 그리기 단계와 Present 비용을 분리 측정할 때 사용.
+    pub fn present(&self, sync_interval: u32) -> Result<()> {
+        // SAFETY: Present 는 GPU 에 비동기 제출 — 호출자는 EndDraw 이후 호출.
+        unsafe { self.swap_chain.Present(sync_interval, DXGI_PRESENT::default()).ok() }
     }
 
     /// 윈도우 리사이즈 처리.
@@ -237,6 +303,8 @@ impl CompositionRenderer {
 
         // SAFETY: SetTarget(None) + bitmap = None 으로 back buffer reference 를
         // 모두 끊고 ResizeBuffers 호출 → 새 back buffer 를 다시 wrap → SetTarget.
+        // Flag 는 swap chain 생성 시와 동일 (WAITABLE_OBJECT) — DXGI 는
+        // ResizeBuffers 호출 시 flag 를 보존하지 않으므로 매번 명시.
         unsafe {
             self.d2d_context.SetTarget(None);
             self.bitmap = None;
@@ -245,7 +313,7 @@ impl CompositionRenderer {
                 width,
                 height,
                 DXGI_FORMAT_UNKNOWN, // 포맷 유지
-                DXGI_SWAP_CHAIN_FLAG::default(),
+                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
             )?;
             let new_bitmap = create_bitmap_from_swapchain(&self.d2d_context, &self.swap_chain)?;
             self.d2d_context.SetTarget(&new_bitmap);
@@ -260,6 +328,18 @@ impl CompositionRenderer {
     pub fn commit(&self) -> Result<()> {
         // SAFETY: dcomp_device 는 생성자에서 만든 유효한 COM 객체.
         unsafe { self.dcomp_device.Commit() }
+    }
+}
+
+impl Drop for CompositionRenderer {
+    fn drop(&mut self) {
+        // GetFrameLatencyWaitableObject 가 새 핸들을 반환하므로 해제 필요.
+        if !self.frame_latency_handle.is_invalid() {
+            // SAFETY: 생성자에서 받은 핸들. drop 시 1회만 호출.
+            unsafe {
+                let _ = windows::Win32::Foundation::CloseHandle(self.frame_latency_handle);
+            }
+        }
     }
 }
 

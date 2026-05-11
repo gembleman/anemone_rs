@@ -193,7 +193,10 @@ impl App {
                     tracing::warn!("initial paint failed: {e}");
                 }
                 // 벤치마크 모드: 환경변수로 켜진 경우 paint() N 회 측정.
-                if let Some(iters) = crate::bench::paint_bench_iters() {
+                // detailed 모드가 켜져 있으면 그쪽이 우선 (phase 정보 더 많음).
+                if let Some(iters) = crate::bench::paint_bench_detailed_iters() {
+                    app_ref.run_paint_bench_detailed(iters);
+                } else if let Some(iters) = crate::bench::paint_bench_iters() {
                     app_ref.run_paint_bench(iters);
                 }
             }
@@ -247,6 +250,11 @@ impl App {
     }
 
     fn paint(&mut self) -> Result<()> {
+        use crate::bench::{phase_now, phase_record, PhaseField};
+
+        // phase 측정 hook 의 시작 시점. recorder 비활성 시 phase_now() 는 0 반환,
+        // phase_record() 는 no-op (None 체크 1 회) — 정상 paint 경로 overhead 거의 0.
+        let t = phase_now();
         // 합성 렌더러 lazy init — 첫 paint 시 부착.
         // hwnd 가 보이는 시점 (`ShowWindow` 이후) 이어야 클라이언트 사이즈가 양수다.
         if self.composition.is_none() {
@@ -267,6 +275,7 @@ impl App {
                 }
             }
         }
+        let t = phase_record(PhaseField::LazyInit, t);
 
         let cfg = self.config.borrow();
 
@@ -306,6 +315,13 @@ impl App {
             Some(r) => r,
             None => return Ok(()),
         };
+        let t = phase_record(PhaseField::Setup, t);
+
+        // waitable swap chain: 다음 back buffer 가 사용 가능해질 때까지 명시
+        // 대기. 이 wait 가 없으면 DXGI 가 EndDraw 내부에서 동일 대기를 수행해
+        // ~1 ms 스톨을 만든다. 1000 ms 는 GPU TDR 등 비정상 상태 안전망.
+        composition.wait_for_back_buffer(1000);
+        let t = phase_record(PhaseField::SwapChainWait, t);
 
         // 합성 경로: BeginDraw 는 CompositionRenderer 가 책임진다.
         let ctx = composition.begin_draw();
@@ -319,6 +335,7 @@ impl App {
         // 않다 — α 0 픽셀이든 1 픽셀이든 윈도우 사각 전체가 클릭을 잡는다.
         let clear_color = if background_visible { background_color } else { 0 };
         renderer.clear(ctx, clear_color);
+        let t = phase_record(PhaseField::BeginClear, t);
 
         // 테두리 그리기
         if border_visible
@@ -326,6 +343,7 @@ impl App {
         {
             tracing::error!("D2D draw_border failed: {e}");
         }
+        let t = phase_record(PhaseField::Border, t);
 
         // 텍스트 그리기
         if !self.current_text.is_empty() {
@@ -343,14 +361,22 @@ impl App {
                 tracing::error!("D2D draw_text failed: {e}");
             }
         }
+        let t = phase_record(PhaseField::Text, t);
 
-        // EndDraw + Present.
+        // EndDraw + Present 를 분리 호출 — phase 측정용. 정상 동작은
+        // `end_draw_and_present` 와 동일하다.
         // sync_interval=0: 응답성 우선 (paint 는 이벤트 기반이라 매 프레임 호출되지
         // 않으므로 GPU 큐 백프레셔 위험 낮음). baseline 의 UpdateLayeredWindow 도
         // vsync 미대기였으니 동일 정책.
-        if let Err(e) = composition.end_draw_and_present(0) {
-            tracing::error!("DComp end_draw_and_present failed: {e}");
+        if let Err(e) = composition.end_draw() {
+            tracing::error!("DComp end_draw failed: {e}");
         }
+        let t = phase_record(PhaseField::EndDraw, t);
+
+        if let Err(e) = composition.present(0) {
+            tracing::error!("DComp present failed: {e}");
+        }
+        let t = phase_record(PhaseField::Present, t);
 
         // hit_region 갱신 — `&mut self.d2d_renderer` 와 충돌하지 않도록 본
         // 블록의 가변 borrow 가 풀린 뒤 별도 호출. `background_visible=true`
@@ -387,6 +413,7 @@ impl App {
                 }
             }
         }
+        let _ = phase_record(PhaseField::HitRegion, t);
 
         Ok(())
     }
@@ -417,6 +444,41 @@ impl App {
             acc.push(t1 - t0);
         }
         acc.report("paint");
+    }
+
+    /// paint() 의 phase 별 비용을 분리 측정. `ANEMONE_BENCH_PAINT_DETAILED=<N>`
+    /// 환경변수가 설정된 경우 초기 paint 직후 1 회 호출된다.
+    ///
+    /// 결과 라벨: `paint_detailed_<phase>` — `setup`, `begin_clear`, `border`,
+    /// `text`, `end_draw`, `present`, `hit_region`, `lazy_init`, `total`.
+    /// Present 경로 최적화 작업의 ROI 판단 (어느 phase 가 floor 를 만드는가)
+    /// 용도. paint() 내부 hook 의 thread_local borrow overhead 가 있어 total
+    /// 자체는 일반 `paint` 벤치보다 약간 더 느릴 수 있다.
+    fn run_paint_bench_detailed(&mut self, iters: usize) {
+        const WARMUP: usize = 16;
+        for _ in 0..WARMUP {
+            if let Err(e) = self.paint() {
+                tracing::warn!("bench detailed warmup paint failed: {e}");
+                return;
+            }
+        }
+
+        let mut phased = crate::bench::PhasedBenchAccumulator::with_capacity(iters);
+        let outer_timer = crate::bench::QpcTimer::new();
+        for _ in 0..iters {
+            crate::bench::phase_begin();
+            let t0 = outer_timer.now();
+            if let Err(e) = self.paint() {
+                tracing::warn!("bench detailed paint failed: {e}");
+                crate::bench::phase_end(); // 슬롯 비워서 다음 측정 안전
+                return;
+            }
+            let t1 = outer_timer.now();
+            if let Some(rec) = crate::bench::phase_end() {
+                phased.push(&rec, t1 - t0);
+            }
+        }
+        phased.report();
     }
 
     fn resize(&mut self, width: i32, height: i32) -> Result<()> {

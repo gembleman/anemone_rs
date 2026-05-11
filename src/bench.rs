@@ -119,3 +119,208 @@ pub fn paint_bench_iters() -> Option<usize> {
     let n: usize = raw.trim().parse().ok()?;
     if n == 0 { None } else { Some(n) }
 }
+
+/// paint() 내부의 phase 별 비용을 누적하는 thread-local 슬롯.
+///
+/// `BenchPhaseRecorder::activate()` 로 켜진 동안에만 paint() 코드의 hook
+/// 지점 (`record_phase!`) 이 실제 측정을 수행하고, 비활성 시에는 None 체크
+/// 1 회 + early return 으로 overhead 가 거의 0 이다. 정상 운용 paint 경로에
+/// 이 인프라가 끼어들지 않게 하는 게 핵심.
+///
+/// **phase 구성 (정의 순서)**:
+/// - `lazy_init` — CompositionRenderer 첫 부착 (정상 케이스는 0)
+/// - `swap_chain_wait` — frame latency wait (waitable swap chain)
+/// - `setup` — config 읽기 + render style 준비
+/// - `begin_clear` — BeginDraw + 배경 클리어
+/// - `border` — 테두리 그리기 (border_visible 시)
+/// - `text` — 텍스트 그리기 (DirectWrite + outline geometry)
+/// - `end_draw` — EndDraw (D2D 명령 GPU 큐 flush)
+/// - `present` — swap chain Present
+/// - `hit_region` — hit-test 사각형 갱신 (`background_visible=false` 시)
+pub struct PhaseRecord {
+    timer: QpcTimer,
+    pub lazy_init: i64,
+    pub swap_chain_wait: i64,
+    pub setup: i64,
+    pub begin_clear: i64,
+    pub border: i64,
+    pub text: i64,
+    pub end_draw: i64,
+    pub present: i64,
+    pub hit_region: i64,
+}
+
+impl PhaseRecord {
+    pub fn new() -> Self {
+        Self {
+            timer: QpcTimer::new(),
+            lazy_init: 0,
+            swap_chain_wait: 0,
+            setup: 0,
+            begin_clear: 0,
+            border: 0,
+            text: 0,
+            end_draw: 0,
+            present: 0,
+            hit_region: 0,
+        }
+    }
+
+    /// 직전 `now()` 시점으로부터 경과 tick 을 phase 필드에 누적.
+    #[inline]
+    pub fn add(&mut self, field: PhaseField, since: i64) -> i64 {
+        let t = self.timer.now();
+        let delta = t - since;
+        match field {
+            PhaseField::LazyInit => self.lazy_init += delta,
+            PhaseField::SwapChainWait => self.swap_chain_wait += delta,
+            PhaseField::Setup => self.setup += delta,
+            PhaseField::BeginClear => self.begin_clear += delta,
+            PhaseField::Border => self.border += delta,
+            PhaseField::Text => self.text += delta,
+            PhaseField::EndDraw => self.end_draw += delta,
+            PhaseField::Present => self.present += delta,
+            PhaseField::HitRegion => self.hit_region += delta,
+        }
+        t
+    }
+
+    #[inline]
+    pub fn timer(&self) -> &QpcTimer {
+        &self.timer
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum PhaseField {
+    LazyInit,
+    SwapChainWait,
+    Setup,
+    BeginClear,
+    Border,
+    Text,
+    EndDraw,
+    Present,
+    HitRegion,
+}
+
+thread_local! {
+    /// 활성화되면 paint() 의 hook 들이 여기 누적한다. 비활성 시 None.
+    static PHASE_RECORDER: std::cell::RefCell<Option<PhaseRecord>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// phase 측정을 시작 (recorder 새로 만들어 슬롯에 보관).
+pub fn phase_begin() {
+    PHASE_RECORDER.with(|cell| {
+        *cell.borrow_mut() = Some(PhaseRecord::new());
+    });
+}
+
+/// phase 측정을 종료하고 누적된 레코드를 꺼낸다.
+pub fn phase_end() -> Option<PhaseRecord> {
+    PHASE_RECORDER.with(|cell| cell.borrow_mut().take())
+}
+
+/// hook 지점에서 호출. recorder 가 활성화된 동안만 측정을 수행한다.
+///
+/// 사용 패턴:
+/// ```ignore
+/// let t0 = phase_now(); // 시점 마킹
+/// /* phase 작업 */
+/// let t0 = phase_record(PhaseField::Setup, t0); // 누적 + 다음 phase 시작점 반환
+/// /* 다음 phase */
+/// let _ = phase_record(PhaseField::BeginClear, t0);
+/// ```
+#[inline]
+pub fn phase_now() -> i64 {
+    PHASE_RECORDER.with(|cell| {
+        let borrow = cell.borrow();
+        match borrow.as_ref() {
+            Some(rec) => rec.timer().now(),
+            None => 0,
+        }
+    })
+}
+
+#[inline]
+pub fn phase_record(field: PhaseField, since: i64) -> i64 {
+    PHASE_RECORDER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        match borrow.as_mut() {
+            Some(rec) => rec.add(field, since),
+            None => 0,
+        }
+    })
+}
+
+/// detailed phase 벤치 누적기. 한 번의 paint 마다 각 phase 시간을 별도 vec 에
+/// 모아 paint 전체 분포와 별개로 phase 별 통계를 낼 수 있게 한다.
+pub struct PhasedBenchAccumulator {
+    pub lazy_init: BenchAccumulator,
+    pub swap_chain_wait: BenchAccumulator,
+    pub setup: BenchAccumulator,
+    pub begin_clear: BenchAccumulator,
+    pub border: BenchAccumulator,
+    pub text: BenchAccumulator,
+    pub end_draw: BenchAccumulator,
+    pub present: BenchAccumulator,
+    pub hit_region: BenchAccumulator,
+    pub total: BenchAccumulator,
+}
+
+impl PhasedBenchAccumulator {
+    pub fn with_capacity(n: usize) -> Self {
+        Self {
+            lazy_init: BenchAccumulator::with_capacity(n),
+            swap_chain_wait: BenchAccumulator::with_capacity(n),
+            setup: BenchAccumulator::with_capacity(n),
+            begin_clear: BenchAccumulator::with_capacity(n),
+            border: BenchAccumulator::with_capacity(n),
+            text: BenchAccumulator::with_capacity(n),
+            end_draw: BenchAccumulator::with_capacity(n),
+            present: BenchAccumulator::with_capacity(n),
+            hit_region: BenchAccumulator::with_capacity(n),
+            total: BenchAccumulator::with_capacity(n),
+        }
+    }
+
+    pub fn push(&mut self, rec: &PhaseRecord, total_ticks: i64) {
+        self.lazy_init.push(rec.lazy_init);
+        self.swap_chain_wait.push(rec.swap_chain_wait);
+        self.setup.push(rec.setup);
+        self.begin_clear.push(rec.begin_clear);
+        self.border.push(rec.border);
+        self.text.push(rec.text);
+        self.end_draw.push(rec.end_draw);
+        self.present.push(rec.present);
+        self.hit_region.push(rec.hit_region);
+        self.total.push(total_ticks);
+    }
+
+    pub fn report(&mut self) {
+        self.total.report("paint_detailed_total");
+        self.lazy_init.report("paint_detailed_lazy_init");
+        self.swap_chain_wait.report("paint_detailed_swap_chain_wait");
+        self.setup.report("paint_detailed_setup");
+        self.begin_clear.report("paint_detailed_begin_clear");
+        self.border.report("paint_detailed_border");
+        self.text.report("paint_detailed_text");
+        self.end_draw.report("paint_detailed_end_draw");
+        self.present.report("paint_detailed_present");
+        self.hit_region.report("paint_detailed_hit_region");
+    }
+}
+
+/// `ANEMONE_BENCH_PAINT_DETAILED` 환경변수에서 반복 횟수를 읽는다. 미설정/0 이면 None.
+///
+/// `ANEMONE_BENCH_PAINT` 와 동시에 설정되면 detailed 측정만 수행한다 (이쪽이
+/// 더 많은 정보를 제공하므로). detailed 측정은 paint() 내부 hook 의 RefCell
+/// borrow + thread_local 접근 overhead 가 있어 paint 전체 시간 자체는 일반
+/// bench 보다 약간 더 느리게 측정될 수 있다 — phase 별 비율 비교용으로만
+/// 해석해야 한다.
+pub fn paint_bench_detailed_iters() -> Option<usize> {
+    let raw = std::env::var("ANEMONE_BENCH_PAINT_DETAILED").ok()?;
+    let n: usize = raw.trim().parse().ok()?;
+    if n == 0 { None } else { Some(n) }
+}
