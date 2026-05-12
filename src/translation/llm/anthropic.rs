@@ -28,11 +28,16 @@ pub async fn translate_async_with_client(
 
     let system =
         build_system_prompt_with_glossary(&params.system_prompt, source, target, &params.glossary);
+    // 프롬프트 캐싱: 게임 번역처럼 같은 시스템 프롬프트로 연속 호출하는 시나리오에서
+    // 비용/지연을 줄임. cache_control: ephemeral 은 5분 TTL. 시스템 프롬프트가
+    // 짧으면(< ~1024 토큰) 캐시 미스만 발생하고 무해. 글로서리가 길어질수록 이득 큼.
     let payload = serde_json::json!({
         "model": params.effective_model(),
         "max_tokens": params.max_tokens,
         "temperature": params.temperature,
-        "system": system,
+        "system": [
+            { "type": "text", "text": system, "cache_control": { "type": "ephemeral" } }
+        ],
         "messages": [
             { "role": "user", "content": text },
         ],
