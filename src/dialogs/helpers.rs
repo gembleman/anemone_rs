@@ -796,7 +796,13 @@ pub trait Dialog: Sized + 'static {
                         );
                         return LRESULT(0);
                     }
-                    _ => {}
+                    _ => {
+                        // handle_message 가 None 을 반환했거나 borrow_mut 실패로
+                        // 호출조차 못 됐고, 위의 명시적 분기에도 매치되지 않은 메시지.
+                        // lparam 으로 박스 포인터를 넘기는 메시지를 쓰는 다이얼로그는
+                        // 여기서 회수해야 누수가 발생하지 않는다.
+                        Self::on_orphan_message(msg, wparam, lparam);
+                    }
                 }
             } else {
                 // 다이얼로그 인스턴스가 사라진 뒤 도착한 메시지. lparam 으로 박스

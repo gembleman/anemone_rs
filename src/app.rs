@@ -7,7 +7,10 @@ use std::sync::Arc;
 use windows::{
     Win32::{
         Foundation::*,
-        Graphics::Gdi::{ClientToScreen, HBRUSH, UpdateWindow},
+        Graphics::{
+            Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET},
+            Gdi::{ClientToScreen, HBRUSH, UpdateWindow},
+        },
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
@@ -378,17 +381,37 @@ impl App {
         // sync_interval=0: 응답성 우선 (paint 는 이벤트 기반이라 매 프레임 호출되지
         // 않으므로 GPU 큐 백프레셔 위험 낮음). baseline 의 UpdateLayeredWindow 도
         // vsync 미대기였으니 동일 정책.
+        //
+        // device-lost (`D2DERR_RECREATE_TARGET` / `DXGI_ERROR_DEVICE_REMOVED` /
+        // `DXGI_ERROR_DEVICE_RESET`) 감지 시 즉시 종료하고 self.handle_device_lost()
+        // 로 캐시·합성 렌더러를 폐기. 다음 paint 가 lazy-init 분기에서 다시
+        // 만든다.
         if let Err(e) = composition.flush() {
+            if Self::is_device_lost(&e) {
+                tracing::warn!("DComp flush: device lost ({e}), recreating stack");
+                self.handle_device_lost();
+                return Ok(());
+            }
             tracing::error!("DComp flush failed: {e}");
         }
         let t = phase_record(PhaseField::Flush, t);
 
         if let Err(e) = composition.end_draw() {
+            if Self::is_device_lost(&e) {
+                tracing::warn!("DComp end_draw: device lost ({e}), recreating stack");
+                self.handle_device_lost();
+                return Ok(());
+            }
             tracing::error!("DComp end_draw failed: {e}");
         }
         let t = phase_record(PhaseField::EndDraw, t);
 
         if let Err(e) = composition.present(0) {
+            if Self::is_device_lost(&e) {
+                tracing::warn!("DComp present: device lost ({e}), recreating stack");
+                self.handle_device_lost();
+                return Ok(());
+            }
             tracing::error!("DComp present failed: {e}");
         }
         let t = phase_record(PhaseField::Present, t);
@@ -431,6 +454,29 @@ impl App {
         let _ = phase_record(PhaseField::HitRegion, t);
 
         Ok(())
+    }
+
+    /// flush/end_draw/present 의 에러가 D2D/DXGI 디바이스 손실인지 판정.
+    ///
+    /// 손실 시 D2D context 와 swap chain 의 모든 GPU 객체가 무효 — 같은
+    /// device 위에서 재시도해 봐야 같은 에러가 반복된다. 새 device 와
+    /// swap chain 으로 스택을 통째로 다시 만들어야 한다.
+    fn is_device_lost(e: &Error) -> bool {
+        let code = e.code();
+        code == D2DERR_RECREATE_TARGET
+            || code == DXGI_ERROR_DEVICE_REMOVED
+            || code == DXGI_ERROR_DEVICE_RESET
+    }
+
+    /// device-lost 복구: 합성 렌더러를 폐기하고 D2D 캐시(brush/text/outline)
+    /// 를 비운다. 다음 paint 의 lazy-init 분기가 새 device 위에서
+    /// `CompositionRenderer` 를 다시 만들고, D2DRenderer 는 새 RT 에
+    /// 맞춰 캐시를 재구축한다.
+    fn handle_device_lost(&mut self) {
+        self.composition = None;
+        if let Some(d2d) = self.d2d_renderer.as_mut() {
+            d2d.invalidate_device_caches();
+        }
     }
 
     /// paint() 1 회 비용을 N 회 반복 측정해 통계를 로그로 출력.

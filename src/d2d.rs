@@ -715,10 +715,10 @@ impl D2DRenderer {
     ///   객체들은 옛 device 에 묶여 있어 새 RT 에서 거부됨.
     /// - render target 의 디바이스가 바뀌는 경우 (예: 합성 경로 재초기화).
     ///
-    /// 본 앱은 아직 device-lost 복구 로직이 없지만, 추후 추가 시 한 곳에서
-    /// 모든 캐시를 회수하도록 메서드를 미리 정의해 둔다 — 캐시 추가/제거가
-    /// 이 함수의 변경으로 자연스럽게 일치되도록 한다.
-    #[allow(dead_code)]
+    /// `App::paint` 가 `flush` / `end_draw` / `present` 의 device-lost
+    /// HRESULT 를 감지하면 호출. 캐시 일괄 폐기 후 `CompositionRenderer` 를
+    /// drop 하면 다음 paint 의 lazy-init 분기가 새 device 위에서 다시
+    /// 만든다 (`App::handle_device_lost`).
     pub fn invalidate_device_caches(&mut self) {
         self.brush_cache.clear();
         self.text_cache = None;
