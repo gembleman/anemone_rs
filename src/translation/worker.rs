@@ -564,7 +564,7 @@ impl TranslationDispatch {
                     EngineCredentials::Llm(p) => p,
                     _ => return Err(TranslationError::EngineNotInitialized("LLM")),
                 };
-                match params.provider {
+                let result = match params.provider {
                     LlmProvider::OpenAi | LlmProvider::Grok | LlmProvider::OpenRouter => {
                         super::llm::openai_compat::translate_async_with_client(
                             client,
@@ -595,7 +595,11 @@ impl TranslationDispatch {
                         )
                         .await
                     }
+                };
+                if let Ok(ref output) = result {
+                    super::llm::usage::record(req.text.len(), output.len());
                 }
+                result
             }
         }
     }
