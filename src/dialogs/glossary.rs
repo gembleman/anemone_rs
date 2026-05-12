@@ -72,8 +72,9 @@ impl Dialog for GlossaryDialog {
             self.create_label(240, 240, 50, 18, "번역:")?;
             self.create_edit(290, 238, 170, 22, ctrl_id::TARGET_EDIT, "")?;
 
-            self.create_button(20, 270, 100, 26, ctrl_id::BTN_ADD, "추가/수정")?;
-            self.create_button(130, 270, 80, 26, ctrl_id::BTN_REMOVE, "삭제")?;
+            // 편집 행 두 버튼 폭 통일 (100/80 → 90/90) 로 좌측 시각 균형 정리.
+            self.create_button(20, 270, 90, 26, ctrl_id::BTN_ADD, "추가/수정")?;
+            self.create_button(120, 270, 90, 26, ctrl_id::BTN_REMOVE, "삭제")?;
 
             self.create_button(280, 308, 90, 30, ctrl_id::BTN_APPLY, "적용")?;
             self.create_button(380, 308, 80, 30, ctrl_id::BTN_CLOSE, "닫기")?;
