@@ -350,6 +350,7 @@ pub unsafe fn create_button(
 
 /// 체크박스 생성
 // SAFETY: Caller must provide a valid parent HWND.
+#[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
 pub unsafe fn create_checkbox(
     parent: HWND,
     x: i32,
@@ -388,6 +389,7 @@ pub unsafe fn create_checkbox(
 
 /// 라디오 버튼 생성
 // SAFETY: Caller must provide a valid parent HWND.
+#[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
 pub unsafe fn create_radio(
     parent: HWND,
     x: i32,
@@ -425,6 +427,7 @@ pub unsafe fn create_radio(
 
 /// 콤보박스 생성 (아이템 + 초기 선택)
 // SAFETY: Caller must provide a valid parent HWND.
+#[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/아이템/선택은 의도된 시그니처.
 pub unsafe fn create_combobox(
     parent: HWND,
     x: i32,
@@ -607,14 +610,17 @@ pub trait DialogControls {
         unsafe { create_button(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 
+    #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
     unsafe fn create_checkbox(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str, checked: bool) -> Result<HWND> {
         unsafe { create_checkbox(self.dialog_hwnd(), x, y, w, h, id, text, checked) }
     }
 
+    #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
     unsafe fn create_radio(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str, checked: bool) -> Result<HWND> {
         unsafe { create_radio(self.dialog_hwnd(), x, y, w, h, id, text, checked) }
     }
 
+    #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/아이템/선택은 의도된 시그니처.
     unsafe fn create_combobox(&self, x: i32, y: i32, w: i32, h: i32, id: u16, items: &[&str], selected: usize) -> Result<HWND> {
         unsafe { create_combobox(self.dialog_hwnd(), x, y, w, h, id, items, selected) }
     }
@@ -635,6 +641,7 @@ pub trait DialogControls {
         unsafe { create_listbox(self.dialog_hwnd(), x, y, w, h, id) }
     }
 
+    #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/min/max는 의도된 시그니처.
     unsafe fn create_trackbar(&self, x: i32, y: i32, w: i32, h: i32, id: u16, min: i32, max: i32) -> Result<HWND> {
         unsafe { create_trackbar(self.dialog_hwnd(), x, y, w, h, id, min, max) }
     }
@@ -884,6 +891,7 @@ pub unsafe fn create_tab_control(
 
 /// 트랙바(슬라이더) 생성
 // SAFETY: Caller must provide a valid parent HWND.
+#[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/min/max는 의도된 시그니처.
 pub unsafe fn create_trackbar(
     parent: HWND,
     x: i32,
