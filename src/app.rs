@@ -925,17 +925,17 @@ impl App {
         };
 
         // EzTrans 초기화 (필요시)
-        if engine == TranslationEngine::EzTrans {
-            if !config.translation.eztrans_dll_path.is_empty() {
-                let manager = get_eztrans_manager();
-                if let Ok(mut mgr) = manager.lock() {
-                    if let Err(e) = mgr.init(
-                        &config.translation.eztrans_dll_path,
-                        &config.translation.eztrans_dat_path,
-                    ) {
-                        tracing::warn!("EzTrans init failed: {e}");
-                    }
-                }
+        if engine == TranslationEngine::EzTrans
+            && !config.translation.eztrans_dll_path.is_empty()
+        {
+            let manager = get_eztrans_manager();
+            if let Ok(mut mgr) = manager.lock()
+                && let Err(e) = mgr.init(
+                    &config.translation.eztrans_dll_path,
+                    &config.translation.eztrans_dat_path,
+                )
+            {
+                tracing::warn!("EzTrans init failed: {e}");
             }
         }
 

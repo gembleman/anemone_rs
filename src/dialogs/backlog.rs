@@ -262,10 +262,10 @@ impl BacklogDialog {
                 Some(WPARAM(usize::MAX)), Some(LPARAM(-1)),
             );
 
-            if let Some(ref name) = entry.name {
-                if self.filter != BacklogFilter::Translation {
-                    self.append_styled_text(&format!("[{}] ", name), 0x00FFFF, true);
-                }
+            if let Some(ref name) = entry.name
+                && self.filter != BacklogFilter::Translation
+            {
+                self.append_styled_text(&format!("[{}] ", name), 0x00FFFF, true);
             }
 
             if self.filter != BacklogFilter::Translation {
@@ -275,12 +275,12 @@ impl BacklogDialog {
                 }
             }
 
-            if let Some(ref translation) = entry.translation {
-                if self.filter != BacklogFilter::Original {
-                    self.append_styled_text(translation, 0x90EE90, false);
-                    if self.add_linefeed {
-                        self.append_styled_text("\r\n", 0x90EE90, false);
-                    }
+            if let Some(ref translation) = entry.translation
+                && self.filter != BacklogFilter::Original
+            {
+                self.append_styled_text(translation, 0x90EE90, false);
+                if self.add_linefeed {
+                    self.append_styled_text("\r\n", 0x90EE90, false);
                 }
             }
 
@@ -468,10 +468,10 @@ impl BacklogDialog {
 pub fn add_to_backlog(entry: LogEntry) {
     BACKLOG_INSTANCE.with(|cell| {
         let Ok(guard) = cell.try_borrow() else { return; };
-        if let Some(ref dialog) = *guard {
-            if let Ok(mut d) = dialog.try_borrow_mut() {
-                d.add_entry(entry);
-            }
+        if let Some(ref dialog) = *guard
+            && let Ok(mut d) = dialog.try_borrow_mut()
+        {
+            d.add_entry(entry);
         }
     });
 }

@@ -953,16 +953,16 @@ impl SettingsDialog {
                 // SAFETY: lparam points to a valid NMHDR struct from the system.
                 unsafe {
                     let nmhdr = &*(lparam.0 as *const NMHDR);
-                    if nmhdr.code == TCN_SELCHANGE {
-                        if let Ok(tab_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32) {
-                            let sel = SendMessageW(
-                                tab_hwnd,
-                                TCM_GETCURSEL,
-                                Some(WPARAM(0)),
-                                Some(LPARAM(0)),
-                            ).0 as usize;
-                            self.switch_tab(sel);
-                        }
+                    if nmhdr.code == TCN_SELCHANGE
+                        && let Ok(tab_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32)
+                    {
+                        let sel = SendMessageW(
+                            tab_hwnd,
+                            TCM_GETCURSEL,
+                            Some(WPARAM(0)),
+                            Some(LPARAM(0)),
+                        ).0 as usize;
+                        self.switch_tab(sel);
                     }
                 }
                 Some(LRESULT(0))

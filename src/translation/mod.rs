@@ -360,10 +360,10 @@ pub fn get_eztrans_manager() -> Arc<Mutex<EzTransManager>> {
 /// `EngineNotInitialized` 를 돌려준다.
 pub fn translate_with_eztrans(text: &str, source: Language, target: Language) -> TranslationResult {
     let manager = get_eztrans_manager();
-    if let Ok(mgr) = manager.lock() {
-        if let Some(ref engine) = mgr.engine {
-            return engine.translate(text, source, target);
-        }
+    if let Ok(mgr) = manager.lock()
+        && let Some(ref engine) = mgr.engine
+    {
+        return engine.translate(text, source, target);
     }
     Err(TranslationError::EngineNotInitialized("EzTrans"))
 }

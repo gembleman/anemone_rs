@@ -181,11 +181,11 @@ impl GlossaryDialog {
     fn set_control_text(&self, ctrl_id: u16, text: &str) {
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid control handle.
         unsafe {
-            if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32) {
-                if !ctrl.is_invalid() {
-                    let text_wide = to_wide(text);
-                    let _ = SetWindowTextW(ctrl, PCWSTR(text_wide.as_ptr()));
-                }
+            if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32)
+                && !ctrl.is_invalid()
+            {
+                let text_wide = to_wide(text);
+                let _ = SetWindowTextW(ctrl, PCWSTR(text_wide.as_ptr()));
             }
         }
     }

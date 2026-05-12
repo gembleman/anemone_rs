@@ -647,10 +647,10 @@ impl Config {
         use std::sync::OnceLock;
         static CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
         CONFIG_PATH.get_or_init(|| {
-            if let Ok(exe_path) = std::env::current_exe() {
-                if let Some(exe_dir) = exe_path.parent() {
-                    return exe_dir.join("config.toml");
-                }
+            if let Ok(exe_path) = std::env::current_exe()
+                && let Some(exe_dir) = exe_path.parent()
+            {
+                return exe_dir.join("config.toml");
             }
             PathBuf::from("config.toml")
         })

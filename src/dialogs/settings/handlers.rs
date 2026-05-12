@@ -404,13 +404,13 @@ impl SettingsDialog {
             return;
         }
         let manager = get_eztrans_manager();
-        if let Ok(mut mgr) = manager.lock() {
-            if let Err(e) = mgr.init(
+        if let Ok(mut mgr) = manager.lock()
+            && let Err(e) = mgr.init(
                 &config.translation.eztrans_dll_path,
                 &config.translation.eztrans_dat_path,
-            ) {
-                tracing::warn!("EzTrans init failed in sync: {e}");
-            }
+            )
+        {
+            tracing::warn!("EzTrans init failed in sync: {e}");
         }
     }
 
@@ -418,11 +418,11 @@ impl SettingsDialog {
     fn set_control_text(&self, ctrl_id: u16, text: &str) {
         // SAFETY: self.hwnd is valid; GetDlgItem returns a valid control handle.
         unsafe {
-            if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32) {
-                if !ctrl.is_invalid() {
-                    let text_wide = to_wide(text);
-                    let _ = SetWindowTextW(ctrl, PCWSTR(text_wide.as_ptr()));
-                }
+            if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32)
+                && !ctrl.is_invalid()
+            {
+                let text_wide = to_wide(text);
+                let _ = SetWindowTextW(ctrl, PCWSTR(text_wide.as_ptr()));
             }
         }
     }
@@ -526,15 +526,15 @@ impl SettingsDialog {
     fn update_trackbar_pos(&self, trackbar_id: u16, value: i32) {
         // SAFETY: self.hwnd is valid; GetDlgItem returns a valid control handle.
         unsafe {
-            if let Ok(trackbar) = GetDlgItem(Some(self.hwnd), trackbar_id as i32) {
-                if !trackbar.is_invalid() {
-                    let _ = SendMessageW(
-                        trackbar,
-                        TBM_SETPOS,
-                        Some(WPARAM(1)),
-                        Some(LPARAM(value as isize)),
-                    );
-                }
+            if let Ok(trackbar) = GetDlgItem(Some(self.hwnd), trackbar_id as i32)
+                && !trackbar.is_invalid()
+            {
+                let _ = SendMessageW(
+                    trackbar,
+                    TBM_SETPOS,
+                    Some(WPARAM(1)),
+                    Some(LPARAM(value as isize)),
+                );
             }
         }
     }

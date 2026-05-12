@@ -331,14 +331,14 @@ impl FileTransProgressDialog {
                     Self::set_text(self.total_text, &text);
 
                     // 작업 표시줄 진행률 갱신 (전체 라인 기준 — 가장 안정적인 단조 증가 신호).
-                    if let Some(ref tb) = self.taskbar {
-                        if self.state.total_lines > 0 {
-                            let _ = tb.SetProgressValue(
-                                self.parent_hwnd,
-                                self.state.current_line.max(0) as u64,
-                                self.state.total_lines as u64,
-                            );
-                        }
+                    if let Some(ref tb) = self.taskbar
+                        && self.state.total_lines > 0
+                    {
+                        let _ = tb.SetProgressValue(
+                            self.parent_hwnd,
+                            self.state.current_line.max(0) as u64,
+                            self.state.total_lines as u64,
+                        );
                     }
                 }
                 WM_PROGRESS_COMPLETE => {

@@ -146,10 +146,10 @@ pub fn open_files_multi(hwnd: HWND, title: &str, filters: &[FileFilter]) -> Vec<
         let count = items.GetCount().unwrap_or(0);
         let mut paths = Vec::with_capacity(count as usize);
         for i in 0..count {
-            if let Ok(item) = items.GetItemAt(i) {
-                if let Some(p) = shell_item_to_path(&item) {
-                    paths.push(p);
-                }
+            if let Ok(item) = items.GetItemAt(i)
+                && let Some(p) = shell_item_to_path(&item)
+            {
+                paths.push(p);
             }
         }
         paths
@@ -217,14 +217,14 @@ pub fn save_file(
                 let name_w = to_wide(name);
                 let _ = dialog.SetFileName(PCWSTR(name_w.as_ptr()));
             }
-            if let Some(folder) = path.parent().and_then(|s| s.to_str()) {
-                if !folder.is_empty() {
-                    let folder_w = to_wide(folder);
-                    let item: windows::core::Result<IShellItem> =
-                        SHCreateItemFromParsingName(PCWSTR(folder_w.as_ptr()), None);
-                    if let Ok(item) = item {
-                        let _ = dialog.SetFolder(&item);
-                    }
+            if let Some(folder) = path.parent().and_then(|s| s.to_str())
+                && !folder.is_empty()
+            {
+                let folder_w = to_wide(folder);
+                let item: windows::core::Result<IShellItem> =
+                    SHCreateItemFromParsingName(PCWSTR(folder_w.as_ptr()), None);
+                if let Ok(item) = item {
+                    let _ = dialog.SetFolder(&item);
                 }
             }
         }
