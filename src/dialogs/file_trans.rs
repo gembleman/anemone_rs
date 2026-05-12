@@ -156,7 +156,7 @@ impl Dialog for FileTransDialog {
                 WINDOW_STYLE(
                     WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
                 ),
-                s(75), s(27), s(370), s(24),
+                s(75), s(26), s(370), s(26),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::LOAD_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -169,7 +169,7 @@ impl Dialog for FileTransDialog {
                 Some(LPARAM(0)),
             );
 
-            self.create_button(455, 26, 70, 26, ctrl_id::LOAD_BROWSER, "찾아보기...")?;
+            self.create_button(455, 26, 70, 26, ctrl_id::LOAD_BROWSER, "찾아보기")?;
 
             // ====== 출력 파일 그룹 ======
             self.create_group_box(10, 80, 525, 70, "출력 파일")?;
@@ -184,7 +184,7 @@ impl Dialog for FileTransDialog {
                 WINDOW_STYLE(
                     WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
                 ),
-                s(75), s(102), s(370), s(24),
+                s(75), s(101), s(370), s(26),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::SAVE_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -198,7 +198,7 @@ impl Dialog for FileTransDialog {
             );
 
             self.save_browser_btn =
-                self.create_button(455, 101, 70, 26, ctrl_id::SAVE_BROWSER, "변경...")?;
+                self.create_button(455, 101, 70, 26, ctrl_id::SAVE_BROWSER, "찾아보기")?;
             let _ = EnableWindow(self.save_browser_btn, false);
 
             // ====== 미리보기 그룹 ======

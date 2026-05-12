@@ -591,7 +591,9 @@ impl SettingsDialog {
         shadow_enabled: bool,
     ) -> Result<()> {
         unsafe {
-            let bw = (w - 20) / 2;  // 버튼 너비
+            // 좌/우 마진 5/6 (1px 비대칭), 버튼 폭 (w-15)/2 = 67, 간격 5.
+            // 기존 (w-20)/2=65 + 좌5/우10 비대칭을 좁힌 결과.
+            let bw = (w - 15) / 2;  // 버튼 너비
 
             let h = self.create_group_box(x, y, w, 125, title)?;
             self.register_control(tab, h);
@@ -604,7 +606,7 @@ impl SettingsDialog {
             self.register_control(tab, h);
             let h = self.create_color_button(x + 5 + bw + 5, y + 47, bw, 22, shadow_id, "그림자색")?;
             self.register_control(tab, h);
-            let h = self.create_button(x + 5, y + 74, w - 10, 22, font_id, "폰트 선택")?;
+            let h = self.create_button(x + 5, y + 74, w - 11, 22, font_id, "폰트 선택")?;
             self.register_control(tab, h);
             let h = self.create_checkbox(x + 5, y + 100, 110, 20, shadow_check_id, "그림자 사용", shadow_enabled)?;
             self.register_control(tab, h);

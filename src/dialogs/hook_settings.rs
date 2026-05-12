@@ -86,8 +86,11 @@ impl Dialog for HookSettingsDialog {
             self.create_button(200, 120, 50, 30, ctrl_id::BTN_TO_ACTIVE, "<-")?;
 
             // ====== 비활성 후크 그룹 ======
+            // 활성 listbox 와 동일한 가시 영역 (180px) 으로 통일. 비활성 쪽은
+            // 위/아래 버튼이 없어 그룹박스 하단에 60px 잉여가 생기지만, 두
+            // 그룹의 listbox 시각 영역 일치가 우선.
             self.create_group_box(260, 10, 180, 240, "비활성 후크")?;
-            self.create_listbox(270, 30, 160, 210, ctrl_id::INACTIVE_LIST)?;
+            self.create_listbox(270, 30, 160, 180, ctrl_id::INACTIVE_LIST)?;
 
             // ====== 적용/닫기 버튼 ======
             self.create_button(270, 270, 80, 30, ctrl_id::BTN_APPLY, "적용")?;
