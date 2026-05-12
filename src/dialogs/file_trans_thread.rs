@@ -104,6 +104,12 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     // TLS 세션 재사용으로 라인 단위 동기 호출의 DNS·핸드셰이크 비용 제거.
     let http_client = shared_client();
 
+    // 인코딩 검증 — UTF-8 / UTF-8 BOM 만 허용.
+    if let Err(msg) = validate_inputs_utf8(&job_data.input_files) {
+        send_error(progress_hwnd, &msg);
+        return;
+    }
+
     // 전체 라인 수 계산
     let total_lines = calculate_total_lines(&job_data.input_files);
     if total_lines < 0 {
@@ -166,6 +172,14 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
 
     // 완료
     send_progress_message(progress_hwnd, WM_PROGRESS_COMPLETE, 0, 0);
+}
+
+/// 입력 파일들이 모두 UTF-8 또는 UTF-8 BOM 인지 검증.
+fn validate_inputs_utf8(files: &[PathBuf]) -> Result<(), String> {
+    for path in files {
+        crate::util::read_utf8_translation_input(path)?;
+    }
+    Ok(())
 }
 
 /// 전체 라인 수 계산
@@ -247,6 +261,13 @@ fn process_single_file(
     });
 
     let mut prev: Option<String> = lines_iter.next();
+    // 첫 줄이 UTF-8 BOM 으로 시작하면 떼어낸다. 사전 검증에서 인코딩은
+    // 확인되었지만, BOM 자체는 본문에 섞이지 않도록 명시적으로 제거.
+    if let Some(first) = prev.as_mut()
+        && let Some(stripped) = first.strip_prefix('\u{FEFF}')
+    {
+        *first = stripped.to_string();
+    }
     let mut idx: usize = 0;
 
     for next in lines_iter {

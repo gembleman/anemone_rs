@@ -460,9 +460,8 @@ fn cmd_file_trans(args: &[String], json: bool) -> Result<(), String> {
     use std::fs::File;
     use std::io::{BufRead, BufReader, BufWriter, Write};
 
-    let in_file = File::open(&input)
-        .map_err(|e| format!("입력 파일을 열 수 없습니다: {} ({})", input.display(), e))?;
-    let reader = BufReader::new(in_file);
+    let body = crate::util::read_utf8_translation_input(&input)?;
+    let reader = BufReader::new(std::io::Cursor::new(body));
 
     let out_file = File::create(&output)
         .map_err(|e| format!("출력 파일을 생성할 수 없습니다: {} ({})", output.display(), e))?;

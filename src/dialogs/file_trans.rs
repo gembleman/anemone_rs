@@ -4,7 +4,7 @@
 //! Common Item Dialog (IFileOpenDialog / IFileSaveDialog) 사용.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -381,18 +381,17 @@ impl FileTransDialog {
         unsafe { Self::set_edit_text(self.save_edit, &path_str); }
     }
 
-    /// 파일 미리보기 (처음 7줄)
-    fn show_preview(&self, path: &PathBuf) {
-        use std::fs::File;
-        use std::io::{BufRead, BufReader};
+    /// 파일 미리보기 (처음 7줄). 입력은 UTF-8 / UTF-8 BOM 만 허용한다.
+    fn show_preview(&self, path: &Path) {
+        use std::io::{BufRead, BufReader, Cursor};
 
-        let content = match File::open(path) {
-            Ok(file) => {
-                let reader = BufReader::new(file);
+        let content = match crate::util::read_utf8_translation_input(path) {
+            Ok(body) => {
+                let reader = BufReader::new(Cursor::new(body));
                 let lines: Vec<String> = reader.lines().take(7).filter_map(|l| l.ok()).collect();
                 lines.join("\r\n")
             }
-            Err(_) => "! 파일을 열 수 없습니다.".to_string(),
+            Err(msg) => format!("! {msg}"),
         };
 
         // SAFETY: self.preview_edit is a valid edit control handle created in create_controls.
