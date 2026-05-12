@@ -80,6 +80,11 @@ impl LogEntry {
 pub struct BacklogDialog {
     hwnd: HWND,
     richedit: HWND,
+    /// 필터 그룹박스 핸들 — `WM_SIZE` 재배치용. 그룹박스는 ID=0 으로
+    /// 생성되어 `GetDlgItem` 으로 못 찾으므로 직접 보관.
+    group_filter: HWND,
+    /// 동작 그룹박스 핸들 — 위와 동일.
+    group_action: HWND,
     filter: BacklogFilter,
     add_linefeed: bool,
     entries: Vec<LogEntry>,
@@ -140,6 +145,8 @@ impl Dialog for BacklogDialog {
         BacklogDialog {
             hwnd,
             richedit: HWND::default(),
+            group_filter: HWND::default(),
+            group_action: HWND::default(),
             filter: BacklogFilter::All,
             add_linefeed: true,
             entries: Vec::new(),
@@ -183,7 +190,8 @@ impl Dialog for BacklogDialog {
             );
 
             // ====== 옵션 그룹 ======
-            self.create_group_box(10, BACKLOG_HEIGHT - 100, 350, 60, "필터")?;
+            self.group_filter =
+                self.create_group_box(10, BACKLOG_HEIGHT - 100, 350, 60, "필터")?;
 
             self.create_radio(20, BACKLOG_HEIGHT - 80, 80, 20,
                 ctrl_id::RADIO_ORIGINAL, "원문만", self.filter == BacklogFilter::Original)?;
@@ -196,7 +204,8 @@ impl Dialog for BacklogDialog {
                 ctrl_id::CHK_LINEFEED, "줄바꿈 추가", self.add_linefeed)?;
 
             // ====== 버튼 그룹 ======
-            self.create_group_box(370, BACKLOG_HEIGHT - 100, 200, 60, "동작")?;
+            self.group_action =
+                self.create_group_box(370, BACKLOG_HEIGHT - 100, 200, 60, "동작")?;
 
             self.create_button(380, BACKLOG_HEIGHT - 78, 55, 28, ctrl_id::BTN_CLEAR, "초기화")?;
             self.create_button(445, BACKLOG_HEIGHT - 78, 55, 28, ctrl_id::BTN_SAVE, "저장")?;
@@ -403,16 +412,54 @@ impl BacklogDialog {
     }
 
     /// 윈도우 크기 변경 시 컨트롤 재배치
+    ///
+    /// RichEdit 는 새 client size 에 맞춰 늘리고, 하단 필터/동작 그룹은
+    /// 원본 디자인 좌표 (`BACKLOG_HEIGHT - 100` 등) 를 새 height 기준으로
+    /// 평행이동해 그룹/라디오/버튼이 클라이언트 밖으로 사라지지 않게 한다.
+    /// X·width·height 는 디자인 그대로 유지.
     fn on_size(&self, width: i32, height: i32) {
-        // SAFETY: self.richedit is a valid control handle from create_controls.
+        // SAFETY: self.richedit, self.group_* 는 create_controls 이후 유효.
+        // GetDlgItem 은 컨트롤 ID 가 매칭되면 유효 핸들을 돌려주고,
+        // 실패하면 Err 라 무시한다.
         unsafe {
             let dpi = crate::dpi::dpi_for_window(self.hwnd);
             let s = |v: i32| crate::dpi::scale(v, dpi);
+
             let _ = SetWindowPos(
                 self.richedit, None,
                 s(10), s(10), width - s(30), height - s(120),
                 SWP_NOZORDER,
             );
+
+            // 디자인 좌표를 새 height 기준으로 평행이동.
+            // 원본은 BACKLOG_HEIGHT 기준 절대 좌표이므로 height/BACKLOG_HEIGHT
+            // 비율이 아니라 height - design_height 차분 (dy) 으로 환산.
+            let dy = height - s(BACKLOG_HEIGHT);
+            let move_to = |ctrl: HWND, x: i32, y: i32, w: i32, h: i32| {
+                let _ = SetWindowPos(
+                    ctrl, None,
+                    s(x), s(y) + dy, s(w), s(h),
+                    SWP_NOZORDER,
+                );
+            };
+            let move_ctrl = |id: u16, x: i32, y: i32, w: i32, h: i32| {
+                if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), id as i32) {
+                    move_to(ctrl, x, y, w, h);
+                }
+            };
+
+            // 그룹박스 (ID=0, GetDlgItem 으로 못 찾으므로 저장 핸들 사용)
+            move_to(self.group_filter, 10, BACKLOG_HEIGHT - 100, 350, 60);
+            move_to(self.group_action, 370, BACKLOG_HEIGHT - 100, 200, 60);
+
+            use ctrl_id::*;
+            move_ctrl(RADIO_ORIGINAL,    20, BACKLOG_HEIGHT - 80, 80, 20);
+            move_ctrl(RADIO_TRANSLATION, 105, BACKLOG_HEIGHT - 80, 80, 20);
+            move_ctrl(RADIO_ALL,         190, BACKLOG_HEIGHT - 80, 60, 20);
+            move_ctrl(CHK_LINEFEED,      260, BACKLOG_HEIGHT - 80, 90, 20);
+            move_ctrl(BTN_CLEAR,         380, BACKLOG_HEIGHT - 78, 55, 28);
+            move_ctrl(BTN_SAVE,          445, BACKLOG_HEIGHT - 78, 55, 28);
+            move_ctrl(BTN_FONT,          510, BACKLOG_HEIGHT - 78, 55, 28);
         }
     }
 }
