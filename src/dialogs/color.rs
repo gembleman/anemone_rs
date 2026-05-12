@@ -392,22 +392,21 @@ impl ColorDialog {
 
                     // 컨텍스트에 알파값 저장
                     HOOK_CONTEXT.with(|ctx| {
-                        if let Ok(mut guard) = ctx.try_borrow_mut() {
-                            if let Some(ref mut c) = *guard {
-                                c.alpha = alpha;
-                            }
+                        if let Ok(mut guard) = ctx.try_borrow_mut()
+                            && let Some(ref mut c) = *guard
+                        {
+                            c.alpha = alpha;
                         }
                     });
 
                     // 콜백 호출
                     let color = Self::read_dialog_argb(hdlg);
                     HOOK_CONTEXT.with(|ctx| {
-                        if let Ok(guard) = ctx.try_borrow() {
-                            if let Some(ref c) = *guard {
-                                if let Some(ref cb) = c.callback {
-                                    cb(color);
-                                }
-                            }
+                        if let Ok(guard) = ctx.try_borrow()
+                            && let Some(ref c) = *guard
+                            && let Some(ref cb) = c.callback
+                        {
+                            cb(color);
                         }
                     });
                 }
@@ -417,12 +416,11 @@ impl ColorDialog {
                     // 색상 변경 시 콜백 호출
                     let color = Self::read_dialog_argb(hdlg);
                     HOOK_CONTEXT.with(|ctx| {
-                        if let Ok(guard) = ctx.try_borrow() {
-                            if let Some(ref c) = *guard {
-                                if let Some(ref cb) = c.callback {
-                                    cb(color);
-                                }
-                            }
+                        if let Ok(guard) = ctx.try_borrow()
+                            && let Some(ref c) = *guard
+                            && let Some(ref cb) = c.callback
+                        {
+                            cb(color);
                         }
                     });
                 }

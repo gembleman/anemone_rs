@@ -79,13 +79,12 @@ fn parse_generate_content_response(json: &str) -> TranslationResult {
     if let Some(reason) = value
         .pointer("/candidates/0/finishReason")
         .and_then(|v| v.as_str())
+        && reason != "STOP"
     {
-        if reason != "STOP" {
-            return Err(TranslationError::Api {
-                code: 0,
-                message: format!("Gemini 응답 중단: {}", reason),
-            });
-        }
+        return Err(TranslationError::Api {
+            code: 0,
+            message: format!("Gemini 응답 중단: {}", reason),
+        });
     }
 
     if let Some(err) = value.get("error") {

@@ -60,10 +60,10 @@ fn parse_messages_response(json: &str) -> TranslationResult {
     if let Some(arr) = value.get("content").and_then(|v| v.as_array()) {
         let mut out = String::new();
         for block in arr {
-            if block.get("type").and_then(|v| v.as_str()) == Some("text") {
-                if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
-                    out.push_str(t);
-                }
+            if block.get("type").and_then(|v| v.as_str()) == Some("text")
+                && let Some(t) = block.get("text").and_then(|v| v.as_str())
+            {
+                out.push_str(t);
             }
         }
         if !out.is_empty() {
