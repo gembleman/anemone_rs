@@ -457,21 +457,24 @@ impl ColorDialog {
 mod tests {
     use super::*;
 
+    fn channels(argb: u32) -> (u8, u8, u8, u8) {
+        (
+            ((argb >> 24) & 0xFF) as u8,
+            ((argb >> 16) & 0xFF) as u8,
+            ((argb >> 8) & 0xFF) as u8,
+            (argb & 0xFF) as u8,
+        )
+    }
+
     #[test]
     fn test_color_result() {
         let color = ColorResult { argb: 0x80FF8040 };
-        assert_eq!(color.alpha(), 0x80);
-        assert_eq!(color.red(), 0xFF);
-        assert_eq!(color.green(), 0x80);
-        assert_eq!(color.blue(), 0x40);
+        assert_eq!(channels(color.argb), (0x80, 0xFF, 0x80, 0x40));
     }
 
     #[test]
     fn test_colorref_conversion() {
         let result = ColorResult::from_colorref(0x402080, 0xC0); // BGR -> RGB
-        assert_eq!(result.alpha(), 0xC0);
-        assert_eq!(result.red(), 0x80);
-        assert_eq!(result.green(), 0x20);
-        assert_eq!(result.blue(), 0x40);
+        assert_eq!(channels(result.argb), (0xC0, 0x80, 0x20, 0x40));
     }
 }

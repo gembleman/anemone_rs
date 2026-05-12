@@ -62,14 +62,50 @@ fn parse_chat_completion(json: &str) -> TranslationResult {
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|e| TranslationError::Parse(e.to_string()))?;
 
-    if let Some(text) = value
-        .pointer("/choices/0/message/content")
+    // OpenAI 표준 에러 형식 — choices 가 없을 때도 본문에 error 가 함께 올 수 있어
+    // 텍스트 추출보다 먼저 검사하면 오해의 소지가 있으나, 정상 응답에는 error 가
+    // 절대 동봉되지 않으므로 충돌 없음. 텍스트가 잡혔으면 정상으로 반환한다.
+    let extracted = extract_message_text(value.pointer("/choices/0/message/content"));
+    let finish_reason = value
+        .pointer("/choices/0/finish_reason")
         .and_then(|v| v.as_str())
-    {
-        return Ok(text.trim().to_string());
+        .unwrap_or("");
+
+    if let Some(text) = extracted {
+        let trimmed = text.trim().to_string();
+        // finish_reason == "length" 는 max_tokens 한계로 응답이 절단됐다는 뜻.
+        // 사용자에게 명시적으로 알려야 짤린 번역을 그대로 쓰는 사고를 막을 수 있다.
+        if finish_reason == "length" {
+            return Err(TranslationError::Api {
+                code: 0,
+                message: format!(
+                    "LLM 응답이 max_tokens 한계로 절단됨 (finish_reason=length). 부분 결과: {}",
+                    if trimmed.chars().count() > 80 {
+                        let head: String = trimmed.chars().take(80).collect();
+                        format!("{head}...")
+                    } else {
+                        trimmed.clone()
+                    }
+                ),
+            });
+        }
+        if !trimmed.is_empty() {
+            return Ok(trimmed);
+        }
     }
 
-    // OpenAI 표준 에러 형식
+    // content 가 null/누락이지만 refusal 이 있으면 안전 정책에 의한 거부.
+    if let Some(refusal) = value
+        .pointer("/choices/0/message/refusal")
+        .and_then(|v| v.as_str())
+        && !refusal.is_empty()
+    {
+        return Err(TranslationError::Api {
+            code: 0,
+            message: format!("LLM 응답 거부됨: {refusal}"),
+        });
+    }
+
     if let Some(err) = value.get("error") {
         let message = err
             .get("message")
@@ -84,7 +120,116 @@ fn parse_chat_completion(json: &str) -> TranslationResult {
         return Err(TranslationError::Api { code, message });
     }
 
+    // finish_reason 이 비-STOP 인데 텍스트도 없으면 그 사실을 그대로 전달.
+    if !finish_reason.is_empty() && finish_reason != "stop" {
+        return Err(TranslationError::Api {
+            code: 0,
+            message: format!("LLM 응답에 텍스트 없음 (finish_reason={finish_reason})"),
+        });
+    }
+
     Err(TranslationError::Parse(
         "LLM 응답에서 번역 결과를 찾을 수 없습니다.".to_string(),
     ))
+}
+
+/// `choices[0].message.content` 가 문자열인 일반 케이스와 멀티파트 배열인
+/// 케이스 모두에서 텍스트를 추출. OpenAI 일부 모델 / OpenRouter 백엔드는
+/// `content` 를 `[{ "type": "text", "text": "..." }, ...]` 형식으로 반환한다.
+/// content 가 `null` 이면 `None`.
+fn extract_message_text(content: Option<&serde_json::Value>) -> Option<String> {
+    let v = content?;
+    if let Some(s) = v.as_str() {
+        return Some(s.to_string());
+    }
+    if let Some(arr) = v.as_array() {
+        let mut out = String::new();
+        for part in arr {
+            // OpenAI spec: { "type": "text", "text": "..." } — type 이 없거나
+            // 다른 값(예: "output_text") 이어도 text 필드가 있으면 누적.
+            if let Some(t) = part.get("text").and_then(|x| x.as_str()) {
+                out.push_str(t);
+            }
+        }
+        if !out.is_empty() {
+            return Some(out);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_plain_string_content() {
+        let json = r#"{
+            "choices": [{
+                "message": { "role": "assistant", "content": "안녕하세요" },
+                "finish_reason": "stop"
+            }]
+        }"#;
+        assert_eq!(parse_chat_completion(json).unwrap(), "안녕하세요");
+    }
+
+    #[test]
+    fn parses_array_content_parts() {
+        let json = r#"{
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "text", "text": "안" },
+                        { "type": "text", "text": "녕" }
+                    ]
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+        assert_eq!(parse_chat_completion(json).unwrap(), "안녕");
+    }
+
+    #[test]
+    fn flags_length_truncation_as_api_error() {
+        let json = r#"{
+            "choices": [{
+                "message": { "content": "절단된 부분" },
+                "finish_reason": "length"
+            }]
+        }"#;
+        match parse_chat_completion(json) {
+            Err(TranslationError::Api { code: 0, message }) => {
+                assert!(message.contains("max_tokens"), "message: {message}");
+            }
+            other => panic!("expected Api error for length, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flags_refusal_when_content_null() {
+        let json = r#"{
+            "choices": [{
+                "message": { "content": null, "refusal": "정책상 거부" },
+                "finish_reason": "stop"
+            }]
+        }"#;
+        match parse_chat_completion(json) {
+            Err(TranslationError::Api { code: 0, message }) => {
+                assert!(message.contains("거부"), "message: {message}");
+            }
+            other => panic!("expected Api error for refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_error_object_to_api_error() {
+        let json = r#"{ "error": { "message": "Invalid key", "code": "401" } }"#;
+        match parse_chat_completion(json) {
+            Err(TranslationError::Api { code: 401, message }) => {
+                assert_eq!(message, "Invalid key");
+            }
+            other => panic!("expected Api(401), got {other:?}"),
+        }
+    }
 }
