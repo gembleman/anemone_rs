@@ -78,6 +78,13 @@ impl Dialog for GlossaryDialog {
             self.create_button(20, 270, 90, 26, ctrl_id::BTN_ADD, "추가/수정")?;
             self.create_button(120, 270, 90, 26, ctrl_id::BTN_REMOVE, "삭제")?;
 
+            // A-2: 동작 안내. '추가/수정' 은 동일 원문이 있으면 번역만 갱신,
+            // 없으면 새 항목으로 추가. '적용' 을 눌러야 저장됨.
+            self.create_label(
+                20, 305, 440, 18,
+                "원문이 이미 있으면 번역만 갱신, 없으면 추가. '적용' 으로 저장.",
+            )?;
+
             // X-1 통일 기준: 닫기 100x30 @ (WIDTH-110, HEIGHT-35) = (370, 345).
             // 적용은 닫기 좌측 페어로 (260, 345, 100x30).
             self.create_button(260, 345, 100, 30, ctrl_id::BTN_APPLY, "적용")?;
