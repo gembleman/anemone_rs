@@ -293,7 +293,7 @@ impl SettingsDialog {
         let target_height = match tab {
             TAB_APPEARANCE => 505,
             TAB_DISPLAY => 305,
-            TAB_TRANSLATION => 830,
+            TAB_TRANSLATION => 865,
             _ => 505,
         };
         // SAFETY: self.hwnd is valid. SetWindowPos uses valid parameters.
@@ -481,9 +481,9 @@ impl SettingsDialog {
             let h = self.create_group_box(tx, oy, 460, 75, "외곽선 설정")?;
             self.register_control(tab, h);
 
-            let h = self.create_label(tx + 10, oy + 18, 55, 18, "외곽선1:")?;
+            let h = self.create_label(tx + 10, oy + 18, 65, 18, "외곽선1:")?;
             self.register_control(tab, h);
-            let outline1_tb = self.create_trackbar(tx + 65, oy + 16, 100, 22, ctrl_id::OUTLINE1_TRACKBAR, 0, 20)?;
+            let outline1_tb = self.create_trackbar(tx + 75, oy + 16, 90, 22, ctrl_id::OUTLINE1_TRACKBAR, 0, 20)?;
             self.register_control(tab, outline1_tb);
             let outline1_size = self.config.borrow().translation_style.outline1_size;
             let _ = SendMessageW(outline1_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(outline1_size as isize)));
@@ -492,9 +492,9 @@ impl SettingsDialog {
             let h = self.create_button(tx + 198, oy + 16, 25, 22, ctrl_id::OUTLINE1_PLUS, "+")?;
             self.register_control(tab, h);
 
-            let h = self.create_label(tx + 240, oy + 18, 55, 18, "외곽선2:")?;
+            let h = self.create_label(tx + 240, oy + 18, 65, 18, "외곽선2:")?;
             self.register_control(tab, h);
-            let outline2_tb = self.create_trackbar(tx + 295, oy + 16, 100, 22, ctrl_id::OUTLINE2_TRACKBAR, 0, 20)?;
+            let outline2_tb = self.create_trackbar(tx + 305, oy + 16, 90, 22, ctrl_id::OUTLINE2_TRACKBAR, 0, 20)?;
             self.register_control(tab, outline2_tb);
             let outline2_size = self.config.borrow().translation_style.outline2_size;
             let _ = SendMessageW(outline2_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(outline2_size as isize)));

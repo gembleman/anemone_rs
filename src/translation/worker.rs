@@ -12,6 +12,8 @@
 //! - 호출자는 메시지 수신 시 `take_response(req_id)` 로 본인 응답만 꺼낸다.
 //! - 다이얼로그가 닫힐 때는 `unregister_hwnd(hwnd)` 로 라우팅/대기 응답을 청소한다.
 
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
@@ -62,12 +64,16 @@ pub enum EngineCredentials {
 }
 
 /// 번역 요청
+///
+/// `text` 는 `Arc<str>` — 큐를 가로지를 때 본문이 한 번도 복제되지 않는다.
+/// EzTrans 의 `spawn_blocking` 같이 본문을 소유해야 하는 경로에서도 `clone()`
+/// 은 refcount 증가만 일으켜 0-alloc.
 #[derive(Debug, Clone)]
 pub struct TranslationRequest {
     /// 요청 ID (응답과 매칭용; 디스패치가 할당)
     pub id: u64,
     /// 번역할 텍스트
-    pub text: String,
+    pub text: Arc<str>,
     /// 번역 엔진
     pub engine: TranslationEngine,
     /// 소스 언어
@@ -97,7 +103,9 @@ struct DispatchJob {
 /// 단조 증가하는 ID 카운터와 아직 take 되지 않은 응답 큐만 들고 있다.
 struct DispatchState {
     next_id: u64,
-    pending: Vec<PendingEntry>,
+    /// FIFO 응답 큐. push_back / pop_front amortized O(1). 응답 폭주 시 앞쪽
+    /// drain 비용도 일반 Vec 보다 가볍다.
+    pending: VecDeque<PendingEntry>,
 }
 
 struct PendingEntry {
@@ -110,7 +118,7 @@ impl DispatchState {
     fn new() -> Self {
         Self {
             next_id: 1,
-            pending: Vec::new(),
+            pending: VecDeque::new(),
         }
     }
 
@@ -121,7 +129,7 @@ impl DispatchState {
     }
 
     fn push_response(&mut self, entry: PendingEntry) {
-        self.pending.push(entry);
+        self.pending.push_back(entry);
         if self.pending.len() > MAX_RESPONSE_STORAGE {
             let excess = self.pending.len() - MAX_RESPONSE_STORAGE;
             tracing::warn!(
@@ -135,7 +143,7 @@ impl DispatchState {
 
     fn take_response(&mut self, req_id: u64) -> Option<TranslationResponse> {
         let idx = self.pending.iter().position(|e| e.req_id == req_id)?;
-        Some(self.pending.remove(idx).response)
+        self.pending.remove(idx).map(|e| e.response)
     }
 
     fn drop_hwnd(&mut self, hwnd_raw: usize) {
@@ -149,8 +157,12 @@ pub struct TranslationDispatch {
     /// 워커 스레드의 `rx.recv()` 가 `Err` 를 반환해 자연 종료되도록 한다.
     sender: Mutex<Option<Sender<DispatchJob>>>,
     state: Mutex<DispatchState>,
-    /// hwnd 별 최신 req_id 의 원자 스냅샷 (워커 스레드가 lock 없이 빠르게 확인)
-    latest_snapshot: Mutex<Vec<(usize, std::sync::Arc<AtomicU64>)>>,
+    /// hwnd 별 최신 req_id 의 원자 스냅샷 (워커 스레드가 lock 없이 빠르게 확인).
+    ///
+    /// Mutex lock 구간은 슬롯 lookup/insert/remove 뿐이며, 실제 stale 판정은
+    /// 슬롯에서 꺼낸 `Arc<AtomicU64>` 위에서 lock 없이 수행된다. 동시에 떠 있는
+    /// hwnd 개수만큼만 자라는 맵이라 `HashMap` 이면 O(1).
+    latest_snapshot: Mutex<HashMap<usize, std::sync::Arc<AtomicU64>>>,
     /// 워커 스레드 핸들 (shutdown 시 join 용)
     worker: Mutex<Option<JoinHandle<()>>>,
 }
@@ -195,7 +207,7 @@ impl TranslationDispatch {
         Self {
             sender: Mutex::new(Some(tx)),
             state: Mutex::new(DispatchState::new()),
-            latest_snapshot: Mutex::new(Vec::new()),
+            latest_snapshot: Mutex::new(HashMap::new()),
             worker: Mutex::new(Some(handle)),
         }
     }
@@ -241,24 +253,19 @@ impl TranslationDispatch {
     /// hwnd 의 최신 ID 원자 슬롯 확보 (없으면 생성)
     fn latest_atomic(&self, hwnd_raw: usize) -> std::sync::Arc<AtomicU64> {
         let mut snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
-        if let Some((_, a)) = snap.iter().find(|(h, _)| *h == hwnd_raw) {
-            return a.clone();
-        }
-        let a = std::sync::Arc::new(AtomicU64::new(0));
-        snap.push((hwnd_raw, a.clone()));
-        a
+        snap.entry(hwnd_raw)
+            .or_insert_with(|| std::sync::Arc::new(AtomicU64::new(0)))
+            .clone()
     }
 
     fn latest_atomic_lookup(&self, hwnd_raw: usize) -> Option<std::sync::Arc<AtomicU64>> {
         let snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
-        snap.iter()
-            .find(|(h, _)| *h == hwnd_raw)
-            .map(|(_, a)| a.clone())
+        snap.get(&hwnd_raw).cloned()
     }
 
     fn drop_latest_atomic(&self, hwnd_raw: usize) {
         let mut snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
-        snap.retain(|(h, _)| *h != hwnd_raw);
+        snap.remove(&hwnd_raw);
     }
 
     /// 번역 요청 송신. ID 를 즉시 반환하여 호출자가 응답 매칭에 사용할 수 있다.
@@ -306,7 +313,15 @@ impl TranslationDispatch {
 
     /// 워커 스레드 진입점
     fn worker_thread(rx: Receiver<DispatchJob>) {
-        let rt = match tokio::runtime::Runtime::new() {
+        // current_thread 런타임. 디스패치는 "recv → translate_async await → 다음 recv"
+        // 의 엄격한 직렬 처리라 멀티스레드 풀이 불필요하다. spawn_blocking 은
+        // current_thread 런타임에서도 별도 blocking pool 로 분리되어 EzTrans 경로가
+        // 그대로 동작한다. multi_thread 대비 worker thread 풀 1세트 + 관련 코드 경로
+        // 가 빠진다.
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(e) => {
                 tracing::error!("Failed to create tokio runtime: {}", e);
@@ -487,7 +502,9 @@ impl TranslationDispatch {
     ) -> TranslationResult {
         match req.engine {
             TranslationEngine::EzTrans => {
-                let text = req.text.clone();
+                // Arc<str> 의 clone 은 refcount 증가만 — 큰 본문도 0-alloc 으로 blocking
+                // 태스크에 이동시킨다.
+                let text = Arc::clone(&req.text);
                 let source = req.source_lang;
                 let target = req.target_lang;
 
@@ -585,6 +602,10 @@ impl TranslationDispatch {
 }
 
 /// 호출자 측 간편 헬퍼: 가장 흔한 패턴(번역 요청 한 줄로 보내기)을 한 함수로.
+///
+/// `text` 는 호출자가 이미 가지고 있는 `String` 을 그대로 받아 내부에서
+/// `Arc<str>` 로 한 번 옮긴다 (`Arc::<str>::from(String)` 은 buffer 재사용 —
+/// 추가 alloc 없음). 이후 큐/워커/엔진 호출 경로는 모두 share-by-refcount.
 pub fn translate(
     hwnd: HWND,
     text: String,
@@ -597,7 +618,7 @@ pub fn translate(
         hwnd,
         TranslationRequest {
             id: 0, // dispatch 에서 할당
-            text,
+            text: Arc::from(text),
             engine,
             source_lang,
             target_lang,
