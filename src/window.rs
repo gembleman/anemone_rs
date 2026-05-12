@@ -55,16 +55,18 @@ pub fn set_topmost(hwnd: HWND, topmost: bool) {
 
 /// 클릭 통과 설정
 pub fn set_click_through(hwnd: HWND, click_through: bool) {
-    // SAFETY: hwnd is a valid window handle. GetWindowLongW/SetWindowLongW modify the
-    // extended window style which is a safe operation on a valid window.
+    // SAFETY: hwnd is a valid window handle. Get/SetWindowLongW 는 32-bit 빌드
+    // (i686-pc-windows-msvc) 의 GWL_EXSTYLE 처리에 충분 — 확장 스타일은 32-bit
+    // 비트필드. unsigned 로 다뤄 부호 확장 사고를 차단한다.
     unsafe {
-        let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        let mask = WS_EX_TRANSPARENT.0;
         let new_style = if click_through {
-            style | WS_EX_TRANSPARENT.0 as i32
+            style | mask
         } else {
-            style & !(WS_EX_TRANSPARENT.0 as i32)
+            style & !mask
         };
-        SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
+        SetWindowLongW(hwnd, GWL_EXSTYLE, new_style as i32);
     }
 }
 
@@ -86,17 +88,17 @@ pub fn hit_test_resize_border(hwnd: HWND, x: i32, y: i32, border_width: i32) -> 
         if pt.y < border_width {
             if pt.x < border_width {
                 return Some(HTTOPLEFT as i32);
-            } else if pt.x > w - border_width {
+            } else if pt.x >= w - border_width {
                 return Some(HTTOPRIGHT as i32);
             }
             return Some(HTTOP as i32);
         }
 
         // 하단
-        if pt.y > h - border_width {
+        if pt.y >= h - border_width {
             if pt.x < border_width {
                 return Some(HTBOTTOMLEFT as i32);
-            } else if pt.x > w - border_width {
+            } else if pt.x >= w - border_width {
                 return Some(HTBOTTOMRIGHT as i32);
             }
             return Some(HTBOTTOM as i32);
@@ -106,7 +108,7 @@ pub fn hit_test_resize_border(hwnd: HWND, x: i32, y: i32, border_width: i32) -> 
         if pt.x < border_width {
             return Some(HTLEFT as i32);
         }
-        if pt.x > w - border_width {
+        if pt.x >= w - border_width {
             return Some(HTRIGHT as i32);
         }
 

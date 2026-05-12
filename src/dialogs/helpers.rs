@@ -970,11 +970,15 @@ pub unsafe fn create_trackbar(
             ChildSpec { x, y, w, h, id },
         )?;
 
+        // TBM_SETRANGE lparam: LOWORD=min, HIWORD=max.
+        // min 이 음수일 때 sign extension 으로 상위 워드가 오염되지 않도록
+        // 0xFFFF 마스크 후 결합.
+        let packed = ((max & 0xFFFF) << 16) | (min & 0xFFFF);
         let _ = SendMessageW(
             hwnd,
             TBM_SETRANGE,
             Some(WPARAM(1)),
-            Some(LPARAM(((max << 16) | min) as isize)),
+            Some(LPARAM(packed as isize)),
         );
 
         Ok(hwnd)

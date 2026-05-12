@@ -9,7 +9,7 @@ use windows::{
         Foundation::*,
         Graphics::{
             Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET},
-            Gdi::{ClientToScreen, HBRUSH, UpdateWindow},
+            Gdi::{ClientToScreen, HBRUSH, UpdateWindow, ValidateRect},
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
@@ -428,9 +428,13 @@ impl App {
             let max_height = (self.height - margin_y * 2) as f32;
             // shadow 가 그림자 방향으로만 확장되므로 양방향 inflate 의 보수적
             // 상한으로 abs 합. outline 은 텍스트 주변 전 방향이라 그대로 합산.
+            // i32::MIN 에 가까운 값이 들어오면 unsigned_abs() as i32 가
+            // 음수로 뒤집히므로 saturating_abs 로 안전 변환.
             let shadow_inflate = if render_style.shadow_enabled {
-                render_style.shadow_offset_x.unsigned_abs() as i32
-                    + render_style.shadow_offset_y.unsigned_abs() as i32
+                render_style
+                    .shadow_offset_x
+                    .saturating_abs()
+                    .saturating_add(render_style.shadow_offset_y.saturating_abs())
             } else {
                 0
             };
@@ -1148,6 +1152,12 @@ impl App {
                             tracing::warn!("paint failed on WM_PAINT: {e}");
                         }
                     }
+                    // 시스템이 보낸 WM_PAINT 든 사용자 정의 갱신이든, invalid
+                    // region 을 비워야 메시지 큐가 같은 WM_PAINT 를 재발행해
+                    // 폭주하는 것을 막는다. NOREDIRECTIONBITMAP 윈도우에선
+                    // 시스템 invalidate 빈도가 낮지만 디스플레이 변경 등
+                    // 엣지케이스에 대비.
+                    let _ = ValidateRect(Some(hwnd), None);
                     Some(LRESULT(0))
                 }
 
