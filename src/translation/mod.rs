@@ -11,7 +11,7 @@
 //! - 호출자별 hwnd 라우팅. Windows 메시지로 결과 전달 (UI 블로킹 없음)
 
 pub mod deepl;
-mod detect;
+pub mod detect;
 mod eztrans;
 pub mod google;
 pub(crate) mod http_common;

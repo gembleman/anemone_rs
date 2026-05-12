@@ -862,7 +862,11 @@ impl SettingsDialog {
             let h = self.create_label(tx + 15, ly + 25, 50, 18, "제공자:")?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
-            let provider_items = vec!["OpenAI", "Anthropic", "Gemini", "Grok", "OpenRouter"];
+            // 표시 라벨은 LlmProvider::display_name 와 동기화 (OpenAI API / Claude API / AI Studio / Grok / OpenRouter)
+            let provider_items: Vec<&'static str> = crate::translation::LlmProvider::ALL
+                .iter()
+                .map(|p| p.display_name())
+                .collect();
             let provider_sel = self.config.borrow().translation.llm.get_provider() as u8 as usize;
             let h = self.create_combobox(tx + 65, ly + 23, 100, 150, ctrl_id::LLM_PROVIDER, &provider_items, provider_sel)?;
             self.register_control(tab, h);

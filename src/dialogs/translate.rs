@@ -27,7 +27,7 @@ use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::{
     get_eztrans_manager, request_translation, take_response, unregister_translation_hwnd,
-    Language, TranslationEngine,
+    Language, LlmProvider, TranslationEngine,
 };
 
 // 컨트롤 ID
@@ -46,6 +46,10 @@ mod ctrl_id {
     pub const COMBO_ENGINE: u16 = 2020;
     pub const COMBO_SOURCE_LANG: u16 = 2021;
     pub const COMBO_TARGET_LANG: u16 = 2022;
+    // LLM 하위 설정 (엔진이 LLM일 때만 노출)
+    pub const COMBO_LLM_PROVIDER: u16 = 2030;
+    pub const EDIT_LLM_MODEL: u16 = 2031;
+    pub const EDIT_LLM_API_KEY: u16 = 2032;
 }
 
 // 서브클래스 ID (uIdSubclass): 컨트롤별로 구분
@@ -72,6 +76,14 @@ pub struct TranslateDialog {
     engine_combo: HWND,
     source_lang_combo: HWND,
     target_lang_combo: HWND,
+    /// LLM 하위 컨트롤. 엔진이 LLM일 때만 visible 처리.
+    llm_group: HWND,
+    llm_provider_label: HWND,
+    llm_provider_combo: HWND,
+    llm_model_label: HWND,
+    llm_model_edit: HWND,
+    llm_api_key_label: HWND,
+    llm_api_key_edit: HWND,
     one_go: bool,
     no_linefeed: bool,
     output_format: OutputFormat,
@@ -92,7 +104,9 @@ impl Dialog for TranslateDialog {
     const CLASS_NAME: PCWSTR = w!("AnemoneTranslateClass");
     const TITLE: PCWSTR = w!("번역");
     const WIDTH: i32 = 510;
-    const HEIGHT: i32 = 520;
+    // LLM 그룹(엔진이 LLM일 때만 노출) 자리를 옵션/동작 아래에 확보. 비-LLM 엔진에서도
+    // 다이얼로그 높이는 동일하지만 LLM 그룹 컨트롤은 hide 처리한다.
+    const HEIGHT: i32 = 540;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 
     fn instance_slot()
@@ -111,6 +125,13 @@ impl Dialog for TranslateDialog {
             engine_combo: HWND::default(),
             source_lang_combo: HWND::default(),
             target_lang_combo: HWND::default(),
+            llm_group: HWND::default(),
+            llm_provider_label: HWND::default(),
+            llm_provider_combo: HWND::default(),
+            llm_model_label: HWND::default(),
+            llm_model_edit: HWND::default(),
+            llm_api_key_label: HWND::default(),
+            llm_api_key_edit: HWND::default(),
             one_go: false,
             no_linefeed: false,
             output_format: OutputFormat::Normal,
@@ -242,6 +263,41 @@ impl Dialog for TranslateDialog {
             self.create_button(340, 360, 65, 28, ctrl_id::BTN_COPY, "복사")?;
             self.create_button(415, 360, 60, 28, ctrl_id::BTN_CLEAR, "초기화")?;
 
+            // ====== LLM 하위 설정 그룹 (엔진이 LLM일 때만 노출) ======
+            // 옵션/동작 그룹 아래(y=430)에 한 줄로 배치. 줄1: 제공자 + 모델, 줄2: API 키.
+            self.llm_group = self.create_group_box(10, 430, 475, 100, "LLM 설정")?;
+
+            self.llm_provider_label = self.create_label(20, 453, 50, 18, "제공자:")?;
+            self.llm_provider_combo = DialogControls::create_combobox(
+                self, 75, 450, 110, 180, ctrl_id::COMBO_LLM_PROVIDER, &[], 0,
+            )?;
+            for p in LlmProvider::ALL {
+                self.add_combobox_item(self.llm_provider_combo, p.display_name());
+            }
+
+            self.llm_model_label = self.create_label(200, 453, 40, 18, "모델:")?;
+            let model_text = self.config.borrow().translation.llm.model.clone();
+            self.llm_model_edit = self.create_edit(
+                240, 450, 235, 22, ctrl_id::EDIT_LLM_MODEL, &model_text,
+            )?;
+
+            self.llm_api_key_label = self.create_label(20, 488, 60, 18, "API 키:")?;
+            let api_key_text = self.config.borrow().translation.llm.api_key.clone();
+            self.llm_api_key_edit = self.create_edit(
+                85, 485, 390, 22, ctrl_id::EDIT_LLM_API_KEY, &api_key_text,
+            )?;
+
+            // 제공자 콤보 초기 선택
+            let provider_sel = self.config.borrow().translation.llm.get_provider() as u8 as usize;
+            let _ = SendMessageW(
+                self.llm_provider_combo, CB_SETCURSEL,
+                Some(WPARAM(provider_sel)), None,
+            );
+
+            // 엔진 상태에 맞춰 초기 표시/숨김
+            let engine = self.config.borrow().translation.get_engine();
+            self.update_llm_group_visibility(engine);
+
             Ok(())
         }
     }
@@ -298,9 +354,26 @@ impl Dialog for TranslateDialog {
                         };
                         let engine = TranslationEngine::from_u8(engine_idx);
                         self.populate_language_combos(engine);
+                        self.update_llm_group_visibility(engine);
                         self.engine_initialized = false;
                     }
                     self.apply_current_settings();
+                }
+            }
+            COMBO_LLM_PROVIDER => {
+                if notify_code == 1 {
+                    self.apply_llm_provider();
+                    self.engine_initialized = false;
+                }
+            }
+            EDIT_LLM_MODEL => {
+                if notify_code == EN_CHANGE {
+                    self.apply_llm_model();
+                }
+            }
+            EDIT_LLM_API_KEY => {
+                if notify_code == EN_CHANGE {
+                    self.apply_llm_api_key();
                 }
             }
             _ => {}
@@ -326,6 +399,42 @@ impl TranslateDialog {
             }
             let _ = SendMessageW(self.target_lang_combo, CB_SETCURSEL, Some(WPARAM(0)), None);
         }
+    }
+
+    /// 엔진이 LLM일 때만 LLM 그룹 노출.
+    fn update_llm_group_visibility(&self, engine: TranslationEngine) {
+        let show = if engine == TranslationEngine::Llm { SW_SHOW } else { SW_HIDE };
+        // SAFETY: 모든 LLM 그룹 HWND는 create_controls에서 생성된 유효한 핸들.
+        unsafe {
+            let _ = ShowWindow(self.llm_group, show);
+            let _ = ShowWindow(self.llm_provider_label, show);
+            let _ = ShowWindow(self.llm_provider_combo, show);
+            let _ = ShowWindow(self.llm_model_label, show);
+            let _ = ShowWindow(self.llm_model_edit, show);
+            let _ = ShowWindow(self.llm_api_key_label, show);
+            let _ = ShowWindow(self.llm_api_key_edit, show);
+        }
+    }
+
+    fn apply_llm_provider(&self) {
+        // SAFETY: 콤보 핸들은 create_controls에서 만든 유효한 핸들.
+        let sel = unsafe {
+            SendMessageW(self.llm_provider_combo, CB_GETCURSEL, None, None).0 as u8
+        };
+        let provider = LlmProvider::from_u8(sel);
+        self.config.borrow_mut().translation.llm.set_provider(provider);
+    }
+
+    fn apply_llm_model(&self) {
+        // SAFETY: edit 핸들은 create_controls에서 만든 유효한 핸들.
+        let text = unsafe { Self::get_edit_text(self.llm_model_edit) };
+        self.config.borrow_mut().translation.llm.model = text;
+    }
+
+    fn apply_llm_api_key(&self) {
+        // SAFETY: edit 핸들은 create_controls에서 만든 유효한 핸들.
+        let text = unsafe { Self::get_edit_text(self.llm_api_key_edit) };
+        self.config.borrow_mut().translation.llm.api_key = text;
     }
 
     fn add_combobox_item(&self, combo: HWND, text: &str) {

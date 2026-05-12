@@ -291,12 +291,14 @@ impl FileTransDialog {
         let (engine_name, source, target) = {
             let config = self.config.borrow();
             let engine = config.translation.get_engine();
-            let engine_name = match engine {
-                TranslationEngine::EzTrans => "EzTrans",
-                TranslationEngine::Google => "Google",
-                TranslationEngine::DeepL => "DeepL",
-                TranslationEngine::Papago => "Papago",
-                TranslationEngine::Llm => "LLM",
+            let engine_name: String = match engine {
+                TranslationEngine::EzTrans => "EzTrans".into(),
+                TranslationEngine::Google => "Google".into(),
+                TranslationEngine::DeepL => "DeepL".into(),
+                TranslationEngine::Papago => "Papago".into(),
+                TranslationEngine::Llm => {
+                    format!("LLM: {}", config.translation.llm.get_provider().display_name())
+                }
             };
             let source = to_korean_name(config.translation.get_source_language());
             let target = to_korean_name(config.translation.get_target_language());

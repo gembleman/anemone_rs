@@ -79,6 +79,25 @@ impl LlmProvider {
         }
     }
 
+    /// 사용자에게 보여줄 표시 이름. UI 콤보 항목과 라벨에 공통 사용한다.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::OpenAi => "OpenAI API",
+            Self::Anthropic => "Claude API",
+            Self::Gemini => "AI Studio",
+            Self::Grok => "Grok",
+            Self::OpenRouter => "OpenRouter",
+        }
+    }
+
+    /// UI 표시 순서로 나열한 전체 제공자
+    pub const ALL: &'static [LlmProvider] = &[
+        Self::OpenAi,
+        Self::Anthropic,
+        Self::Gemini,
+        Self::Grok,
+        Self::OpenRouter,
+    ];
 }
 
 /// 글로서리 한 항목 (캐릭터 이름/고유명사 고정 번역)
