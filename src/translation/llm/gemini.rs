@@ -1,12 +1,12 @@
 //! Google Gemini (AI Studio) generateContent 백엔드
 //!
-//! - 인증: 쿼리스트링 `?key=<API_KEY>` (Vertex AI 키와 다름)
+//! - 인증: `x-goog-api-key` 헤더 (AI Studio 키 — Vertex AI OAuth 와 다름)
 //! - 페이로드: `system_instruction` + `contents` + `generationConfig`
 //! - 응답: `candidates[0].content.parts[*].text`
 
 use isolang::Language;
 
-use super::super::http_common::{send_and_read_body, validate_not_empty};
+use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
 use super::super::{TranslationError, TranslationResult};
 use super::{LlmCallParams, build_system_prompt_with_glossary};
 
@@ -46,6 +46,7 @@ pub async fn translate_async_with_client(
     // reqwest의 `query()` 기능에 의존하지 않는다)
     let response = client
         .post(&url)
+        .timeout(LLM_REQUEST_TIMEOUT)
         .header("x-goog-api-key", &params.api_key)
         .json(&payload)
         .send()

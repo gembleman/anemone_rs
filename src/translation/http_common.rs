@@ -19,6 +19,20 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// 커넥션 수립 타임아웃 (DNS + TCP + TLS 핸드셰이크 상한)
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// LLM 백엔드용 per-request 타임아웃.
+///
+/// 일반 번역 엔진은 30 초로 충분하지만 LLM (특히 GPT-4 클래스 / Claude
+/// Opus / Gemini Pro) 은 긴 입력이나 reasoning 으로 1 분 이상 걸리는
+/// 경우가 흔하다. `shared_client` 의 기본 30 초를 그대로 적용하면 정상
+/// 응답도 timeout 으로 끊어진다. LLM 호출은 `RequestBuilder::timeout()` 으로
+/// 이 값을 override 하여 사용한다.
+///
+/// shutdown 지연 상한은 worker.rs 의 `shutdown` MAX_WAT (2s) 가 아니라
+/// in-flight HTTP 요청이 detached 되는 시점이므로, 사용자가 종료 후
+/// 프로세스가 백그라운드에 남는 시간은 최대 이 값. 너무 키우면 종료가
+/// 답답해진다.
+pub const LLM_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
 pub fn shared_client() -> reqwest::Client {
     SHARED_CLIENT
         .get_or_init(|| {

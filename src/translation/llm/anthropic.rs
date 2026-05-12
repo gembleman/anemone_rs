@@ -7,7 +7,7 @@
 
 use isolang::Language;
 
-use super::super::http_common::{send_and_read_body, validate_not_empty};
+use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
 use super::super::{TranslationError, TranslationResult};
 use super::{LlmCallParams, build_system_prompt_with_glossary};
 
@@ -46,6 +46,7 @@ pub async fn translate_async_with_client(
     let url = format!("{}/messages", params.effective_base_url());
     let response = client
         .post(&url)
+        .timeout(LLM_REQUEST_TIMEOUT)
         .header("x-api-key", &params.api_key)
         .header("anthropic-version", ANTHROPIC_VERSION)
         .header("content-type", "application/json")

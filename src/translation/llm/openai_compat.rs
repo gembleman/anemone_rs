@@ -5,7 +5,7 @@
 
 use isolang::Language;
 
-use super::super::http_common::{send_and_read_body, validate_not_empty};
+use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
 use super::super::{TranslationError, TranslationResult};
 use super::{LlmCallParams, LlmProvider, build_system_prompt_with_glossary};
 
@@ -36,7 +36,11 @@ pub async fn translate_async_with_client(
     });
 
     let url = format!("{}/chat/completions", params.effective_base_url());
-    let mut req = client.post(&url).bearer_auth(&params.api_key).json(&payload);
+    let mut req = client
+        .post(&url)
+        .timeout(LLM_REQUEST_TIMEOUT)
+        .bearer_auth(&params.api_key)
+        .json(&payload);
 
     // OpenRouter는 출처 헤더를 권장한다 (rate limit 우대 / 통계용)
     if params.provider == LlmProvider::OpenRouter {
