@@ -3,7 +3,7 @@
 //! 탭 기반 설정 대화상자. 외관/표시·윈도우/번역 3개 탭으로 분리.
 //! Win32 SysTabControl32를 사용하여 탭 전환 시 컨트롤을 표시/숨김.
 
-pub(self) mod ctrl_id;
+mod ctrl_id;
 mod handlers;
 
 use std::cell::RefCell;

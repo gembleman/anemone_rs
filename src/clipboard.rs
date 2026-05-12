@@ -90,7 +90,7 @@ impl ClipboardWatcher {
                 }
                 // CF_UNICODETEXT 는 항상 짝수 바이트여야 한다. 홀수면 손상된 데이터
                 // 가능성 — UTF-16 마지막 1 바이트는 절단(silent truncation)된다.
-                if byte_size % 2 != 0 {
+                if !byte_size.is_multiple_of(2) {
                     tracing::warn!(
                         "CF_UNICODETEXT 가 홀수 바이트 크기({}); 손상 가능성, 마지막 바이트 무시",
                         byte_size
