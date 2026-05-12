@@ -63,7 +63,7 @@ mod window {
 mod d2d;
 
 use bench::{BenchAccumulator, paint_bench_iters};
-use d2d::D2DRenderer;
+use d2d::{D2DRenderer, TextBox};
 use d2d_composition::CompositionRenderer;
 use std::cell::RefCell;
 use window::TextRenderStyle;
@@ -358,10 +358,7 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
         d2d.draw_text(
             ctx,
             "D2DRenderer ▸ DComp 결합 OK",
-            20.0,
-            300.0,
-            600.0,
-            40.0,
+            TextBox { x: 20.0, y: 300.0, max_width: 600.0, max_height: 40.0 },
             &style,
         )?;
         Ok(())
@@ -409,10 +406,12 @@ fn draw_bench_match_app(ctx: &ID2D1DeviceContext) -> Result<()> {
         d2d.draw_text(
             ctx,
             "아네모네 시작됨 - 클립보드를 복사해보세요",
-            MARGIN as f32,
-            MARGIN as f32,
-            max_width,
-            max_height,
+            TextBox {
+                x: MARGIN as f32,
+                y: MARGIN as f32,
+                max_width,
+                max_height,
+            },
             &style,
         )?;
         Ok(())

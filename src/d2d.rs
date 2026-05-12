@@ -22,6 +22,19 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::window::TextRenderStyle;
 
+/// 텍스트 layout 박스: 그리기 원점 `(x, y)` 과 layout 최대 크기.
+///
+/// `draw_text` / `compute_text_line_rects` 가 공유. layout 의 `SetMaxWidth`
+/// / `SetMaxHeight` 에 `max_width` / `max_height` 가, 본문/그림자 등 모든
+/// 그리기 명령의 원점에 `(x, y)` 가 들어간다.
+#[derive(Clone, Copy)]
+pub struct TextBox {
+    pub x: f32,
+    pub y: f32,
+    pub max_width: f32,
+    pub max_height: f32,
+}
+
 // ── ARGB 컬러 변환 헬퍼 ─────────────────────────────────
 
 /// ARGB u32를 D2D1_COLOR_F로 변환
@@ -816,12 +829,10 @@ impl D2DRenderer {
         &mut self,
         target: &ID2D1RenderTarget,
         text: &str,
-        x: f32,
-        y: f32,
-        max_width: f32,
-        max_height: f32,
+        bbox: TextBox,
         style: &TextRenderStyle,
     ) -> Result<()> {
+        let TextBox { x, y, max_width, max_height } = bbox;
         let outline_total = style.outline1_size + style.outline2_size;
         let has_shadow =
             style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0);
@@ -873,7 +884,7 @@ impl D2DRenderer {
                 self.miss_tracker.last_key = Some(key_ref.to_owned());
             }
             self.miss_tracker.record(!hit);
-            return self.draw_text_direct(target, text, x, y, max_width, max_height, style);
+            return self.draw_text_direct(target, text, bbox, style);
         }
 
         // 정상 경로 — hit/miss 판정은 outline_bitmap 의 실체 키 기준.
@@ -942,17 +953,14 @@ impl D2DRenderer {
     /// 는 그대로 공유 — `get_or_create_outline_geometry` 가 layout 원점
     /// (0, 0) 기준 PathGeometry 한 번만 만들어 두면 색/두께가 달라도
     /// `SetTransform` + 다른 brush 로 같은 geometry 를 재사용한다.
-    #[allow(clippy::too_many_arguments)]
     fn draw_text_direct(
         &mut self,
         target: &ID2D1RenderTarget,
         text: &str,
-        x: f32,
-        y: f32,
-        max_width: f32,
-        max_height: f32,
+        bbox: TextBox,
         style: &TextRenderStyle,
     ) -> Result<()> {
+        let TextBox { x, y, max_width, max_height } = bbox;
         let outline_total = (style.outline1_size + style.outline2_size).max(0);
         let has_shadow =
             style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0);
@@ -1297,16 +1305,14 @@ impl D2DRenderer {
         &mut self,
         text: &str,
         style: &TextRenderStyle,
-        max_width: f32,
-        max_height: f32,
-        origin_x: f32,
-        origin_y: f32,
+        bbox: TextBox,
         inflate: f32,
     ) -> Result<Vec<RECT>> {
         if text.is_empty() {
             return Ok(Vec::new());
         }
 
+        let TextBox { x: origin_x, y: origin_y, max_width, max_height } = bbox;
         let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
         let text_len: u32 = text.encode_utf16().count() as u32;
         if text_len == 0 {

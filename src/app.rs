@@ -364,10 +364,12 @@ impl App {
             if let Err(e) = renderer.draw_text(
                 ctx,
                 &self.current_text,
-                margin_x as f32,
-                margin_y as f32,
-                max_width,
-                max_height,
+                crate::d2d::TextBox {
+                    x: margin_x as f32,
+                    y: margin_y as f32,
+                    max_width,
+                    max_height,
+                },
                 &render_style,
             ) {
                 tracing::error!("D2D draw_text failed: {e}");
@@ -440,10 +442,12 @@ impl App {
                 match d2d.compute_text_line_rects(
                     &self.current_text,
                     &render_style,
-                    max_width,
-                    max_height,
-                    margin_x as f32,
-                    margin_y as f32,
+                    crate::d2d::TextBox {
+                        x: margin_x as f32,
+                        y: margin_y as f32,
+                        max_width,
+                        max_height,
+                    },
                     inflate,
                 ) {
                     Ok(rects) => self.hit_region = rects,

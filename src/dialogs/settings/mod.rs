@@ -32,6 +32,18 @@ const TAB_APPEARANCE: usize = 0;
 const TAB_DISPLAY: usize = 1;
 const TAB_TRANSLATION: usize = 2;
 
+/// 텍스트 스타일 그룹 6종 컨트롤 ID + 그림자 초기 상태 (이름/원문/번역문 공통 구조)
+#[derive(Clone, Copy)]
+struct TextStyleGroupSpec {
+    color: u16,
+    outline1: u16,
+    outline2: u16,
+    shadow: u16,
+    font: u16,
+    shadow_check: u16,
+    shadow_enabled: bool,
+}
+
 /// 엔진별 컨트롤 그룹 (활성/비활성 토글용)
 #[derive(Clone, Copy)]
 pub(super) enum EngineGroup {
@@ -519,23 +531,38 @@ impl SettingsDialog {
 
             // ── 이름/원문/번역문 색상 설정 ──
             let cy = ty + 160;
-            let name_shadow = self.config.borrow().name_style.shadow_enabled;
-            self.create_text_style_group(tab, tx, cy, 150, "이름 설정",
-                ctrl_id::NAME_COLOR, ctrl_id::NAME_OUTLINE1, ctrl_id::NAME_OUTLINE2,
-                ctrl_id::NAME_SHADOW_COLOR, ctrl_id::NAME_FONT, ctrl_id::NAME_SHADOW,
-                name_shadow)?;
+            let name_spec = TextStyleGroupSpec {
+                color: ctrl_id::NAME_COLOR,
+                outline1: ctrl_id::NAME_OUTLINE1,
+                outline2: ctrl_id::NAME_OUTLINE2,
+                shadow: ctrl_id::NAME_SHADOW_COLOR,
+                font: ctrl_id::NAME_FONT,
+                shadow_check: ctrl_id::NAME_SHADOW,
+                shadow_enabled: self.config.borrow().name_style.shadow_enabled,
+            };
+            self.create_text_style_group(tab, tx, cy, 150, "이름 설정", name_spec)?;
 
-            let org_shadow = self.config.borrow().original_style.shadow_enabled;
-            self.create_text_style_group(tab, tx + 155, cy, 150, "원문 설정",
-                ctrl_id::ORG_COLOR, ctrl_id::ORG_OUTLINE1, ctrl_id::ORG_OUTLINE2,
-                ctrl_id::ORG_SHADOW_COLOR, ctrl_id::ORG_FONT, ctrl_id::ORG_SHADOW,
-                org_shadow)?;
+            let org_spec = TextStyleGroupSpec {
+                color: ctrl_id::ORG_COLOR,
+                outline1: ctrl_id::ORG_OUTLINE1,
+                outline2: ctrl_id::ORG_OUTLINE2,
+                shadow: ctrl_id::ORG_SHADOW_COLOR,
+                font: ctrl_id::ORG_FONT,
+                shadow_check: ctrl_id::ORG_SHADOW,
+                shadow_enabled: self.config.borrow().original_style.shadow_enabled,
+            };
+            self.create_text_style_group(tab, tx + 155, cy, 150, "원문 설정", org_spec)?;
 
-            let trans_shadow = self.config.borrow().translation_style.shadow_enabled;
-            self.create_text_style_group(tab, tx + 310, cy, 150, "번역문 설정",
-                ctrl_id::TRANS_COLOR, ctrl_id::TRANS_OUTLINE1, ctrl_id::TRANS_OUTLINE2,
-                ctrl_id::TRANS_SHADOW_COLOR, ctrl_id::TRANS_FONT, ctrl_id::TRANS_SHADOW,
-                trans_shadow)?;
+            let trans_spec = TextStyleGroupSpec {
+                color: ctrl_id::TRANS_COLOR,
+                outline1: ctrl_id::TRANS_OUTLINE1,
+                outline2: ctrl_id::TRANS_OUTLINE2,
+                shadow: ctrl_id::TRANS_SHADOW_COLOR,
+                font: ctrl_id::TRANS_FONT,
+                shadow_check: ctrl_id::TRANS_SHADOW,
+                shadow_enabled: self.config.borrow().translation_style.shadow_enabled,
+            };
+            self.create_text_style_group(tab, tx + 310, cy, 150, "번역문 설정", trans_spec)?;
 
             // ── 텍스트 여백 ──
             let my = ty + 290;
@@ -586,9 +613,7 @@ impl SettingsDialog {
     /// 텍스트 스타일 그룹 생성 (이름/원문/번역문 공통)
     fn create_text_style_group(
         &mut self, tab: usize, x: i32, y: i32, w: i32, title: &str,
-        color_id: u16, outline1_id: u16, outline2_id: u16,
-        shadow_id: u16, font_id: u16, shadow_check_id: u16,
-        shadow_enabled: bool,
+        spec: TextStyleGroupSpec,
     ) -> Result<()> {
         unsafe {
             // 좌/우 마진 5/6 (1px 비대칭), 버튼 폭 (w-15)/2 = 67, 간격 5.
@@ -598,17 +623,17 @@ impl SettingsDialog {
             let h = self.create_group_box(x, y, w, 125, title)?;
             self.register_control(tab, h);
 
-            let h = self.create_color_button(x + 5, y + 20, bw, 22, color_id, "주색상")?;
+            let h = self.create_color_button(x + 5, y + 20, bw, 22, spec.color, "주색상")?;
             self.register_control(tab, h);
-            let h = self.create_color_button(x + 5 + bw + 5, y + 20, bw, 22, outline1_id, "외곽1")?;
+            let h = self.create_color_button(x + 5 + bw + 5, y + 20, bw, 22, spec.outline1, "외곽1")?;
             self.register_control(tab, h);
-            let h = self.create_color_button(x + 5, y + 47, bw, 22, outline2_id, "외곽2")?;
+            let h = self.create_color_button(x + 5, y + 47, bw, 22, spec.outline2, "외곽2")?;
             self.register_control(tab, h);
-            let h = self.create_color_button(x + 5 + bw + 5, y + 47, bw, 22, shadow_id, "그림자색")?;
+            let h = self.create_color_button(x + 5 + bw + 5, y + 47, bw, 22, spec.shadow, "그림자색")?;
             self.register_control(tab, h);
-            let h = self.create_button(x + 5, y + 74, w - 11, 22, font_id, "폰트 선택")?;
+            let h = self.create_button(x + 5, y + 74, w - 11, 22, spec.font, "폰트 선택")?;
             self.register_control(tab, h);
-            let h = self.create_checkbox(x + 5, y + 100, 110, 20, shadow_check_id, "그림자 사용", shadow_enabled)?;
+            let h = self.create_checkbox(x + 5, y + 100, 110, 20, spec.shadow_check, "그림자 사용", spec.shadow_enabled)?;
             self.register_control(tab, h);
 
             Ok(())
