@@ -76,8 +76,10 @@ impl Dialog for GlossaryDialog {
             self.create_button(20, 270, 90, 26, ctrl_id::BTN_ADD, "추가/수정")?;
             self.create_button(120, 270, 90, 26, ctrl_id::BTN_REMOVE, "삭제")?;
 
-            self.create_button(280, 308, 90, 30, ctrl_id::BTN_APPLY, "적용")?;
-            self.create_button(380, 308, 80, 30, ctrl_id::BTN_CLOSE, "닫기")?;
+            // X-1 통일 기준: 닫기 100x30 @ (WIDTH-110, HEIGHT-35) = (370, 345).
+            // 적용은 닫기 좌측 페어로 (260, 345, 100x30).
+            self.create_button(260, 345, 100, 30, ctrl_id::BTN_APPLY, "적용")?;
+            self.create_button(370, 345, 100, 30, ctrl_id::BTN_CLOSE, "닫기")?;
 
             self.populate_listbox();
             Ok(())

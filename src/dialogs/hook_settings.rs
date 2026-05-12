@@ -93,8 +93,10 @@ impl Dialog for HookSettingsDialog {
             self.create_listbox(270, 30, 160, 180, ctrl_id::INACTIVE_LIST)?;
 
             // ====== 적용/닫기 버튼 ======
-            self.create_button(270, 270, 80, 30, ctrl_id::BTN_APPLY, "적용")?;
-            self.create_button(360, 270, 80, 30, ctrl_id::BTN_CLOSE, "닫기")?;
+            // X-1 통일 기준: 닫기 100x30 @ (WIDTH-110, HEIGHT-35) = (340, 315).
+            // 적용은 닫기 좌측 페어로 (230, 315, 100x30).
+            self.create_button(230, 315, 100, 30, ctrl_id::BTN_APPLY, "적용")?;
+            self.create_button(340, 315, 100, 30, ctrl_id::BTN_CLOSE, "닫기")?;
 
             // ListBox 초기화
             self.populate_listboxes();
