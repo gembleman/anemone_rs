@@ -947,6 +947,15 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
+            // 프라이버시 안내: 클립보드/원문이 외부 제공자 서버로 전송됨을 명시.
+            // 마스킹 필터는 두지 않고 사용자 책임으로 둠.
+            let h = self.create_label(
+                tx + 15, ly + 315, 435, 18,
+                "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.",
+            )?;
+            self.register_control(tab, h);
+            self.register_engine_control(EngineGroup::Llm, h);
+
             Ok(())
         }
     }
