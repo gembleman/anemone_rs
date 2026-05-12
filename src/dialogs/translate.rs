@@ -91,7 +91,7 @@ impl Dialog for TranslateDialog {
 
     const CLASS_NAME: PCWSTR = w!("AnemoneTranslateClass");
     const TITLE: PCWSTR = w!("번역");
-    const WIDTH: i32 = 500;
+    const WIDTH: i32 = 510;
     const HEIGHT: i32 = 520;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 

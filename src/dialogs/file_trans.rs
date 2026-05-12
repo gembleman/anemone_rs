@@ -104,7 +104,7 @@ impl Dialog for FileTransDialog {
 
     const CLASS_NAME: PCWSTR = w!("AnemoneFileTransClass");
     const TITLE: PCWSTR = w!("파일 번역");
-    const WIDTH: i32 = 550;
+    const WIDTH: i32 = 560;
     const HEIGHT: i32 = 450;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 

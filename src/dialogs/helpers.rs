@@ -782,6 +782,15 @@ pub trait Dialog: Sized + 'static {
                         }
                         return LRESULT(0);
                     }
+                    WM_CTLCOLORSTATIC => {
+                        // STATIC/체크박스/라디오 라벨의 텍스트 배경을 다이얼로그
+                        // 배경 brush(COLOR_BTNFACE)에 맞춰 투명 처리한다.
+                        // 핸들러가 없으면 OS 가 흰색 사각형으로 채워 라벨 글자
+                        // 뒤가 회색 다이얼로그와 어울리지 않게 두드러진다.
+                        let hdc = HDC(wparam.0 as *mut _);
+                        let _ = SetBkMode(hdc, TRANSPARENT);
+                        return LRESULT((COLOR_BTNFACE.0 + 1) as isize);
+                    }
                     WM_CLOSE => {
                         let _ = DestroyWindow(hwnd);
                         return LRESULT(0);

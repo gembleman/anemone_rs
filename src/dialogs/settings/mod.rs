@@ -90,7 +90,7 @@ impl Dialog for SettingsDialog {
 
     const CLASS_NAME: PCWSTR = w!("AnemoneSettingsClass");
     const TITLE: PCWSTR = w!("아네모네 설정");
-    const WIDTH: i32 = 500;
+    const WIDTH: i32 = 510;
     const HEIGHT: i32 = 780;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 
@@ -330,11 +330,11 @@ impl SettingsDialog {
                     SWP_NOMOVE | SWP_NOZORDER,
                 );
             }
-            // 닫기 버튼 재배치 (다이얼로그 하단)
+            // 닫기 버튼 재배치 (다이얼로그 하단). WIDTH 510→ 우측 정렬 X=395.
             if let Ok(close_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
                 let _ = SetWindowPos(
                     close_hwnd, None,
-                    s(385), s(target_height - 65),
+                    s(395), s(target_height - 65),
                     0, 0,
                     SWP_NOSIZE | SWP_NOZORDER,
                 );
@@ -437,7 +437,7 @@ impl SettingsDialog {
 
             // ====== 닫기 버튼 (탭 외부, 항상 표시) ======
             // 위치는 adjust_dialog_size_for_tab에서 탭별로 재조정
-            self.create_button(385, 405, 100, 30, ctrl_id::CLOSE, "닫기")?;
+            self.create_button(395, 405, 100, 30, ctrl_id::CLOSE, "닫기")?;
 
             // 초기 탭(외관)에 맞춰 다이얼로그 크기 조정
             self.adjust_dialog_size_for_tab(TAB_APPEARANCE);
