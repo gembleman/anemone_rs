@@ -254,15 +254,18 @@ impl ColorDialog {
                         None,
                     );
 
-                    // 라벨 생성
+                    // 라벨 생성 — 트랙바·에디트(X=540, W=25, 중심 552) 기준으로 가운데 정렬.
+                    // 기존 X=528, W=150 은 트랙바보다 좌측으로 12px 튀어나오고 우측으로 +103px
+                    // 넘어가 다이얼로그 우측 경계(확장 +60px 만) 를 침범하던 결함을 해소.
                     let label = CreateWindowExW(
                         WINDOW_EX_STYLE::default(),
                         w!("STATIC"),
                         w!("불투명도"),
-                        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
-                        Self::scale_for_dpi(528, hdlg),
+                        // SS_CENTER = 0x1. (windows 0.62 에 상수 노출 안 됨)
+                        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | 0x1),
+                        Self::scale_for_dpi(522, hdlg),
                         Self::scale_for_dpi(256, hdlg),
-                        Self::scale_for_dpi(150, hdlg),
+                        Self::scale_for_dpi(60, hdlg),
                         Self::scale_for_dpi(15, hdlg),
                         Some(hdlg),
                         None,
