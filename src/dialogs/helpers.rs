@@ -8,6 +8,7 @@ use windows::{
         Graphics::Gdi::*,
         System::LibraryLoader::GetModuleHandleW,
         UI::Controls::*,
+        UI::HiDpi::AdjustWindowRectExForDpi,
         UI::WindowsAndMessaging::*,
     },
     core::*,
@@ -107,6 +108,57 @@ pub struct DialogWindowOptions {
     pub extra_style: WINDOW_STYLE,
 }
 
+/// `(width, height)` 를 클라이언트 영역 크기로 보고 타이틀/테두리를 더한
+/// 전체 윈도우 크기로 변환한다. DPI 와 윈도우 스타일을 함께 반영해, 자식
+/// 컨트롤이 디자인 좌표 (96 DPI, 클라이언트 기준) 그대로 배치돼도 잘리지
+/// 않도록 보장한다.
+///
+/// 실패 시(예: 매우 옛 OS) DPI 스케일링만 적용한 값을 폴백으로 돌려준다.
+fn client_size_to_window_size(
+    width: i32,
+    height: i32,
+    style: WINDOW_STYLE,
+    ex_style: WINDOW_EX_STYLE,
+    dpi: u32,
+) -> (i32, i32) {
+    let w = crate::dpi::scale(width, dpi);
+    let h = crate::dpi::scale(height, dpi);
+    let mut rect = RECT { left: 0, top: 0, right: w, bottom: h };
+    // SAFETY: rect 는 스택의 유효한 RECT. style/ex_style 은 호출자 제공값,
+    // dpi 는 GetDpiForWindow 결과로 양수.
+    let ok =
+        unsafe { AdjustWindowRectExForDpi(&mut rect, style, false, ex_style, dpi).is_ok() };
+    if ok {
+        (rect.right - rect.left, rect.bottom - rect.top)
+    } else {
+        (w, h)
+    }
+}
+
+/// 다이얼로그의 현재 스타일·DPI 기준으로 디자인 좌표(96 DPI 클라이언트
+/// 크기)를 윈도우 전체 픽셀 크기로 변환한다.
+///
+/// `create_dialog_window` 가 적용한 "디자인 좌표 = 클라이언트 크기" 계약을
+/// 다이얼로그 자체 크기를 재조정할 때(예: 탭 전환 후 SetWindowPos)에도
+/// 유지하기 위한 공용 헬퍼.
+pub fn design_to_window_size(hwnd: HWND, design_w: i32, design_h: i32) -> (i32, i32) {
+    let dpi = crate::dpi::dpi_for_window(hwnd);
+    // SAFETY: hwnd 는 유효 윈도우. GetWindowLongPtrW 는 표준 GDI 호출.
+    let (style_val, ex_val) = unsafe {
+        (
+            GetWindowLongPtrW(hwnd, GWL_STYLE) as u32,
+            GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32,
+        )
+    };
+    client_size_to_window_size(
+        design_w,
+        design_h,
+        WINDOW_STYLE(style_val),
+        WINDOW_EX_STYLE(ex_val),
+        dpi,
+    )
+}
+
 /// 화면 중앙에 표준 다이얼로그 윈도우를 생성한다.
 ///
 /// 스타일: WS_EX_TOOLWINDOW + (WS_POPUP | WS_CAPTION | WS_SYSMENU | extra_style)
@@ -116,11 +168,13 @@ pub unsafe fn create_dialog_window(opts: &DialogWindowOptions) -> Result<HWND> {
     unsafe {
         let instance = GetModuleHandleW(None)?;
 
-        // 96-DPI 기준 크기를 부모 윈도우의 DPI 로 스케일링.
-        // 자식 컨트롤은 create_child 에서 다이얼로그 자체 DPI 로 동일 비율 스케일된다.
+        // 디자인 좌표는 96 DPI 의 "클라이언트 영역" 기준. 자식 컨트롤이
+        // 디자인 좌표 그대로 배치돼도 안 잘리도록, 타이틀바/테두리를 포함한
+        // 윈도우 전체 크기로 환산해서 CreateWindowExW 에 넘긴다.
         let dpi = crate::dpi::dpi_for_window(opts.parent);
-        let w = crate::dpi::scale(opts.width, dpi);
-        let h = crate::dpi::scale(opts.height, dpi);
+        let style = WS_POPUP | WS_CAPTION | WS_SYSMENU | opts.extra_style;
+        let (w, h) =
+            client_size_to_window_size(opts.width, opts.height, style, WS_EX_TOOLWINDOW, dpi);
 
         // 부모 윈도우가 위치한 모니터의 작업 영역(작업 표시줄 제외) 중앙에 배치.
         // 다중 모니터 / Per-Monitor V2 환경에서 primary 모니터로 튀는 문제를 방지.
@@ -146,7 +200,7 @@ pub unsafe fn create_dialog_window(opts: &DialogWindowOptions) -> Result<HWND> {
             WS_EX_TOOLWINDOW,
             opts.class_name,
             opts.title,
-            WS_POPUP | WS_CAPTION | WS_SYSMENU | opts.extra_style,
+            style,
             x,
             y,
             w,
@@ -171,10 +225,12 @@ pub unsafe fn create_dialog_window_centered_on_parent(
     unsafe {
         let instance = GetModuleHandleW(None)?;
 
-        // 96-DPI 기준 크기를 부모 윈도우의 DPI 로 스케일링.
+        // create_dialog_window 과 동일: WIDTH/HEIGHT 를 클라이언트 크기로 보고
+        // 타이틀/테두리를 포함한 윈도우 전체 크기로 환산.
         let dpi = crate::dpi::dpi_for_window(opts.parent);
-        let w = crate::dpi::scale(opts.width, dpi);
-        let h = crate::dpi::scale(opts.height, dpi);
+        let style = WS_POPUP | WS_CAPTION | WS_SYSMENU | opts.extra_style;
+        let (w, h) =
+            client_size_to_window_size(opts.width, opts.height, style, WS_EX_TOOLWINDOW, dpi);
 
         let mut parent_rect = RECT::default();
         let _ = GetWindowRect(opts.parent, &mut parent_rect);
@@ -185,7 +241,7 @@ pub unsafe fn create_dialog_window_centered_on_parent(
             WS_EX_TOOLWINDOW,
             opts.class_name,
             opts.title,
-            WS_POPUP | WS_CAPTION | WS_SYSMENU | opts.extra_style,
+            style,
             x,
             y,
             w,
@@ -781,15 +837,6 @@ pub trait Dialog: Sized + 'static {
                             d.handle_command(id, notify_code);
                         }
                         return LRESULT(0);
-                    }
-                    WM_CTLCOLORSTATIC => {
-                        // STATIC/체크박스/라디오 라벨의 텍스트 배경을 다이얼로그
-                        // 배경 brush(COLOR_BTNFACE)에 맞춰 투명 처리한다.
-                        // 핸들러가 없으면 OS 가 흰색 사각형으로 채워 라벨 글자
-                        // 뒤가 회색 다이얼로그와 어울리지 않게 두드러진다.
-                        let hdc = HDC(wparam.0 as *mut _);
-                        let _ = SetBkMode(hdc, TRANSPARENT);
-                        return LRESULT((COLOR_BTNFACE.0 + 1) as isize);
                     }
                     WM_CLOSE => {
                         let _ = DestroyWindow(hwnd);

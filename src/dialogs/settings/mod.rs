@@ -90,7 +90,8 @@ impl Dialog for SettingsDialog {
 
     const CLASS_NAME: PCWSTR = w!("AnemoneSettingsClass");
     const TITLE: PCWSTR = w!("아네모네 설정");
-    const WIDTH: i32 = 510;
+    // 클라이언트 폭. 콘텐츠(그룹박스) 우측 끝 475 기준 좌우 여백 10/10.
+    const WIDTH: i32 = 485;
     const HEIGHT: i32 = 780;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 
@@ -300,8 +301,8 @@ impl SettingsDialog {
 
     /// 탭에 따라 다이얼로그 클라이언트 높이를 조정 (빈 공간 최소화)
     fn adjust_dialog_size_for_tab(&self, tab: usize) {
-        // 닫기 버튼은 target_height - 65 에 배치되므로, 각 탭 마지막 그룹
-        // 박스 하단(외관 430, 표시 225) 아래로 닫기 버튼이 오도록 높이를 잡는다.
+        // 디자인 클라이언트 높이. 닫기 버튼은 target_height - 65 에 배치되므로,
+        // 각 탭 마지막 그룹박스 하단 아래로 닫기 버튼이 오도록 잡는다.
         let target_height = match tab {
             TAB_APPEARANCE => 505,
             TAB_DISPLAY => 305,
@@ -312,29 +313,35 @@ impl SettingsDialog {
         unsafe {
             let dpi = crate::dpi::dpi_for_window(self.hwnd);
             let s = |v: i32| crate::dpi::scale(v, dpi);
+            // 디자인 좌표는 클라이언트 기준. SetWindowPos 는 윈도우 전체 크기를
+            // 받으므로 타이틀/테두리만큼 더해 환산해야 닫기 버튼이 안 잘린다.
+            let (_, win_h) = super::helpers::design_to_window_size(
+                self.hwnd, Self::WIDTH, target_height,
+            );
             let mut rect = RECT::default();
             let _ = GetWindowRect(self.hwnd, &mut rect);
             let cur_w = rect.right - rect.left;
             let _ = SetWindowPos(
                 self.hwnd, None,
                 0, 0,
-                cur_w, s(target_height),
+                cur_w, win_h,
                 SWP_NOMOVE | SWP_NOZORDER,
             );
-            // 탭 컨트롤도 같이 늘리기 (탭 헤더 ~ 닫기 버튼 위까지)
+            // 탭 컨트롤도 같이 늘리기 (탭 헤더 ~ 닫기 버튼 위까지).
+            // 폭은 create_controls 와 동일하게 클라 폭 - 좌우 5px = 475.
             if let Ok(tab_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32) {
                 let _ = SetWindowPos(
                     tab_hwnd, None,
                     0, 0,
-                    s(485), s(target_height - 70),
+                    s(475), s(target_height - 70),
                     SWP_NOMOVE | SWP_NOZORDER,
                 );
             }
-            // 닫기 버튼 재배치 (다이얼로그 하단). WIDTH 510→ 우측 정렬 X=395.
+            // 닫기 버튼 재배치 (다이얼로그 하단). 클라 폭 485 → 우측 정렬 X=370.
             if let Ok(close_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
                 let _ = SetWindowPos(
                     close_hwnd, None,
-                    s(395), s(target_height - 65),
+                    s(370), s(target_height - 65),
                     0, 0,
                     SWP_NOSIZE | SWP_NOZORDER,
                 );
@@ -405,8 +412,9 @@ impl SettingsDialog {
 
             // ====== 탭 컨트롤 ======
             let tabs = ["외관", "표시·윈도우", "번역"];
-            // 탭 높이는 switch_tab의 adjust_dialog_size_for_tab에서 동적 조정
-            self.create_tab_control(5, 5, 485, 400, ctrl_id::TAB_CONTROL, &tabs)?;
+            // 탭 높이는 switch_tab의 adjust_dialog_size_for_tab에서 동적 조정.
+            // 폭은 클라 폭(485) - 좌5 - 우5 = 475 로 잡아 우측 여백 확보.
+            self.create_tab_control(5, 5, 475, 400, ctrl_id::TAB_CONTROL, &tabs)?;
 
             // 탭 내부 컨트롤 시작 오프셋 (탭 헤더 아래)
             let tx = 15;  // 탭 영역 내부 x
@@ -436,8 +444,9 @@ impl SettingsDialog {
             }
 
             // ====== 닫기 버튼 (탭 외부, 항상 표시) ======
-            // 위치는 adjust_dialog_size_for_tab에서 탭별로 재조정
-            self.create_button(395, 405, 100, 30, ctrl_id::CLOSE, "닫기")?;
+            // 위치는 adjust_dialog_size_for_tab에서 탭별로 재조정.
+            // 클라 폭 485 기준 우측 정렬: 485 - 15 - 100 = 370.
+            self.create_button(370, 405, 100, 30, ctrl_id::CLOSE, "닫기")?;
 
             // 초기 탭(외관)에 맞춰 다이얼로그 크기 조정
             self.adjust_dialog_size_for_tab(TAB_APPEARANCE);
@@ -728,11 +737,14 @@ impl SettingsDialog {
 
             let h = self.create_label(tx + 295, ty + 25, 40, 18, "타겟:")?;
             self.register_control(tab, h);
-            let h = self.create_combobox(tx + 335, ty + 23, 80, 200, ctrl_id::TRANS_TARGET_LANG, &[], 0)?;
+            // 타겟 콤보 폭 80→70 으로 줄여 우측 "자동" 체크박스 공간 확보.
+            let h = self.create_combobox(tx + 335, ty + 23, 70, 200, ctrl_id::TRANS_TARGET_LANG, &[], 0)?;
             self.register_control(tab, h);
 
             let auto_detect = self.config.borrow().translation.auto_detect;
-            let h = self.create_checkbox(tx + 420, ty + 25, 55, 18, ctrl_id::TRANS_AUTO_DETECT, "자동", auto_detect)?;
+            // 타겟 콤보 우측 끝 tx+405. 그룹박스 우측 끝 tx+460.
+            // x=tx+410, w=45 → 우측 끝 tx+455 → 그룹 안쪽 5px 여유.
+            let h = self.create_checkbox(tx + 410, ty + 25, 45, 18, ctrl_id::TRANS_AUTO_DETECT, "자동", auto_detect)?;
             self.register_control(tab, h);
 
             // EzTrans 경로
@@ -938,6 +950,20 @@ impl SettingsDialog {
     /// 커스텀 메시지 핸들러
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         match msg {
+            WM_CTLCOLORSTATIC => {
+                // 탭 컨트롤 본문은 비주얼 스타일이 흰색(COLOR_WINDOW)으로 그리는데
+                // 그 위에 올라간 STATIC/체크박스/라디오 자식은 다이얼로그의 회색
+                // brush(COLOR_BTNFACE)로 칠해져 흰 본문 위 회색 사각형으로 도드라진다.
+                // Settings 의 거의 모든 라벨이 탭 위에 있으므로 일괄 흰 brush 반환.
+                // SAFETY: wparam 은 OS 가 넘긴 유효 HDC. SetBkMode/GetSysColorBrush
+                // 는 표준 GDI 호출.
+                unsafe {
+                    let hdc = HDC(wparam.0 as *mut _);
+                    let _ = SetBkMode(hdc, TRANSPARENT);
+                    let brush = GetSysColorBrush(COLOR_WINDOW);
+                    Some(LRESULT(brush.0 as isize))
+                }
+            }
             WM_DRAWITEM => {
                 // SAFETY: lparam points to a valid DRAWITEMSTRUCT from the system.
                 unsafe {

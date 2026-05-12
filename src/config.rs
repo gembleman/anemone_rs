@@ -390,14 +390,26 @@ impl TranslationConfig {
     }
 }
 
+/// 실행 파일 옆 `eztrans_dll/` 내부 경로를 문자열로 반환한다.
+/// 실행 경로 조회에 실패하면 상대 경로(`eztrans_dll/<sub>`)로 폴백한다.
+fn default_eztrans_subpath(sub: &str) -> String {
+    let rel = PathBuf::from("eztrans_dll").join(sub);
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        return exe_dir.join(&rel).to_string_lossy().into_owned();
+    }
+    rel.to_string_lossy().into_owned()
+}
+
 impl Default for TranslationConfig {
     fn default() -> Self {
         Self {
             engine: "eztrans".to_string(),
             source_lang: "ja".to_string(),
             target_lang: "ko".to_string(),
-            eztrans_dll_path: String::new(),
-            eztrans_dat_path: String::new(),
+            eztrans_dll_path: default_eztrans_subpath("J2KEngine.dll"),
+            eztrans_dat_path: default_eztrans_subpath("Dat"),
             deepl_api_key: String::new(),
             deepl_keys: Vec::new(),
             deepl_strategy: default_deepl_strategy(),

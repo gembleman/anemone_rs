@@ -181,12 +181,13 @@ impl Dialog for BacklogDialog {
                 None,
             )?;
 
-            // 배경색 설정 (어두운 색상)
+            // 배경색: 시스템 기본 (밝은 흰색 계열) — wParam=1 이면 lParam 무시하고
+            // COLOR_WINDOW 사용. 다른 다이얼로그와 톤 통일.
             let _ = SendMessageW(
                 self.richedit,
                 EM_SETBKGNDCOLOR,
-                Some(WPARAM(0)),
-                Some(LPARAM(0x282828)), // BGR
+                Some(WPARAM(1)),
+                Some(LPARAM(0)),
             );
 
             // ====== 옵션 그룹 ======
@@ -262,30 +263,35 @@ impl BacklogDialog {
                 Some(WPARAM(usize::MAX)), Some(LPARAM(-1)),
             );
 
+            // COLORREF 는 0x00BBGGRR 순서.
+            const COLOR_NAME: u32      = 0x00A00000; // #0000A0 진청색 ([name])
+            const COLOR_ORIGINAL: u32  = 0x00000000; // #000000 검정 (원문)
+            const COLOR_TRANSLATE: u32 = 0x00008000; // #008000 진녹색 (번역)
+
             if let Some(ref name) = entry.name
                 && self.filter != BacklogFilter::Translation
             {
-                self.append_styled_text(&format!("[{}] ", name), 0x00FFFF, true);
+                self.append_styled_text(&format!("[{}] ", name), COLOR_NAME, true);
             }
 
             if self.filter != BacklogFilter::Translation {
-                self.append_styled_text(&entry.original, 0xFFFFFF, false);
+                self.append_styled_text(&entry.original, COLOR_ORIGINAL, false);
                 if self.add_linefeed {
-                    self.append_styled_text("\r\n", 0xFFFFFF, false);
+                    self.append_styled_text("\r\n", COLOR_ORIGINAL, false);
                 }
             }
 
             if let Some(ref translation) = entry.translation
                 && self.filter != BacklogFilter::Original
             {
-                self.append_styled_text(translation, 0x90EE90, false);
+                self.append_styled_text(translation, COLOR_TRANSLATE, false);
                 if self.add_linefeed {
-                    self.append_styled_text("\r\n", 0x90EE90, false);
+                    self.append_styled_text("\r\n", COLOR_TRANSLATE, false);
                 }
             }
 
             if self.filter == BacklogFilter::All && self.add_linefeed {
-                self.append_styled_text("\r\n", 0x808080, false);
+                self.append_styled_text("\r\n", COLOR_ORIGINAL, false);
             }
 
             let _ = SendMessageW(
