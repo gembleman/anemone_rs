@@ -663,13 +663,25 @@ impl TranslateDialog {
                 .inspect_err(|e| tracing::warn!("GlobalAlloc failed: {e}"))
                 .ok();
             if let Some(hmem) = hmem {
+                // SetClipboardData 가 성공하면 HGLOBAL 소유권이 OS 로 이관되므로
+                // 호출자는 더이상 GlobalFree 하면 안 된다 (MSDN). 그 외 모든
+                // 실패 경로 (Lock 실패 / SetClipboardData 실패) 에서는 명시적으로
+                // GlobalFree 해야 한다 — 32-bit 프로세스라 GMEM 풀이 작아
+                // 반복 누수가 빠르게 누적된다.
                 let ptr = GlobalLock(hmem) as *mut u16;
+                let mut ownership_transferred = false;
                 if !ptr.is_null() {
                     std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
                     let _ = GlobalUnlock(hmem);
-                    if let Err(e) = SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hmem.0))) {
-                        tracing::warn!("SetClipboardData failed: {e}");
+                    match SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hmem.0))) {
+                        Ok(_) => ownership_transferred = true,
+                        Err(e) => tracing::warn!("SetClipboardData failed: {e}"),
                     }
+                } else {
+                    tracing::warn!("GlobalLock returned null");
+                }
+                if !ownership_transferred {
+                    let _ = GlobalFree(Some(hmem));
                 }
             }
             let _ = CloseClipboard();
