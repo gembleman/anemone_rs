@@ -67,10 +67,12 @@ impl Dialog for GlossaryDialog {
             self.create_group_box(10, 10, 460, 220, "사전 항목 (source → target)")?;
             self.create_listbox(20, 30, 440, 190, ctrl_id::LIST)?;
 
-            self.create_label(20, 240, 50, 18, "원문:")?;
-            self.create_edit(70, 238, 160, 22, ctrl_id::SOURCE_EDIT, "")?;
-            self.create_label(240, 240, 50, 18, "번역:")?;
-            self.create_edit(290, 238, 170, 22, ctrl_id::TARGET_EDIT, "")?;
+            // A-1: mnemonic 추가. Win32 STATIC 의 & 다음 글자에 Alt+키 매핑 (Z-order 상 다음 컨트롤).
+            // 라벨 폭 50→70 으로 +20, 인접 Edit X 도 +20 시프트해 우측 끝(230 / 460) 유지.
+            self.create_label(20, 240, 70, 18, "원문(&S):")?;
+            self.create_edit(90, 238, 140, 22, ctrl_id::SOURCE_EDIT, "")?;
+            self.create_label(240, 240, 70, 18, "번역(&T):")?;
+            self.create_edit(310, 238, 150, 22, ctrl_id::TARGET_EDIT, "")?;
 
             // 편집 행 두 버튼 폭 통일 (100/80 → 90/90) 로 좌측 시각 균형 정리.
             self.create_button(20, 270, 90, 26, ctrl_id::BTN_ADD, "추가/수정")?;

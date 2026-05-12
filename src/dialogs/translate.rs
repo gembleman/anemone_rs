@@ -267,24 +267,25 @@ impl Dialog for TranslateDialog {
             // 옵션/동작 그룹 아래(y=430)에 한 줄로 배치. 줄1: 제공자 + 모델, 줄2: API 키.
             self.llm_group = self.create_group_box(10, 430, 475, 100, "LLM 설정")?;
 
-            self.llm_provider_label = self.create_label(20, 453, 50, 18, "제공자:")?;
+            // A-1: mnemonic 추가. 라벨 폭 +20, 인접 콤보/Edit X 도 +20 시프트해 우측 끝(185/475) 유지.
+            self.llm_provider_label = self.create_label(20, 453, 70, 18, "제공자(&P):")?;
             self.llm_provider_combo = DialogControls::create_combobox(
-                self, 75, 450, 110, 180, ctrl_id::COMBO_LLM_PROVIDER, &[], 0,
+                self, 95, 450, 90, 180, ctrl_id::COMBO_LLM_PROVIDER, &[], 0,
             )?;
             for p in LlmProvider::ALL {
                 self.add_combobox_item(self.llm_provider_combo, p.display_name());
             }
 
-            self.llm_model_label = self.create_label(200, 453, 40, 18, "모델:")?;
+            self.llm_model_label = self.create_label(200, 453, 60, 18, "모델(&M):")?;
             let model_text = self.config.borrow().translation.llm.model.clone();
             self.llm_model_edit = self.create_edit(
-                240, 450, 235, 22, ctrl_id::EDIT_LLM_MODEL, &model_text,
+                260, 450, 215, 22, ctrl_id::EDIT_LLM_MODEL, &model_text,
             )?;
 
-            self.llm_api_key_label = self.create_label(20, 488, 60, 18, "API 키:")?;
+            self.llm_api_key_label = self.create_label(20, 488, 80, 18, "API 키(&K):")?;
             let api_key_text = self.config.borrow().translation.llm.api_key.clone();
             self.llm_api_key_edit = self.create_edit(
-                85, 485, 390, 22, ctrl_id::EDIT_LLM_API_KEY, &api_key_text,
+                105, 485, 370, 22, ctrl_id::EDIT_LLM_API_KEY, &api_key_text,
             )?;
 
             // 제공자 콤보 초기 선택
