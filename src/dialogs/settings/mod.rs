@@ -288,11 +288,13 @@ impl SettingsDialog {
 
     /// 탭에 따라 다이얼로그 클라이언트 높이를 조정 (빈 공간 최소화)
     fn adjust_dialog_size_for_tab(&self, tab: usize) {
+        // 닫기 버튼은 target_height - 65 에 배치되므로, 각 탭 마지막 그룹
+        // 박스 하단(외관 430, 표시 225) 아래로 닫기 버튼이 오도록 높이를 잡는다.
         let target_height = match tab {
-            TAB_APPEARANCE => 470,
-            TAB_DISPLAY => 270,
+            TAB_APPEARANCE => 505,
+            TAB_DISPLAY => 305,
             TAB_TRANSLATION => 830,
-            _ => 470,
+            _ => 505,
         };
         // SAFETY: self.hwnd is valid. SetWindowPos uses valid parameters.
         unsafe {
