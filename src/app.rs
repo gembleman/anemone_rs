@@ -189,10 +189,23 @@ impl App {
             };
 
             // 클립보드 감시 시작 (borrow_mut 블록 밖에서)
-            // SetClipboardViewer가 동기적으로 WM_DRAWCLIPBOARD를 보내므로
-            // RefCell이 borrow 상태가 아닐 때 호출해야 함
+            // AddClipboardFormatListener 가 내부적으로 Win32 동기 메시지
+            // (SendMessageTimeoutW)를 보낼 수 있으므로, start() 호출 시점에
+            // RefMut 이 살아있으면 wndproc 의 borrow_mut 과 충돌해 패닉한다.
+            //
+            // `app.borrow_mut().clipboard.start()` 는 임시 RefMut 의 수명이
+            // statement 끝까지 유지되어 start() 실행 중에도 borrow 가 걸려 있다.
+            // 명시적 변수 + 별도 statement 로 분리해 RefMut 을 start() 전에 drop.
             if should_start_clipboard {
-                app.borrow_mut().clipboard.start();
+                let mut app_ref = app.borrow_mut();
+                app_ref.clipboard.start();
+                // app_ref (RefMut) 은 이 블록 끝에서 drop — start() 완료 후.
+                // start() 내부의 AddClipboardFormatListener 가 동기 메시지를 보내
+                // wndproc 이 재진입하더라도, wndproc 은 try_borrow_mut() 를 쓰므로
+                // 이미 borrow 된 상태에서 조용히 skip 한다.
+                // (이전에 별도 statement 로 쪼갰던 이유는 착각이었음 — start() 자체가
+                // RefMut 홀딩 상태에서 동기 메시지를 유발하는 게 문제이며, wndproc 이
+                // try_borrow_mut 을 쓰는 이상 패닉하지 않는다.)
             }
 
             // 윈도우 표시 → 첫 paint (CompositionRenderer lazy init 트리거).
@@ -206,10 +219,21 @@ impl App {
                 }
                 // 벤치마크 모드: 환경변수로 켜진 경우 paint() N 회 측정.
                 // detailed 모드가 켜져 있으면 그쪽이 우선 (phase 정보 더 많음).
-                if let Some(iters) = crate::bench::paint_bench_detailed_iters() {
+                let ran_bench = if let Some(iters) = crate::bench::paint_bench_detailed_iters() {
                     app_ref.run_paint_bench_detailed(iters);
+                    true
                 } else if let Some(iters) = crate::bench::paint_bench_iters() {
                     app_ref.run_paint_bench(iters);
+                    true
+                } else {
+                    false
+                };
+
+                // 벤치 측정 후에는 메시지 루프에 진입하지 않고 즉시 종료한다.
+                // (벤치는 일회성 측정이므로 GUI 를 띄워둘 이유가 없음 — 외부에서
+                // taskkill 로 죽일 필요 없이 프로세스가 스스로 정리하고 끝난다.)
+                if ran_bench {
+                    PostQuitMessage(0);
                 }
             }
 
@@ -493,6 +517,13 @@ impl App {
     /// 호출된다. D2D 합성 경로 (DCRenderTarget → HwndRT/DComp) 재작성 결정의
     /// baseline 측정용.
     fn run_paint_bench(&mut self, iters: usize) {
+        // 벤치 루프 중 클립보드 이벤트가 re-entrant borrow 를 유발해 패닉하는 것을
+        // 방지한다. 루프 종료 후 원래 상태로 복구.
+        let was_watching = self.clipboard.is_watching();
+        if was_watching {
+            self.clipboard.stop();
+        }
+
         // 워밍업 (캐시 / 셰이더 컴파일 등의 1 회성 비용 제거)
         const WARMUP: usize = 16;
         for _ in 0..WARMUP {
@@ -507,12 +538,19 @@ impl App {
             let t0 = acc.timer().now();
             if let Err(e) = self.paint() {
                 tracing::warn!("bench paint failed: {e}");
+                if was_watching {
+                    self.clipboard.start();
+                }
                 return;
             }
             let t1 = acc.timer().now();
             acc.push(t1 - t0);
         }
         acc.report("paint");
+
+        if was_watching {
+            self.clipboard.start();
+        }
     }
 
     /// paint() 의 phase 별 비용을 분리 측정. `ANEMONE_BENCH_PAINT_DETAILED=<N>`
@@ -525,6 +563,13 @@ impl App {
     /// 자체는 일반 `paint` 벤치보다 약간 더 느릴 수 있다.
     fn run_paint_bench_detailed(&mut self, iters: usize) {
         const WARMUP: usize = 16;
+
+        // 벤치 루프 중 클립보드 이벤트가 re-entrant borrow 를 유발해 패닉하는 것을
+        // 방지한다. 루프 종료 후 원래 상태로 복구.
+        let was_watching = self.clipboard.is_watching();
+        if was_watching {
+            self.clipboard.stop();
+        }
 
         // `ANEMONE_BENCH_PAINT_NO_OUTLINE=1` 토글 — Flush 비용의 출처가
         // outline/shadow geometry 인지 텍스트 본문인지 분리 측정. config 를
@@ -560,6 +605,9 @@ impl App {
                 if let Some(t) = saved_text {
                     self.current_text = t;
                 }
+                if was_watching {
+                    self.clipboard.start();
+                }
                 return;
             }
         }
@@ -584,6 +632,9 @@ impl App {
                 if let Some(t) = saved_text {
                     self.current_text = t;
                 }
+                if was_watching {
+                    self.clipboard.start();
+                }
                 return;
             }
             let t1 = outer_timer.now();
@@ -598,6 +649,9 @@ impl App {
         }
         if let Some(t) = saved_text {
             self.current_text = t;
+        }
+        if was_watching {
+            self.clipboard.start();
         }
     }
 
