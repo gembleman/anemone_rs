@@ -2,6 +2,8 @@
 //!
 //! 윈도우 클래스 등록, 윈도우 생성 등 다이얼로그 간 공통 패턴 추출.
 
+use std::collections::HashMap;
+
 use windows::{
     Win32::{
         Foundation::*,
@@ -16,22 +18,36 @@ use windows::{
 
 use crate::util::to_wide;
 
+thread_local! {
+    static DIALOG_APPLIED_DPI: std::cell::RefCell<HashMap<isize, u32>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
 /// 다이얼로그 공용 한글 폰트 (Malgun Gothic 9pt).
 ///
 /// 최초 호출 시 `CreateFontW`로 생성 후 캐시. 실패 시 DEFAULT_GUI_FONT로 폴백.
 /// 프로세스 종료 시 OS가 핸들을 정리하므로 명시적 해제는 하지 않는다.
 pub fn dialog_font() -> HFONT {
+    dialog_font_for_dpi(crate::dpi::dpi_for_window(HWND::default()))
+}
+
+/// 지정 DPI 용 다이얼로그 폰트.
+///
+/// 컨트롤은 DPI 변경 시 새 폰트를 다시 받아야 하므로 DPI 별로 캐시한다.
+/// 프로세스 종료 시 OS 가 정리하므로 명시적 해제는 하지 않는다.
+pub fn dialog_font_for_dpi(dpi: u32) -> HFONT {
     thread_local! {
-        static CACHED: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+        static CACHED: std::cell::RefCell<HashMap<u32, isize>> =
+            std::cell::RefCell::new(HashMap::new());
     }
-    CACHED.with(|c| {
-        let cur = c.get();
-        if cur != 0 {
+    let dpi = if dpi > 0 { dpi } else { crate::dpi::BASE_DPI };
+    CACHED.with(|cache| {
+        if let Some(&cur) = cache.borrow().get(&dpi) {
             return HFONT(cur as *mut _);
         }
         // SAFETY: CreateFontW is called with literal-safe parameters.
-        // 시스템 DPI(Win10 1607+)에 맞춰 폰트 높이 스케일링.
-        let height = crate::dpi::scale_font_for_system(-12);
+        // 지정 DPI 에 맞춰 폰트 높이 스케일링.
+        let height = crate::dpi::scale(-12, dpi);
         let hfont = unsafe {
             let face = to_wide("맑은 고딕");
             CreateFontW(
@@ -50,8 +66,30 @@ pub fn dialog_font() -> HFONT {
             let stock = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
             return HFONT(stock.0 as *mut _);
         }
-        c.set(hfont.0 as isize);
+        cache.borrow_mut().insert(dpi, hfont.0 as isize);
         hfont
+    })
+}
+
+fn remember_dialog_dpi(hwnd: HWND, dpi: u32) {
+    let dpi = if dpi > 0 { dpi } else { crate::dpi::BASE_DPI };
+    DIALOG_APPLIED_DPI.with(|m| {
+        m.borrow_mut().insert(hwnd.0 as isize, dpi);
+    });
+}
+
+fn take_remembered_dialog_dpi(hwnd: HWND) {
+    DIALOG_APPLIED_DPI.with(|m| {
+        m.borrow_mut().remove(&(hwnd.0 as isize));
+    });
+}
+
+fn remembered_dialog_dpi(hwnd: HWND) -> u32 {
+    DIALOG_APPLIED_DPI.with(|m| {
+        m.borrow()
+            .get(&(hwnd.0 as isize))
+            .copied()
+            .unwrap_or_else(|| crate::dpi::dpi_for_window(hwnd))
     })
 }
 
@@ -157,6 +195,81 @@ pub fn design_to_window_size(hwnd: HWND, design_w: i32, design_h: i32) -> (i32, 
         WINDOW_EX_STYLE(ex_val),
         dpi,
     )
+}
+
+struct DpiRescaleContext {
+    parent: HWND,
+    old_dpi: u32,
+    new_dpi: u32,
+    font: HFONT,
+}
+
+#[inline]
+fn scale_between_dpi(value: i32, old_dpi: u32, new_dpi: u32) -> i32 {
+    ((value as i64) * (new_dpi as i64) / (old_dpi as i64)) as i32
+}
+
+unsafe extern "system" fn rescale_child_for_dpi(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let ctx = unsafe { &*(lparam.0 as *const DpiRescaleContext) };
+
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return TRUE;
+    }
+
+    let mut top_left = POINT { x: rect.left, y: rect.top };
+    let mut bottom_right = POINT { x: rect.right, y: rect.bottom };
+    unsafe {
+        let _ = ScreenToClient(ctx.parent, &mut top_left);
+        let _ = ScreenToClient(ctx.parent, &mut bottom_right);
+    }
+
+    let x = scale_between_dpi(top_left.x, ctx.old_dpi, ctx.new_dpi);
+    let y = scale_between_dpi(top_left.y, ctx.old_dpi, ctx.new_dpi);
+    let w = scale_between_dpi(bottom_right.x - top_left.x, ctx.old_dpi, ctx.new_dpi).max(1);
+    let h = scale_between_dpi(bottom_right.y - top_left.y, ctx.old_dpi, ctx.new_dpi).max(1);
+
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            w,
+            h,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        let _ = SendMessageW(
+            hwnd,
+            WM_SETFONT,
+            Some(WPARAM(ctx.font.0 as usize)),
+            Some(LPARAM(1)),
+        );
+    }
+
+    TRUE
+}
+
+fn rescale_dialog_children_for_dpi(hwnd: HWND, old_dpi: u32, new_dpi: u32) {
+    if old_dpi == 0 || new_dpi == 0 || old_dpi == new_dpi {
+        return;
+    }
+
+    let ctx = DpiRescaleContext {
+        parent: hwnd,
+        old_dpi,
+        new_dpi,
+        font: dialog_font_for_dpi(new_dpi),
+    };
+
+    // SAFETY: ctx lives until EnumChildWindows returns; the callback only reads it.
+    unsafe {
+        let _ = EnumChildWindows(
+            Some(hwnd),
+            Some(rescale_child_for_dpi),
+            LPARAM((&ctx as *const DpiRescaleContext) as isize),
+        );
+    }
 }
 
 /// 화면 중앙에 표준 다이얼로그 윈도우를 생성한다.
@@ -793,6 +906,7 @@ pub trait Dialog: Sized + 'static {
         });
 
         dialog.borrow_mut().create_controls()?;
+        remember_dialog_dpi(hwnd, crate::dpi::dpi_for_window(hwnd));
 
         // SAFETY: 위에서 막 만든 유효 핸들.
         unsafe {
@@ -830,6 +944,25 @@ pub trait Dialog: Sized + 'static {
                 }
 
                 match msg {
+                    WM_DPICHANGED => {
+                        let old_dpi = remembered_dialog_dpi(hwnd);
+                        let new_dpi = (wparam.0 & 0xFFFF) as u32;
+                        rescale_dialog_children_for_dpi(hwnd, old_dpi, new_dpi);
+                        remember_dialog_dpi(hwnd, new_dpi);
+                        if lparam.0 != 0 {
+                            let rect = &*(lparam.0 as *const RECT);
+                            let _ = SetWindowPos(
+                                hwnd,
+                                None,
+                                rect.left,
+                                rect.top,
+                                rect.right - rect.left,
+                                rect.bottom - rect.top,
+                                SWP_NOZORDER | SWP_NOACTIVATE,
+                            );
+                        }
+                        return LRESULT(0);
+                    }
                     WM_COMMAND => {
                         let id = (wparam.0 & 0xFFFF) as u16;
                         let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
@@ -843,6 +976,7 @@ pub trait Dialog: Sized + 'static {
                         return LRESULT(0);
                     }
                     WM_DESTROY => {
+                        take_remembered_dialog_dpi(hwnd);
                         Self::instance_slot().with(|cell| {
                             if let Ok(mut guard) = cell.try_borrow_mut() {
                                 *guard = None;

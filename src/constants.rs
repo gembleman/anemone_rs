@@ -3,7 +3,7 @@
 //! WM_USER 기반 사용자 정의 메시지 ID, Win32 누락 상수,
 //! 윈도우 기본값 등을 중앙에서 관리한다.
 
-use windows::Win32::UI::WindowsAndMessaging::WM_USER;
+use windows::Win32::UI::WindowsAndMessaging::{WM_APP, WM_USER};
 
 // ── 메인 윈도우 ─────────────────────────────────────────
 
@@ -30,6 +30,9 @@ pub const WM_TRANSLATION_COMPLETE: u32 = WM_USER + 100;
 
 /// 지연된 클립보드 처리 (RefCell try_borrow_mut 실패 시 재시도용)
 pub const WM_DEFERRED_CLIPBOARD: u32 = WM_USER + 200;
+
+/// 설정/메뉴 변경 후 메인 윈도우 상태 동기화 + repaint 요청
+pub const WM_APP_REFRESH: u32 = WM_APP + 1;
 
 // ── 파일 번역 진행률 메시지 ─────────────────────────────
 

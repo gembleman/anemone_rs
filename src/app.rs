@@ -9,7 +9,7 @@ use windows::{
         Foundation::*,
         Graphics::{
             Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET},
-            Gdi::{ClientToScreen, HBRUSH, UpdateWindow, ValidateRect},
+            Gdi::{BeginPaint, ClientToScreen, EndPaint, HBRUSH, PAINTSTRUCT, UpdateWindow},
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
@@ -22,7 +22,7 @@ use crate::config::Config;
 use crate::constants::{
     INITIAL_WINDOW_HEIGHT, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_X, INITIAL_WINDOW_Y,
     MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH,
-    WM_DEFERRED_CLIPBOARD, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
+    WM_APP_REFRESH, WM_DEFERRED_CLIPBOARD, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
 use crate::d2d::D2DRenderer;
 use crate::d2d_composition::CompositionRenderer;
@@ -214,6 +214,7 @@ impl App {
 
             {
                 let mut app_ref = app.borrow_mut();
+                app_ref.sync_window_state();
                 if let Err(e) = app_ref.paint() {
                     tracing::warn!("initial paint failed: {e}");
                 }
@@ -356,7 +357,10 @@ impl App {
         // waitable swap chain: 다음 back buffer 가 사용 가능해질 때까지 명시
         // 대기. 이 wait 가 없으면 DXGI 가 EndDraw 내부에서 동일 대기를 수행해
         // ~1 ms 스톨을 만든다. 1000 ms 는 GPU TDR 등 비정상 상태 안전망.
-        composition.wait_for_back_buffer(1000);
+        if !composition.wait_for_back_buffer(1000) {
+            tracing::warn!("DComp wait_for_back_buffer timed out or failed; skipping paint");
+            return Ok(());
+        }
         let t = phase_record(PhaseField::SwapChainWait, t);
 
         // 합성 경로: BeginDraw 는 CompositionRenderer 가 책임진다.
@@ -401,9 +405,8 @@ impl App {
         }
         let t = phase_record(PhaseField::Text, t);
 
-        // Flush + EndDraw + Present 를 분리 호출 — phase 측정용. 정상 동작은
-        // `end_draw_and_present` 와 동일하다 (Flush 는 EndDraw 내부에서도
-        // 수행되므로 중복이지만 비용 분리 목적).
+        // EndDraw + Present. EndDraw 가 내부적으로 GPU 명령 큐를 flush 하므로
+        // 별도 Flush 호출은 두지 않는다.
         // sync_interval=0: 응답성 우선 (paint 는 이벤트 기반이라 매 프레임 호출되지
         // 않으므로 GPU 큐 백프레셔 위험 낮음). baseline 의 UpdateLayeredWindow 도
         // vsync 미대기였으니 동일 정책.
@@ -412,16 +415,6 @@ impl App {
         // `DXGI_ERROR_DEVICE_RESET`) 감지 시 즉시 종료하고 self.handle_device_lost()
         // 로 캐시·합성 렌더러를 폐기. 다음 paint 가 lazy-init 분기에서 다시
         // 만든다.
-        if let Err(e) = composition.flush() {
-            if Self::is_device_lost(&e) {
-                tracing::warn!("DComp flush: device lost ({e}), recreating stack");
-                self.handle_device_lost();
-                return Ok(());
-            }
-            tracing::error!("DComp flush failed: {e}");
-        }
-        let t = phase_record(PhaseField::Flush, t);
-
         if let Err(e) = composition.end_draw() {
             if Self::is_device_lost(&e) {
                 tracing::warn!("DComp end_draw: device lost ({e}), recreating stack");
@@ -488,7 +481,7 @@ impl App {
         Ok(())
     }
 
-    /// flush/end_draw/present 의 에러가 D2D/DXGI 디바이스 손실인지 판정.
+    /// end_draw/present 의 에러가 D2D/DXGI 디바이스 손실인지 판정.
     ///
     /// 손실 시 D2D context 와 swap chain 의 모든 GPU 객체가 무효 — 같은
     /// device 위에서 재시도해 봐야 같은 에러가 반복된다. 새 device 와
@@ -571,7 +564,7 @@ impl App {
             self.clipboard.stop();
         }
 
-        // `ANEMONE_BENCH_PAINT_NO_OUTLINE=1` 토글 — Flush 비용의 출처가
+        // `ANEMONE_BENCH_PAINT_NO_OUTLINE=1` 토글 — text/end_draw 비용의 출처가
         // outline/shadow geometry 인지 텍스트 본문인지 분리 측정. config 를
         // 임시로 수정하고 측정 후 원복한다 (production paint 경로는 무변경).
         let no_outline = crate::bench::bench_disable_outline();
@@ -668,10 +661,19 @@ impl App {
         // 합성 렌더러가 이미 부착된 상태면 swap chain 도 따라 키운다.
         // 첫 paint 전 (lazy init 직전) 의 WM_SIZE 는 self.composition 이 None 이라
         // 자연 무시된다 — 다음 paint 의 lazy init 이 새 사이즈로 swap chain 을 만든다.
-        if let Some(composition) = self.composition.as_mut()
-            && let Err(e) = composition.resize(width as u32, height as u32)
-        {
-            tracing::error!("CompositionRenderer.resize failed: {e}");
+        let resize_failed = if let Some(composition) = self.composition.as_mut() {
+            match composition.resize(width as u32, height as u32) {
+                Ok(()) => false,
+                Err(e) => {
+                    tracing::error!("CompositionRenderer.resize failed: {e}");
+                    true
+                }
+            }
+        } else {
+            false
+        };
+        if resize_failed {
+            self.handle_device_lost();
         }
 
         self.paint()
@@ -1199,19 +1201,12 @@ impl App {
                 }
 
                 WM_PAINT => {
-                    if lparam.0 == 1 {
-                        // 설정 대화상자에서 보낸 갱신 요청 — 윈도우 상태도 동기화
-                        self.sync_window_state();
-                        if let Err(e) = self.paint() {
-                            tracing::warn!("paint failed on WM_PAINT: {e}");
-                        }
+                    let mut ps = PAINTSTRUCT::default();
+                    let _ = BeginPaint(hwnd, &mut ps);
+                    if let Err(e) = self.paint() {
+                        tracing::warn!("paint failed on WM_PAINT: {e}");
                     }
-                    // 시스템이 보낸 WM_PAINT 든 사용자 정의 갱신이든, invalid
-                    // region 을 비워야 메시지 큐가 같은 WM_PAINT 를 재발행해
-                    // 폭주하는 것을 막는다. NOREDIRECTIONBITMAP 윈도우에선
-                    // 시스템 invalidate 빈도가 낮지만 디스플레이 변경 등
-                    // 엣지케이스에 대비.
-                    let _ = ValidateRect(Some(hwnd), None);
+                    let _ = EndPaint(hwnd, &ps);
                     Some(LRESULT(0))
                 }
 
@@ -1222,6 +1217,14 @@ impl App {
 
                 _ if msg == WM_DEFERRED_CLIPBOARD => {
                     self.handle_clipboard_change();
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_APP_REFRESH => {
+                    self.sync_window_state();
+                    if let Err(e) = self.paint() {
+                        tracing::warn!("paint failed on refresh: {e}");
+                    }
                     Some(LRESULT(0))
                 }
 

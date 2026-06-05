@@ -44,12 +44,3 @@ pub fn scale(value: i32, dpi: u32) -> i32 {
 pub fn scale_for_window(value: i32, hwnd: HWND) -> i32 {
     scale(value, dpi_for_window(hwnd))
 }
-
-/// 시스템 DPI 기준으로 폰트 크기를 스케일링 (윈도우 핸들이 없을 때).
-#[inline]
-pub fn scale_font_for_system(logical_height: i32) -> i32 {
-    // SAFETY: GetDpiForSystem 은 부수효과 없는 user32 함수.
-    let dpi = unsafe { GetDpiForSystem() };
-    let dpi = if dpi > 0 { dpi } else { BASE_DPI };
-    scale(logical_height, dpi)
-}

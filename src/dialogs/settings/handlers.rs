@@ -10,6 +10,7 @@ use windows::{
 use super::ctrl_id;
 use super::SettingsDialog;
 use crate::config::{ColorType, TextAlign, TextType};
+use crate::constants::WM_APP_REFRESH;
 use crate::util::to_wide;
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
@@ -557,7 +558,7 @@ impl SettingsDialog {
 
         // SAFETY: self.main_hwnd is a valid window handle passed during dialog creation.
         unsafe {
-            let _ = PostMessageW(Some(self.main_hwnd), WM_PAINT, WPARAM(0), LPARAM(1));
+            let _ = PostMessageW(Some(self.main_hwnd), WM_APP_REFRESH, WPARAM(0), LPARAM(0));
         }
     }
 }

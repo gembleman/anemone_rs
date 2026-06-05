@@ -104,6 +104,27 @@ pub struct CompositionRenderer {
     _dcomp_visual: IDCompositionVisual,
 }
 
+struct HandleGuard(HANDLE);
+
+impl HandleGuard {
+    fn into_inner(mut self) -> HANDLE {
+        let handle = self.0;
+        self.0 = HANDLE::default();
+        handle
+    }
+}
+
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            // SAFETY: Guard owns this handle unless into_inner already disarmed it.
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+}
+
 impl CompositionRenderer {
     /// hwnd 에 합성 스택을 부착한다.
     ///
@@ -180,6 +201,7 @@ impl CompositionRenderer {
             if frame_latency_handle.is_invalid() {
                 return Err(Error::from_hresult(E_FAIL));
             }
+            let frame_latency_handle = HandleGuard(frame_latency_handle);
 
             // 5. D2D device + context — factory 는 호출자가 보유한 D2DRenderer 의
             //    것을 그대로 사용한다 (factory 통일 → WRONG_FACTORY 회피).
@@ -217,7 +239,7 @@ impl CompositionRenderer {
                 d2d_context,
                 swap_chain,
                 bitmap: Some(bitmap),
-                frame_latency_handle,
+                frame_latency_handle: frame_latency_handle.into_inner(),
                 dcomp_device,
                 _dcomp_target: dcomp_target,
                 _dcomp_visual: dcomp_visual,
@@ -234,13 +256,13 @@ impl CompositionRenderer {
     ///
     /// `timeout_ms` 는 비정상 상태 (GPU TDR 등) 안전망. 0 ms 가 정상 (이미
     /// ready) 또는 1 frame (~16 ms) 이내가 일반적이므로 1000 ms 면 충분.
-    /// `WAIT_OBJECT_0` 외의 반환 값은 별도 처리하지 않는다 (다음 paint 에서
-    /// 자연 복구).
-    pub fn wait_for_back_buffer(&self, timeout_ms: u32) {
+    /// 반환값은 wait 성공 여부다. `false` 면 timeout/failure 이므로 호출자가
+    /// 이번 paint 를 건너뛰거나 렌더 스택 재생성을 결정한다.
+    pub fn wait_for_back_buffer(&self, timeout_ms: u32) -> bool {
         // SAFETY: frame_latency_handle 은 생성자에서 GetFrameLatencyWaitable
         // Object 가 반환한 유효 핸들. drop 시 CloseHandle.
         unsafe {
-            let _ = WaitForSingleObjectEx(self.frame_latency_handle, timeout_ms, false);
+            WaitForSingleObjectEx(self.frame_latency_handle, timeout_ms, false).0 == 0
         }
     }
 
@@ -280,18 +302,6 @@ impl CompositionRenderer {
     pub fn end_draw(&self) -> Result<()> {
         // SAFETY: BeginDraw 와 짝. tag 출력은 None — 본 앱은 D2D tag 미사용.
         unsafe { self.d2d_context.EndDraw(None, None) }
-    }
-
-    /// 누적된 D2D 명령을 GPU 큐로 flush. `EndDraw` 가 내부적으로 같은 동작을
-    /// 수행하지만, EndDraw 비용을 phase 별로 분리 측정하려고 명시 분리.
-    ///
-    /// `EndDraw` 는 (a) 명령 flush, (b) BeginDraw 짝 닫기 (D2D batch state
-    /// 정리) 두 단계로 동작. `Flush` 만 단독 호출하면 (a) 부분의 비용을
-    /// 측정 가능. 호출 후에도 BeginDraw 상태는 유지되므로 그 뒤 `EndDraw`
-    /// 가 호출돼야 다음 BeginDraw 가 가능.
-    pub fn flush(&self) -> Result<()> {
-        // SAFETY: BeginDraw 와 EndDraw 사이에서 호출. tag 출력은 None.
-        unsafe { self.d2d_context.Flush(None, None) }
     }
 
     /// swap chain back buffer 를 화면에 제출.
