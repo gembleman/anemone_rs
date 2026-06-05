@@ -28,6 +28,7 @@ pub use worker::{
     unregister_hwnd as unregister_translation_hwnd,
 };
 
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;
 
@@ -314,6 +315,9 @@ pub struct EzTransManager {
     engine: Option<EzTransTranslator>,
     /// 현재 로드된 엔진의 (dll_path, dat_path). 동일하면 재로드 스킵, 다르면 폐기 후 재로드.
     loaded_paths: Option<(String, String)>,
+    /// `SetDefaultDllDirectories(... USER_DIRS)` 환경에서 EzTrans DLL 의 같은 폴더
+    /// 의존성을 찾기 위해 등록한 DLL 검색 폴더들.
+    registered_dll_dirs: Vec<String>,
 }
 
 impl EzTransManager {
@@ -321,6 +325,7 @@ impl EzTransManager {
         Self {
             engine: None,
             loaded_paths: None,
+            registered_dll_dirs: Vec::new(),
         }
     }
 
@@ -338,11 +343,52 @@ impl EzTransManager {
             self.engine = None;
             self.loaded_paths = None;
         }
+        self.ensure_dll_directory_registered(dll_path)?;
         let engine = EzTransTranslator::new(dll_path, dat_path)?;
         self.engine = Some(engine);
         self.loaded_paths = Some((dll_path.to_string(), dat_path.to_string()));
         Ok(())
     }
+
+    fn ensure_dll_directory_registered(&mut self, dll_path: &str) -> Result<(), String> {
+        let dir = eztrans_dll_search_dir(dll_path)?;
+        if self.registered_dll_dirs.iter().any(|d| d == &dir) {
+            return Ok(());
+        }
+
+        let wide: Vec<u16> = dir.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: `wide` is a null-terminated UTF-16 string valid for this call.
+        // Windows copies the directory path into the process DLL directory list.
+        unsafe {
+            let cookie = windows::Win32::System::LibraryLoader::AddDllDirectory(
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+            if cookie.is_null() {
+                let err = windows::Win32::Foundation::GetLastError();
+                return Err(format!("EzTrans DLL 폴더 등록 실패: Win32 {}", err.0));
+            }
+        }
+        self.registered_dll_dirs.push(dir);
+        Ok(())
+    }
+}
+
+fn eztrans_dll_search_dir(dll_path: &str) -> Result<String, String> {
+    let path = Path::new(dll_path);
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| "EzTrans DLL 폴더를 확인할 수 없습니다.".to_string())?;
+    let dir = if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("현재 폴더 확인 실패: {e}"))?
+            .join(parent)
+    };
+    dir.to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "EzTrans DLL 폴더 경로가 UTF-8 이 아닙니다.".to_string())
 }
 
 static EZTRANS_MANAGER: OnceLock<Arc<Mutex<EzTransManager>>> = OnceLock::new();

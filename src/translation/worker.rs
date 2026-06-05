@@ -151,11 +151,11 @@ impl DispatchState {
     }
 }
 
-/// 프로세스 단일 디스패치
-pub struct TranslationDispatch {
-    /// `Option` 인 이유: shutdown 시 `take()` 로 drop 시켜 채널을 닫고
-    /// 워커 스레드의 `rx.recv()` 가 `Err` 를 반환해 자연 종료되도록 한다.
-    sender: Mutex<Option<Sender<DispatchJob>>>,
+/// 디스패치와 워커가 공유하는 상태.
+///
+/// `OnceLock::get_or_init` 초기화 중 워커 스레드가 다시 `dispatch()` 를 호출하면
+/// 재진입 대기 위험이 있으므로, 워커에 필요한 상태는 `Arc` 로 직접 넘긴다.
+struct DispatchShared {
     state: Mutex<DispatchState>,
     /// hwnd 별 최신 req_id 의 원자 스냅샷 (워커 스레드가 lock 없이 빠르게 확인).
     ///
@@ -163,6 +163,41 @@ pub struct TranslationDispatch {
     /// 슬롯에서 꺼낸 `Arc<AtomicU64>` 위에서 lock 없이 수행된다. 동시에 떠 있는
     /// hwnd 개수만큼만 자라는 맵이라 `HashMap` 이면 O(1).
     latest_snapshot: Mutex<HashMap<usize, std::sync::Arc<AtomicU64>>>,
+}
+
+impl DispatchShared {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(DispatchState::new()),
+            latest_snapshot: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// hwnd 의 최신 ID 원자 슬롯 확보 (없으면 생성)
+    fn latest_atomic(&self, hwnd_raw: usize) -> std::sync::Arc<AtomicU64> {
+        let mut snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
+        snap.entry(hwnd_raw)
+            .or_insert_with(|| std::sync::Arc::new(AtomicU64::new(0)))
+            .clone()
+    }
+
+    fn latest_atomic_lookup(&self, hwnd_raw: usize) -> Option<std::sync::Arc<AtomicU64>> {
+        let snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
+        snap.get(&hwnd_raw).cloned()
+    }
+
+    fn drop_latest_atomic(&self, hwnd_raw: usize) {
+        let mut snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
+        snap.remove(&hwnd_raw);
+    }
+}
+
+/// 프로세스 단일 디스패치
+pub struct TranslationDispatch {
+    /// `Option` 인 이유: shutdown 시 `take()` 로 drop 시켜 채널을 닫고
+    /// 워커 스레드의 `rx.recv()` 가 `Err` 를 반환해 자연 종료되도록 한다.
+    sender: Mutex<Option<Sender<DispatchJob>>>,
+    shared: Arc<DispatchShared>,
     /// 워커 스레드 핸들 (shutdown 시 join 용)
     worker: Mutex<Option<JoinHandle<()>>>,
 }
@@ -198,16 +233,17 @@ pub fn shutdown() {
 impl TranslationDispatch {
     fn spawn() -> Self {
         let (tx, rx) = mpsc::channel::<DispatchJob>();
+        let shared = Arc::new(DispatchShared::new());
+        let worker_shared = shared.clone();
 
         // shutdown() 이 join 할 수 있도록 핸들 보관.
         let handle = thread::spawn(move || {
-            Self::worker_thread(rx);
+            Self::worker_thread(rx, worker_shared);
         });
 
         Self {
             sender: Mutex::new(Some(tx)),
-            state: Mutex::new(DispatchState::new()),
-            latest_snapshot: Mutex::new(HashMap::new()),
+            shared,
             worker: Mutex::new(Some(handle)),
         }
     }
@@ -250,35 +286,17 @@ impl TranslationDispatch {
         }
     }
 
-    /// hwnd 의 최신 ID 원자 슬롯 확보 (없으면 생성)
-    fn latest_atomic(&self, hwnd_raw: usize) -> std::sync::Arc<AtomicU64> {
-        let mut snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
-        snap.entry(hwnd_raw)
-            .or_insert_with(|| std::sync::Arc::new(AtomicU64::new(0)))
-            .clone()
-    }
-
-    fn latest_atomic_lookup(&self, hwnd_raw: usize) -> Option<std::sync::Arc<AtomicU64>> {
-        let snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
-        snap.get(&hwnd_raw).cloned()
-    }
-
-    fn drop_latest_atomic(&self, hwnd_raw: usize) {
-        let mut snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
-        snap.remove(&hwnd_raw);
-    }
-
     /// 번역 요청 송신. ID 를 즉시 반환하여 호출자가 응답 매칭에 사용할 수 있다.
     pub fn request(&self, hwnd: HWND, mut req: TranslationRequest) -> u64 {
         let hwnd_raw = hwnd.0 as usize;
         let id = {
-            let mut st = self.state.lock().expect("dispatch state poisoned");
+            let mut st = self.shared.state.lock().expect("dispatch state poisoned");
             st.assign_id()
         };
         req.id = id;
 
         // 워커가 lock 없이 stale 판정할 수 있도록 원자 슬롯 갱신
-        self.latest_atomic(hwnd_raw).store(id, Ordering::Release);
+        self.shared.latest_atomic(hwnd_raw).store(id, Ordering::Release);
 
         // shutdown 이 진행됐다면 sender 가 None — 조용히 폐기.
         let send_result = {
@@ -297,7 +315,7 @@ impl TranslationDispatch {
 
     /// 호출자(메인 윈도우 / 다이얼로그)가 자기 응답을 꺼낸다
     pub fn take_response(&self, req_id: u64) -> Option<TranslationResponse> {
-        let mut st = self.state.lock().expect("dispatch state poisoned");
+        let mut st = self.shared.state.lock().expect("dispatch state poisoned");
         st.take_response(req_id)
     }
 
@@ -305,14 +323,14 @@ impl TranslationDispatch {
     pub fn unregister_hwnd(&self, hwnd: HWND) {
         let hwnd_raw = hwnd.0 as usize;
         {
-            let mut st = self.state.lock().expect("dispatch state poisoned");
+            let mut st = self.shared.state.lock().expect("dispatch state poisoned");
             st.drop_hwnd(hwnd_raw);
         }
-        self.drop_latest_atomic(hwnd_raw);
+        self.shared.drop_latest_atomic(hwnd_raw);
     }
 
     /// 워커 스레드 진입점
-    fn worker_thread(rx: Receiver<DispatchJob>) {
+    fn worker_thread(rx: Receiver<DispatchJob>, shared: Arc<DispatchShared>) {
         // current_thread 런타임. 디스패치는 "recv → translate_async await → 다음 recv"
         // 의 엄격한 직렬 처리라 멀티스레드 풀이 불필요하다. spawn_blocking 은
         // current_thread 런타임에서도 별도 blocking pool 로 분리되어 EzTrans 경로가
@@ -331,14 +349,13 @@ impl TranslationDispatch {
 
         rt.block_on(async {
             let client = super::http_common::shared_client();
-            let d = dispatch();
 
             while let Ok(job) = rx.recv() {
                 let DispatchJob { hwnd_raw, req } = job;
 
                 // 큐에서 꺼낸 시점에 같은 hwnd 의 더 최신 요청이 있으면 스킵.
                 // (자동 클립보드 번역의 텍스트 폭주 대응)
-                let latest = d
+                let latest = shared
                     .latest_atomic_lookup(hwnd_raw)
                     .map(|a| a.load(Ordering::Acquire))
                     .unwrap_or(0);
@@ -350,7 +367,7 @@ impl TranslationDispatch {
                 let result = Self::translate_async(&req, &client).await;
 
                 // 응답 도착 시점에도 stale 재확인. LLM 같은 느린 엔진 대응.
-                let latest = d
+                let latest = shared
                     .latest_atomic_lookup(hwnd_raw)
                     .map(|a| a.load(Ordering::Acquire))
                     .unwrap_or(0);
@@ -360,14 +377,14 @@ impl TranslationDispatch {
                 }
 
                 // hwnd 가 unregister 된 경우 (다이얼로그 폐기 등) 도 폐기
-                if d.latest_atomic_lookup(hwnd_raw).is_none() {
+                if shared.latest_atomic_lookup(hwnd_raw).is_none() {
                     tracing::debug!("응답 #{} 폐기 (대상 hwnd 등록 해제)", req.id);
                     continue;
                 }
 
                 // 응답 저장 후 PostMessage
                 {
-                    let mut st = d.state.lock().expect("dispatch state poisoned");
+                    let mut st = shared.state.lock().expect("dispatch state poisoned");
                     st.push_response(PendingEntry {
                         req_id: req.id,
                         hwnd_raw,

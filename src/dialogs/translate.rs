@@ -345,37 +345,29 @@ impl Dialog for TranslateDialog {
             RADIO_OUTPUT_1 => self.output_format = OutputFormat::Normal,
             RADIO_OUTPUT_2 => self.output_format = OutputFormat::Brackets,
             RADIO_OUTPUT_3 => self.output_format = OutputFormat::NameSplit,
-            COMBO_ENGINE | COMBO_SOURCE_LANG | COMBO_TARGET_LANG => {
-                // CBN_SELCHANGE
-                if notify_code == 1 {
-                    if cmd == COMBO_ENGINE {
-                        // SAFETY: engine_combo is a valid handle.
-                        let engine_idx = unsafe {
-                            SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8
-                        };
-                        let engine = TranslationEngine::from_u8(engine_idx);
-                        self.populate_language_combos(engine);
-                        self.update_llm_group_visibility(engine);
-                        self.engine_initialized = false;
-                    }
-                    self.apply_current_settings();
-                }
-            }
-            COMBO_LLM_PROVIDER => {
-                if notify_code == 1 {
-                    self.apply_llm_provider();
+            // CBN_SELCHANGE
+            COMBO_ENGINE | COMBO_SOURCE_LANG | COMBO_TARGET_LANG if notify_code == 1 => {
+                if cmd == COMBO_ENGINE {
+                    // SAFETY: engine_combo is a valid handle.
+                    let engine_idx = unsafe {
+                        SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8
+                    };
+                    let engine = TranslationEngine::from_u8(engine_idx);
+                    self.populate_language_combos(engine);
+                    self.update_llm_group_visibility(engine);
                     self.engine_initialized = false;
                 }
+                self.apply_current_settings();
             }
-            EDIT_LLM_MODEL => {
-                if notify_code == EN_CHANGE {
-                    self.apply_llm_model();
-                }
+            COMBO_LLM_PROVIDER if notify_code == 1 => {
+                self.apply_llm_provider();
+                self.engine_initialized = false;
             }
-            EDIT_LLM_API_KEY => {
-                if notify_code == EN_CHANGE {
-                    self.apply_llm_api_key();
-                }
+            EDIT_LLM_MODEL if notify_code == EN_CHANGE => {
+                self.apply_llm_model();
+            }
+            EDIT_LLM_API_KEY if notify_code == EN_CHANGE => {
+                self.apply_llm_api_key();
             }
             _ => {}
         }

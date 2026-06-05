@@ -286,6 +286,10 @@ impl App {
         }
     }
 
+    fn text_layout_extent(size: i32, margin: i32) -> f32 {
+        size.saturating_sub(margin.saturating_mul(2)).max(1) as f32
+    }
+
     fn paint(&mut self) -> Result<()> {
         use crate::bench::{phase_now, phase_record, PhaseField};
 
@@ -387,8 +391,8 @@ impl App {
 
         // 텍스트 그리기
         if !self.current_text.is_empty() {
-            let max_width = (self.width - margin_x * 2) as f32;
-            let max_height = (self.height - margin_y * 2) as f32;
+            let max_width = Self::text_layout_extent(self.width, margin_x);
+            let max_height = Self::text_layout_extent(self.height, margin_y);
             if let Err(e) = renderer.draw_text(
                 ctx,
                 &self.current_text,
@@ -441,8 +445,8 @@ impl App {
         // 전체를 HTCAPTION 으로 잡는 기존 동작 유지.
         self.hit_region.clear();
         if !background_visible && !self.current_text.is_empty() {
-            let max_width = (self.width - margin_x * 2) as f32;
-            let max_height = (self.height - margin_y * 2) as f32;
+            let max_width = Self::text_layout_extent(self.width, margin_x);
+            let max_height = Self::text_layout_extent(self.height, margin_y);
             // shadow 가 그림자 방향으로만 확장되므로 양방향 inflate 의 보수적
             // 상한으로 abs 합. outline 은 텍스트 주변 전 방향이라 그대로 합산.
             // i32::MIN 에 가까운 값이 들어오면 unsigned_abs() as i32 가
@@ -919,6 +923,19 @@ impl App {
 
     fn handle_clipboard_change(&mut self) {
         if let Some(text) = self.clipboard.on_clipboard_update() {
+            let max_len = self.config.borrow().clipboard_max_length as usize;
+            if max_len > 0 {
+                let text_len = text.chars().count();
+                if text_len > max_len {
+                    tracing::debug!(
+                        "Clipboard text skipped: length {} exceeds clipboard_max_length {}",
+                        text_len,
+                        max_len
+                    );
+                    return;
+                }
+            }
+
             // 클립보드 텍스트 처리
             tracing::debug!("Clipboard: {}", text);
 

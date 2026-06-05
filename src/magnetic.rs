@@ -163,64 +163,60 @@ impl MagneticManager {
             };
 
             match event {
-                EVENT_OBJECT_LOCATIONCHANGE => {
-                    if hwnd == state.target_hwnd && !state.is_minimized {
-                        let mut target_rect = RECT::default();
+                EVENT_OBJECT_LOCATIONCHANGE if hwnd == state.target_hwnd && !state.is_minimized => {
+                    let mut target_rect = RECT::default();
+                    // SAFETY: Called within unsafe extern "system" fn
+                    if unsafe { GetWindowRect(state.target_hwnd, &mut target_rect).is_ok() } {
+                        let new_x = target_rect.left + state.offset_x;
+                        let new_y = target_rect.top + state.offset_y;
                         // SAFETY: Called within unsafe extern "system" fn
-                        if unsafe { GetWindowRect(state.target_hwnd, &mut target_rect).is_ok() } {
-                            let new_x = target_rect.left + state.offset_x;
-                            let new_y = target_rect.top + state.offset_y;
-                            // SAFETY: Called within unsafe extern "system" fn
-                            unsafe {
-                                let _ = SetWindowPos(
-                                    state.main_hwnd,
-                                    None,
-                                    new_x,
-                                    new_y,
-                                    0,
-                                    0,
-                                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                                );
-                            }
+                        unsafe {
+                            let _ = SetWindowPos(
+                                state.main_hwnd,
+                                None,
+                                new_x,
+                                new_y,
+                                0,
+                                0,
+                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                            );
                         }
                     }
                 }
 
-                EVENT_SYSTEM_MINIMIZESTART => {
-                    if hwnd == state.target_hwnd && state.minimize_with_target {
-                        state.is_minimized = true;
-                        // SAFETY: Called within unsafe extern "system" fn
-                        unsafe {
-                            let _ = ShowWindow(state.main_hwnd, SW_HIDE);
-                        }
+                EVENT_SYSTEM_MINIMIZESTART
+                    if hwnd == state.target_hwnd && state.minimize_with_target =>
+                {
+                    state.is_minimized = true;
+                    // SAFETY: Called within unsafe extern "system" fn
+                    unsafe {
+                        let _ = ShowWindow(state.main_hwnd, SW_HIDE);
                     }
                 }
 
-                EVENT_SYSTEM_MINIMIZEEND => {
-                    if hwnd == state.target_hwnd && state.is_minimized {
-                        state.is_minimized = false;
+                EVENT_SYSTEM_MINIMIZEEND if hwnd == state.target_hwnd && state.is_minimized => {
+                    state.is_minimized = false;
+                    // SAFETY: Called within unsafe extern "system" fn
+                    unsafe {
+                        let _ = ShowWindow(state.main_hwnd, SW_SHOWNOACTIVATE);
+                    }
+
+                    let mut target_rect = RECT::default();
+                    // SAFETY: Called within unsafe extern "system" fn
+                    if unsafe { GetWindowRect(state.target_hwnd, &mut target_rect).is_ok() } {
+                        let new_x = target_rect.left + state.offset_x;
+                        let new_y = target_rect.top + state.offset_y;
                         // SAFETY: Called within unsafe extern "system" fn
                         unsafe {
-                            let _ = ShowWindow(state.main_hwnd, SW_SHOWNOACTIVATE);
-                        }
-
-                        let mut target_rect = RECT::default();
-                        // SAFETY: Called within unsafe extern "system" fn
-                        if unsafe { GetWindowRect(state.target_hwnd, &mut target_rect).is_ok() } {
-                            let new_x = target_rect.left + state.offset_x;
-                            let new_y = target_rect.top + state.offset_y;
-                            // SAFETY: Called within unsafe extern "system" fn
-                            unsafe {
-                                let _ = SetWindowPos(
-                                    state.main_hwnd,
-                                    None,
-                                    new_x,
-                                    new_y,
-                                    0,
-                                    0,
-                                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                                );
-                            }
+                            let _ = SetWindowPos(
+                                state.main_hwnd,
+                                None,
+                                new_x,
+                                new_y,
+                                0,
+                                0,
+                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                            );
                         }
                     }
                 }

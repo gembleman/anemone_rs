@@ -15,8 +15,8 @@ use crate::config::Config;
 use crate::translation::http_common::shared_client;
 use crate::translation::worker::{TranslationDispatch, TranslationRequest};
 use crate::translation::{
-    EngineCredentials, EzTransTranslator, Language, TranslationEngine,
-    get_eztrans_manager, lang_utils,
+    EngineCredentials, Language, TranslationEngine, get_eztrans_manager, lang_utils,
+    translate_with_eztrans,
 };
 
 /// CLI 실행 결과. `main` 의 종료 코드와 매핑된다.
@@ -227,11 +227,15 @@ fn translate_via_eztrans(
                 .to_string(),
         );
     }
-    let translator = EzTransTranslator::new(dll, dat)
-        .map_err(|e| format!("EzTrans 초기화 실패: {e}"))?;
-    translator
-        .translate(text, source, target)
-        .map_err(|e| format!("번역 실패: {e}"))
+    {
+        let manager = get_eztrans_manager();
+        let mut mgr = manager
+            .lock()
+            .map_err(|_| "EzTrans 매니저 잠금 실패".to_string())?;
+        mgr.init(dll, dat)
+            .map_err(|e| format!("EzTrans 초기화 실패: {e}"))?;
+    }
+    translate_with_eztrans(text, source, target).map_err(|e| format!("번역 실패: {e}"))
 }
 
 fn translate_via_http(
