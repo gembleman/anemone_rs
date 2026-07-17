@@ -447,7 +447,8 @@ impl SettingsDialog {
             }
             _ => return,
         }
-        self.notify_change();
+        self.pending_disk_save.set(true);
+        self.notify_preview();
     }
 
     /// ComboBox 선택 변경 처리
@@ -673,17 +674,29 @@ impl SettingsDialog {
 
     /// 설정 변경 알림
     pub(super) fn notify_change(&self) {
+        self.notify_preview();
+        self.pending_disk_save.set(true);
+        self.persist_pending_changes();
+    }
+
+    fn notify_preview(&self) {
         if let Some(ref cb) = self.on_change {
             cb(&self.config.borrow());
-        }
-
-        if let Err(e) = self.config.borrow().save() {
-            tracing::error!("설정 저장 실패: {}", e);
         }
 
         // SAFETY: self.main_hwnd is a valid window handle passed during dialog creation.
         unsafe {
             let _ = PostMessageW(Some(self.main_hwnd), WM_APP_REFRESH, WPARAM(0), LPARAM(0));
+        }
+    }
+
+    pub(super) fn persist_pending_changes(&self) {
+        if !self.pending_disk_save.replace(false) {
+            return;
+        }
+        if let Err(error) = self.config.borrow().save() {
+            self.pending_disk_save.set(true);
+            tracing::error!("설정 저장 실패: {error}");
         }
     }
 }

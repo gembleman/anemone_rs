@@ -7,6 +7,7 @@ mod ctrl_id;
 mod handlers;
 mod init;
 
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -58,6 +59,10 @@ pub(super) fn repeat_mode_label(mode: u8) -> String {
     format!("반복: {}", name)
 }
 
+fn should_persist_trackbar(code: u32) -> bool {
+    code == TB_ENDTRACK
+}
+
 /// 설정 대화상자
 pub struct SettingsDialog {
     hwnd: HWND,
@@ -70,6 +75,7 @@ pub struct SettingsDialog {
     applied_dpi: u32,
     scroll_pos: i32,
     scroll_max: i32,
+    pending_disk_save: Cell<bool>,
     /// 엔진별 컨트롤 (EnableWindow 토글용)
     pub(super) engine_controls: [Vec<HWND>; 4],
 }
@@ -119,6 +125,7 @@ unsafe extern "system" fn settings_dialog_proc(
                 applied_dpi: crate::dpi::dpi_for_window(hwnd),
                 scroll_pos: 0,
                 scroll_max: 0,
+                pending_disk_save: Cell::new(false),
                 engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             }));
             SETTINGS_INSTANCE.with(|slot| {
@@ -171,10 +178,16 @@ unsafe extern "system" fn settings_dialog_proc(
                 1
             }
             WM_CLOSE => {
+                if let Ok(dialog) = dialog.try_borrow() {
+                    dialog.persist_pending_changes();
+                }
                 let _ = DestroyWindow(hwnd);
                 1
             }
             WM_DESTROY => {
+                if let Ok(dialog) = dialog.try_borrow() {
+                    dialog.persist_pending_changes();
+                }
                 unregister_resource_dialog(hwnd);
                 SETTINGS_INSTANCE.with(|slot| {
                     if let Ok(mut guard) = slot.try_borrow_mut() {
@@ -769,6 +782,9 @@ impl SettingsDialog {
                     };
 
                     self.handle_trackbar(id, value);
+                    if should_persist_trackbar(code) {
+                        self.persist_pending_changes();
+                    }
                 }
                 Some(LRESULT(0))
             }
@@ -790,5 +806,18 @@ impl SettingsDialog {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_persist_trackbar;
+    use windows::Win32::UI::Controls::{TB_ENDTRACK, TB_LINEDOWN, TB_THUMBTRACK};
+
+    #[test]
+    fn persists_trackbar_only_when_tracking_ends() {
+        assert!(!should_persist_trackbar(TB_THUMBTRACK));
+        assert!(!should_persist_trackbar(TB_LINEDOWN));
+        assert!(should_persist_trackbar(TB_ENDTRACK));
     }
 }
