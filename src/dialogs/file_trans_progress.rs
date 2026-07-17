@@ -30,6 +30,7 @@ use super::helpers::{
 };
 use crate::constants::WM_PROGRESS_EVENT;
 use crate::define_dialog_instance;
+use crate::file_trans::ProgressEvent;
 use crate::util::to_wide;
 
 // 컨트롤 ID
@@ -51,19 +52,6 @@ struct ProgressState {
     total_lines: i32,
     current_line: i32,
     list_size: i32,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ProgressEvent {
-    TotalFiles(i32),
-    TotalLines(i32),
-    FileIndex(i32),
-    FileName(String),
-    FileLines(i32),
-    FileProgress(i32),
-    TotalProgress(i32),
-    Complete,
-    Error(String),
 }
 
 #[derive(Default)]

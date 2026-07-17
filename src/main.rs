@@ -9,6 +9,7 @@ mod constants;
 mod d2d;
 mod dialogs;
 mod dpi;
+mod file_trans;
 mod hotkey;
 mod magnetic;
 mod menu;

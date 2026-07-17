@@ -1,4 +1,4 @@
-//! 파일 번역 백그라운드 스레드
+//! 파일 번역 백그라운드 작업
 //!
 //! 파일 읽기/쓰기, 번역 처리, 진행률 업데이트.
 
@@ -6,7 +6,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows::Win32::{
@@ -14,8 +13,7 @@ use windows::Win32::{
     System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState},
 };
 
-use super::file_trans::{FileTransJobData, WriteType, validate_job_paths};
-use super::file_trans_progress::ProgressEvent;
+use super::{FileTransJobData, ProgressEvent, WriteType, validate_job_paths};
 use crate::translation::{
     TranslationEngine, get_eztrans_manager,
     http_common::shared_client,
@@ -165,21 +163,24 @@ impl Drop for SleepBlocker {
     }
 }
 
-/// 파일 번역 스레드 메인 함수
-pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
+/// 파일 번역 작업을 실행한다.
+///
+/// 진행 이벤트는 호출자가 제공한 콜백으로 전달한다. 코어는 콜백의 구체적인
+/// 소비자가 Win32 다이얼로그인지 CLI인지 알 필요가 없다.
+pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     // 긴 배치 번역 중 OS 가 절전으로 진입하지 않도록 함수 전체 동안 가드 유지.
     let _sleep_guard = SleepBlocker::new();
 
     // 입출력 파일 수 확인
     if job_data.input_files.len() != job_data.output_files.len() {
-        job_data.progress.send(ProgressEvent::Error(
+        report(ProgressEvent::Error(
             "입력 파일과 출력 파일 수가 일치하지 않습니다.".to_string(),
         ));
         return;
     }
 
     if let Err(message) = validate_job_paths(&job_data.input_files, &job_data.output_files) {
-        job_data.progress.send(ProgressEvent::Error(message));
+        report(ProgressEvent::Error(message));
         return;
     }
 
@@ -192,9 +193,7 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
             Err(_) => Err("EzTrans 매니저 잠금 실패".to_string()),
         };
         if let Err(e) = init_result {
-            job_data
-                .progress
-                .send(ProgressEvent::Error(format!("EzTrans 초기화 실패: {e}")));
+            report(ProgressEvent::Error(format!("EzTrans 초기화 실패: {e}")));
             return;
         }
     }
@@ -207,21 +206,23 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     {
         Ok(rt) => rt,
         Err(e) => {
-            job_data
-                .progress
-                .send(ProgressEvent::Error(format!("tokio 런타임 생성 실패: {e}")));
+            report(ProgressEvent::Error(format!("tokio 런타임 생성 실패: {e}")));
             return;
         }
     };
     // 디스패치 워커와 동일한 프로세스 전역 클라이언트를 공유한다 — connection pool /
     // TLS 세션 재사용으로 라인 단위 동기 호출의 DNS·핸드셰이크 비용 제거.
     let http_client = shared_client();
+    let translation = TranslationContext {
+        runtime: &rt,
+        http_client: &http_client,
+    };
 
     // UTF-8 검증과 파일별 줄 수 계산을 한 번의 사전 검사로 수행한다.
     let file_line_counts = match preflight_inputs(&job_data.input_files) {
         Ok(counts) => counts,
         Err(error) => {
-            job_data.progress.send(ProgressEvent::Error(error));
+            report(ProgressEvent::Error(error));
             return;
         }
     };
@@ -232,7 +233,7 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     }) {
         Some(total) => total,
         None => {
-            job_data.progress.send(ProgressEvent::Error(
+            report(ProgressEvent::Error(
                 "입력 파일의 전체 줄 수가 너무 많습니다.".to_string(),
             ));
             return;
@@ -240,12 +241,8 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     };
 
     // 전체 파일 수 및 라인 수 전송
-    job_data
-        .progress
-        .send(ProgressEvent::TotalFiles(job_data.input_files.len() as i32));
-    job_data
-        .progress
-        .send(ProgressEvent::TotalLines(total_lines));
+    report(ProgressEvent::TotalFiles(job_data.input_files.len() as i32));
+    report(ProgressEvent::TotalLines(total_lines));
 
     let mut global_current_line = 0;
 
@@ -258,40 +255,41 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     {
         // 취소 체크
         if job_data.cancel_token.load(Ordering::SeqCst) {
-            job_data
-                .progress
-                .send(ProgressEvent::Error("사용자가 취소했습니다.".to_string()));
+            report(ProgressEvent::Error("사용자가 취소했습니다.".to_string()));
             return;
         }
 
         // 파일 인덱스 업데이트
-        job_data
-            .progress
-            .send(ProgressEvent::FileIndex((idx + 1) as i32));
+        report(ProgressEvent::FileIndex((idx + 1) as i32));
 
         // 파일명 전송
-        send_filename(&job_data, input_path);
+        send_filename(input_path, &report);
 
         // 단일 파일 처리
         match process_single_file(
             input_path,
             output_path,
-            &job_data,
+            job_data,
             file_line_counts[idx],
             &mut global_current_line,
-            &rt,
-            &http_client,
+            &translation,
+            &report,
         ) {
             Ok(()) => {}
             Err(e) => {
-                job_data.progress.send(ProgressEvent::Error(e));
+                report(ProgressEvent::Error(e));
                 return;
             }
         }
     }
 
     // 완료
-    job_data.progress.send(ProgressEvent::Complete);
+    report(ProgressEvent::Complete);
+}
+
+struct TranslationContext<'a> {
+    runtime: &'a tokio::runtime::Runtime,
+    http_client: &'a reqwest::Client,
 }
 
 /// UTF-8 검증과 파일별 줄 수 계산을 결합한 사전 검사.
@@ -321,8 +319,8 @@ fn process_single_file(
     job_data: &FileTransJobData,
     line_count: usize,
     global_current: &mut i32,
-    rt: &tokio::runtime::Runtime,
-    http_client: &reqwest::Client,
+    translation: &TranslationContext<'_>,
+    report: &impl Fn(ProgressEvent),
 ) -> Result<(), String> {
     // 입력 파일 열기
     let input_file = File::open(input_path).map_err(|e| {
@@ -344,9 +342,7 @@ fn process_single_file(
         .map_err(|e| e.to_string())?;
 
     // 리스트 크기 전송
-    job_data
-        .progress
-        .send(ProgressEvent::FileLines(line_count as i32));
+    report(ProgressEvent::FileLines(line_count as i32));
 
     // 스트리밍 라인 처리. 마지막 라인 판정을 위해 1-라인 lookahead 패턴 사용 —
     // `prev` 가 직전에 읽은 라인이고, 새 라인이 도착하면 prev 를 "마지막 아님"
@@ -381,7 +377,7 @@ fn process_single_file(
         }
 
         let line = prev.take().expect("prev primed above");
-        let translated = translate_line(&line, job_data, rt, http_client);
+        let translated = translate_line(&line, job_data, translation);
         write_output(
             pending_output.writer(),
             &line,
@@ -392,12 +388,8 @@ fn process_single_file(
 
         idx += 1;
         *global_current += 1;
-        job_data
-            .progress
-            .send(ProgressEvent::FileProgress(idx as i32));
-        job_data
-            .progress
-            .send(ProgressEvent::TotalProgress(*global_current));
+        report(ProgressEvent::FileProgress(idx as i32));
+        report(ProgressEvent::TotalProgress(*global_current));
 
         prev = Some(next);
     }
@@ -407,7 +399,7 @@ fn process_single_file(
         if job_data.cancel_token.load(Ordering::SeqCst) {
             return Err("사용자가 취소했습니다.".to_string());
         }
-        let translated = translate_line(&line, job_data, rt, http_client);
+        let translated = translate_line(&line, job_data, translation);
         write_output(
             pending_output.writer(),
             &line,
@@ -418,12 +410,8 @@ fn process_single_file(
 
         idx += 1;
         *global_current += 1;
-        job_data
-            .progress
-            .send(ProgressEvent::FileProgress(idx as i32));
-        job_data
-            .progress
-            .send(ProgressEvent::TotalProgress(*global_current));
+        report(ProgressEvent::FileProgress(idx as i32));
+        report(ProgressEvent::TotalProgress(*global_current));
     }
 
     pending_output.persist()
@@ -441,8 +429,7 @@ fn process_single_file(
 fn translate_line(
     line: &str,
     job_data: &FileTransJobData,
-    rt: &tokio::runtime::Runtime,
-    http_client: &reqwest::Client,
+    translation: &TranslationContext<'_>,
 ) -> String {
     // 빈 라인(길이 0) 은 옵션과 무관하게 통과 — 엔진에 보낼 의미도 없고 EmptyText
     // 에러만 받는다.
@@ -468,7 +455,12 @@ fn translate_line(
         credentials: job_data.credentials.clone(),
     };
 
-    let result = rt.block_on(TranslationDispatch::translate_async(&request, http_client));
+    let result = translation
+        .runtime
+        .block_on(TranslationDispatch::translate_async(
+            &request,
+            translation.http_client,
+        ));
 
     match result {
         Ok(translated) => translated,
@@ -515,13 +507,13 @@ fn write_output(
 }
 
 /// 파일명 전송
-fn send_filename(job_data: &FileTransJobData, path: &Path) {
+fn send_filename(path: &Path, report: &impl Fn(ProgressEvent)) {
     let filename = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    job_data.progress.send(ProgressEvent::FileName(filename));
+    report(ProgressEvent::FileName(filename));
 }
 
 #[cfg(test)]

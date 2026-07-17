@@ -1,12 +1,14 @@
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use clap::ValueEnum;
 
 use crate::config::Config;
-use crate::translation::http_common::shared_client;
-use crate::translation::worker::{TranslationDispatch, TranslationRequest};
-use crate::translation::{TranslationEngine, get_eztrans_manager};
+use crate::file_trans::{
+    FileTransJobData, ProgressEvent, WriteType as CoreWriteType, run as run_file_trans,
+};
 
 use super::helpers::{JsonVal, json_object};
 use super::translate::{build_credentials, resolve_engine, resolve_languages};
@@ -51,76 +53,48 @@ pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
     let engine = resolve_engine(engine, &config);
     let (source_lang, target_lang) = resolve_languages(&source, &target, &config, engine)?;
 
-    // EzTrans 사전 초기화 — 라인마다 같은 에러로 실패하는 것보다 사전 차단.
-    if engine == TranslationEngine::EzTrans {
-        let defaults = crate::config::TranslationConfig::default();
-        let dll = if config.translation.eztrans_dll_path.is_empty() {
-            defaults.eztrans_dll_path.clone()
-        } else {
-            config.translation.eztrans_dll_path.clone()
-        };
-        let dat = if config.translation.eztrans_dat_path.is_empty() {
-            defaults.eztrans_dat_path.clone()
-        } else {
-            config.translation.eztrans_dat_path.clone()
-        };
-        let manager = get_eztrans_manager();
-        let mut mgr = manager
-            .lock()
-            .map_err(|_| "EzTrans 매니저 잠금 실패".to_string())?;
-        mgr.init(&dll, &dat)
-            .map_err(|e| format!("EzTrans 초기화 실패: {e}"))?;
-    }
-
     let credentials = build_credentials(engine, &config)?;
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("tokio 런타임 생성 실패: {e}"))?;
-    let client = shared_client();
+    let defaults = crate::config::TranslationConfig::default();
+    let dll = if config.translation.eztrans_dll_path.is_empty() {
+        defaults.eztrans_dll_path
+    } else {
+        config.translation.eztrans_dll_path.clone()
+    };
+    let dat = if config.translation.eztrans_dat_path.is_empty() {
+        defaults.eztrans_dat_path
+    } else {
+        config.translation.eztrans_dat_path.clone()
+    };
 
-    use std::fs::File;
-    use std::io::{BufRead, BufReader, BufWriter, Write};
+    let job = FileTransJobData {
+        input_files: vec![input],
+        output_files: vec![output],
+        write_type: write_type.into(),
+        no_trans_linefeed,
+        cancel_token: Arc::new(AtomicBool::new(false)),
+        engine,
+        source_lang,
+        target_lang,
+        credentials,
+        eztrans_dll_path: dll,
+        eztrans_dat_path: dat,
+    };
+    let total = Cell::new(0usize);
+    let error = RefCell::new(None);
 
-    let body = crate::util::read_utf8_translation_input(&input)?;
-    let reader = BufReader::new(std::io::Cursor::new(body));
+    run_file_trans(&job, |event| match event {
+        ProgressEvent::TotalLines(value) => total.set(value.max(0) as usize),
+        ProgressEvent::Error(message) => *error.borrow_mut() = Some(message),
+        _ => {}
+    });
 
-    let out_file = File::create(&output).map_err(|e| {
-        format!(
-            "출력 파일을 생성할 수 없습니다: {} ({})",
-            output.display(),
-            e
-        )
-    })?;
-    let mut writer = BufWriter::new(out_file);
-    writer
-        .write_all(&[0xEF, 0xBB, 0xBF])
-        .map_err(|e| format!("BOM 쓰기 실패: {e}"))?;
-
-    let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
-    let total = lines.len();
-    let last_idx = total.saturating_sub(1);
-
-    for (i, line) in lines.iter().enumerate() {
-        let translated = if line.is_empty() || (no_trans_linefeed && line.trim().is_empty()) {
-            line.clone()
-        } else {
-            let req = TranslationRequest {
-                id: 0,
-                text: Arc::from(line.as_str()),
-                engine,
-                source_lang,
-                target_lang,
-                credentials: credentials.clone(),
-            };
-            match rt.block_on(TranslationDispatch::translate_async(&req, &client)) {
-                Ok(s) => s,
-                Err(e) => format!("[번역 실패: {e}]"),
-            }
-        };
-        write_line(&mut writer, line, &translated, write_type, i == last_idx)?;
+    if let Some(error) = error.into_inner() {
+        return Err(error);
     }
-    writer.flush().map_err(|e| format!("flush 실패: {e}"))?;
+
+    let input = &job.input_files[0];
+    let output = &job.output_files[0];
+    let total = total.get();
 
     if json {
         println!(
@@ -153,32 +127,12 @@ enum WriteType {
     BothNl,
 }
 
-fn write_line(
-    writer: &mut std::io::BufWriter<std::fs::File>,
-    original: &str,
-    translated: &str,
-    write_type: WriteType,
-    is_last: bool,
-) -> Result<(), String> {
-    use std::io::Write;
-    let mut io = |buf: &str| writeln!(writer, "{buf}").map_err(|e| e.to_string());
-    match write_type {
-        WriteType::Only => io(translated)?,
-        WriteType::Both => {
-            io(original)?;
-            if is_last {
-                write!(writer, "{translated}").map_err(|e| e.to_string())?;
-            } else {
-                io(translated)?;
-            }
-        }
-        WriteType::BothNl => {
-            io(original)?;
-            io(translated)?;
-            if !is_last {
-                writeln!(writer).map_err(|e| e.to_string())?;
-            }
+impl From<WriteType> for CoreWriteType {
+    fn from(value: WriteType) -> Self {
+        match value {
+            WriteType::Only => Self::TranslationOnly,
+            WriteType::Both => Self::OriginalAndTrans,
+            WriteType::BothNl => Self::OriginalTransNewline,
         }
     }
-    Ok(())
 }
