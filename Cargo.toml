@@ -3,6 +3,10 @@ name = "anemone_rs"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+benchmark = []
+
 [dependencies.windows]
 version = "0.62"
 features = [

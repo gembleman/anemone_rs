@@ -38,8 +38,10 @@ use crate::translation::{request_translation, take_response, unregister_translat
 use crate::tray::{self, TrayIcon};
 use crate::window::{self, TextRenderStyle};
 
+#[cfg(feature = "benchmark")]
 #[path = "../benchmark/bench.rs"]
 mod bench;
+#[cfg(feature = "benchmark")]
 #[path = "../benchmark/app.rs"]
 mod bench_app;
 
@@ -223,23 +225,26 @@ impl App {
                 if let Err(e) = app_ref.paint() {
                     tracing::warn!("initial paint failed: {e}");
                 }
-                // 벤치마크 모드: 환경변수로 켜진 경우 paint() N 회 측정.
-                // detailed 모드가 켜져 있으면 그쪽이 우선 (phase 정보 더 많음).
-                let ran_bench = if let Some(iters) = bench::paint_bench_detailed_iters() {
-                    app_ref.run_paint_bench_detailed(iters);
-                    true
-                } else if let Some(iters) = bench::paint_bench_iters() {
-                    app_ref.run_paint_bench(iters);
-                    true
-                } else {
-                    false
-                };
+                #[cfg(feature = "benchmark")]
+                {
+                    // 벤치마크 모드: 환경변수로 켜진 경우 paint() N 회 측정.
+                    // detailed 모드가 켜져 있으면 그쪽이 우선 (phase 정보 더 많음).
+                    let ran_bench = if let Some(iters) = bench::paint_bench_detailed_iters() {
+                        app_ref.run_paint_bench_detailed(iters);
+                        true
+                    } else if let Some(iters) = bench::paint_bench_iters() {
+                        app_ref.run_paint_bench(iters);
+                        true
+                    } else {
+                        false
+                    };
 
-                // 벤치 측정 후에는 메시지 루프에 진입하지 않고 즉시 종료한다.
-                // (벤치는 일회성 측정이므로 GUI 를 띄워둘 이유가 없음 — 외부에서
-                // taskkill 로 죽일 필요 없이 프로세스가 스스로 정리하고 끝난다.)
-                if ran_bench {
-                    PostQuitMessage(0);
+                    // 벤치 측정 후에는 메시지 루프에 진입하지 않고 즉시 종료한다.
+                    // (벤치는 일회성 측정이므로 GUI 를 띄워둘 이유가 없음 — 외부에서
+                    // taskkill 로 죽일 필요 없이 프로세스가 스스로 정리하고 끝난다.)
+                    if ran_bench {
+                        PostQuitMessage(0);
+                    }
                 }
             }
 
@@ -304,10 +309,12 @@ impl App {
     }
 
     fn paint(&mut self) -> Result<()> {
+        #[cfg(feature = "benchmark")]
         use self::bench::{PhaseField, phase_now, phase_record};
 
         // phase 측정 hook 의 시작 시점. recorder 비활성 시 phase_now() 는 0 반환,
         // phase_record() 는 no-op (None 체크 1 회) — 정상 paint 경로 overhead 거의 0.
+        #[cfg(feature = "benchmark")]
         let t = phase_now();
         // 합성 렌더러 lazy init — 첫 paint 시 부착.
         // hwnd 가 보이는 시점 (`ShowWindow` 이후) 이어야 클라이언트 사이즈가 양수다.
@@ -329,6 +336,7 @@ impl App {
                 }
             }
         }
+        #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::LazyInit, t);
 
         let cfg = self.config.borrow();
@@ -369,6 +377,7 @@ impl App {
             Some(r) => r,
             None => return Ok(()),
         };
+        #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Setup, t);
 
         // waitable swap chain: 다음 back buffer 가 사용 가능해질 때까지 명시
@@ -378,6 +387,7 @@ impl App {
             tracing::warn!("DComp wait_for_back_buffer timed out or failed; skipping paint");
             return Ok(());
         }
+        #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::SwapChainWait, t);
 
         // 합성 경로: BeginDraw 는 CompositionRenderer 가 책임진다.
@@ -396,6 +406,7 @@ impl App {
             0
         };
         renderer.clear(ctx, clear_color);
+        #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::BeginClear, t);
 
         // 테두리 그리기
@@ -405,6 +416,7 @@ impl App {
         {
             tracing::error!("D2D draw_border failed: {e}");
         }
+        #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Border, t);
 
         // 텍스트 그리기
@@ -425,6 +437,7 @@ impl App {
                 tracing::error!("D2D draw_text failed: {e}");
             }
         }
+        #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Text, t);
 
         // EndDraw + Present. EndDraw 가 내부적으로 GPU 명령 큐를 flush 하므로
@@ -445,6 +458,7 @@ impl App {
             }
             tracing::error!("DComp end_draw failed: {e}");
         }
+        #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::EndDraw, t);
 
         if let Err(e) = composition.present(0) {
@@ -455,6 +469,7 @@ impl App {
             }
             tracing::error!("DComp present failed: {e}");
         }
+        #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Present, t);
 
         // hit_region 갱신 — `&mut self.d2d_renderer` 와 충돌하지 않도록 본
@@ -497,6 +512,7 @@ impl App {
                 }
             }
         }
+        #[cfg(feature = "benchmark")]
         let _ = phase_record(PhaseField::HitRegion, t);
 
         Ok(())
