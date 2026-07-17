@@ -15,8 +15,9 @@ use super::helpers::{
     center_dialog_on_monitor, get_window_text, listbox_add_item, listbox_get_sel, listbox_reset,
     register_resource_dialog, set_window_text, show_dialog_window, unregister_resource_dialog,
 };
-use crate::config::{Config, LlmGlossaryEntry};
+use crate::config::Config;
 use crate::define_dialog_instance;
+use crate::dialog_models::GlossaryDraft;
 
 mod ctrl_id {
     pub const DIALOG: u16 = 102;
@@ -35,7 +36,7 @@ pub struct GlossaryDialog {
     config: Rc<RefCell<Config>>,
     applied_dpi: u32,
     /// 임시 편집 버퍼 (적용 전까지 Config에 반영하지 않음)
-    entries: Vec<LlmGlossaryEntry>,
+    draft: GlossaryDraft,
 }
 
 define_dialog_instance!(GLOSSARY_INSTANCE: GlossaryDialog);
@@ -66,12 +67,12 @@ unsafe extern "system" fn glossary_dialog_proc(
                 return 0;
             };
 
-            let entries = config.borrow().translation.llm.glossary.clone();
+            let draft = GlossaryDraft::from_config(&config.borrow());
             let dialog = Rc::new(RefCell::new(GlossaryDialog {
                 hwnd,
                 config,
                 applied_dpi: crate::dpi::dpi_for_window(hwnd),
-                entries,
+                draft,
             }));
             GLOSSARY_INSTANCE.with(|slot| {
                 *slot.borrow_mut() = Some(dialog.clone());
@@ -249,7 +250,7 @@ impl GlossaryDialog {
                 let _ = DestroyWindow(self.hwnd);
             },
             BTN_APPLY => {
-                self.config.borrow_mut().translation.llm.glossary = self.entries.clone();
+                self.draft.clone().commit(&mut self.config.borrow_mut());
                 if let Err(e) = self.config.borrow().save() {
                     tracing::error!("글로서리 저장 실패: {}", e);
                 }
@@ -259,8 +260,8 @@ impl GlossaryDialog {
             LIST => {
                 // 리스트 선택 시 Edit에 항목 로드 (편집 흐름 개선)
                 let sel = self.listbox_get_sel();
-                if sel >= 0 && (sel as usize) < self.entries.len() {
-                    let e = &self.entries[sel as usize];
+                if sel >= 0 && (sel as usize) < self.draft.entries().len() {
+                    let e = &self.draft.entries()[sel as usize];
                     self.set_control_text(SOURCE_EDIT, &e.source);
                     self.set_control_text(TARGET_EDIT, &e.target);
                 }
@@ -277,17 +278,8 @@ impl GlossaryDialog {
             .get_control_text(ctrl_id::TARGET_EDIT)
             .trim()
             .to_string();
-        if src.is_empty() {
+        if self.draft.add_or_update(src, tgt).is_none() {
             return;
-        }
-        // 동일 source가 있으면 target만 갱신, 없으면 추가
-        if let Some(existing) = self.entries.iter_mut().find(|e| e.source == src) {
-            existing.target = tgt;
-        } else {
-            self.entries.push(LlmGlossaryEntry {
-                source: src,
-                target: tgt,
-            });
         }
         self.refresh_listbox();
         self.set_control_text(ctrl_id::SOURCE_EDIT, "");
@@ -296,10 +288,9 @@ impl GlossaryDialog {
 
     fn remove_selected(&mut self) {
         let sel = self.listbox_get_sel();
-        if sel < 0 || (sel as usize) >= self.entries.len() {
+        if sel < 0 || !self.draft.remove(sel as usize) {
             return;
         }
-        self.entries.remove(sel as usize);
         self.refresh_listbox();
     }
 
@@ -312,7 +303,7 @@ impl GlossaryDialog {
             if lb.is_invalid() {
                 return;
             }
-            for e in &self.entries {
+            for e in self.draft.entries() {
                 let line = format!("{} → {}", e.source, e.target);
                 listbox_add_item(lb, &line);
             }
@@ -329,7 +320,7 @@ impl GlossaryDialog {
                 return;
             }
             listbox_reset(lb);
-            for e in &self.entries {
+            for e in self.draft.entries() {
                 let line = format!("{} → {}", e.source, e.target);
                 listbox_add_item(lb, &line);
             }

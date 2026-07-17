@@ -12,12 +12,12 @@ use windows::{
 };
 
 use super::helpers::{
-    center_dialog_on_monitor, listbox_add_item, listbox_get_count, listbox_get_sel,
-    listbox_get_text, listbox_reset, listbox_set_sel, register_resource_dialog, show_dialog_window,
-    unregister_resource_dialog,
+    center_dialog_on_monitor, listbox_add_item, listbox_get_sel, listbox_reset, listbox_set_sel,
+    register_resource_dialog, show_dialog_window, unregister_resource_dialog,
 };
 use crate::config::Config;
 use crate::define_dialog_instance;
+use crate::dialog_models::HookListDraft;
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -32,44 +32,13 @@ mod ctrl_id {
     pub const BTN_CLOSE: u16 = 6031;
 }
 
-fn transfer_item<T>(
-    source: &mut Vec<T>,
-    target: &mut Vec<T>,
-    index: i32,
-) -> Option<(Option<i32>, i32)> {
-    let index = usize::try_from(index).ok()?;
-    if index >= source.len() {
-        return None;
-    }
-    let item = source.remove(index);
-    target.push(item);
-    let source_selection = if source.is_empty() {
-        None
-    } else {
-        Some(index.min(source.len() - 1) as i32)
-    };
-    Some((source_selection, (target.len() - 1) as i32))
-}
-
-fn move_item<T>(items: &mut [T], index: i32, offset: i32) -> Option<i32> {
-    let index = usize::try_from(index).ok()?;
-    let target = index.checked_add_signed(offset as isize)?;
-    if index >= items.len() || target >= items.len() {
-        return None;
-    }
-    items.swap(index, target);
-    Some(target as i32)
-}
-
 /// 후크 설정 대화상자
 pub struct HookSettingsDialog {
     hwnd: HWND,
     config: Rc<RefCell<Config>>,
     applied_dpi: u32,
-    /// 임시 활성 후크 목록 (적용 전까지 Config에 반영하지 않음)
-    active_hooks: Vec<String>,
-    /// 임시 비활성 후크 목록
-    inactive_hooks: Vec<String>,
+    /// 적용 전까지 Config에 반영하지 않는 활성/비활성 목록.
+    draft: HookListDraft,
 }
 
 define_dialog_instance!(HOOK_SETTINGS_INSTANCE: HookSettingsDialog);
@@ -100,19 +69,12 @@ unsafe extern "system" fn hook_settings_dialog_proc(
                 return 0;
             };
 
-            let (active_hooks, inactive_hooks) = {
-                let cfg = config.borrow();
-                (
-                    cfg.hook.active_hooks.clone(),
-                    cfg.hook.inactive_hooks.clone(),
-                )
-            };
+            let draft = HookListDraft::from_config(&config.borrow());
             let dialog = Rc::new(RefCell::new(HookSettingsDialog {
                 hwnd,
                 config,
                 applied_dpi: crate::dpi::dpi_for_window(hwnd),
-                active_hooks,
-                inactive_hooks,
+                draft,
             }));
             HOOK_SETTINGS_INSTANCE.with(|slot| {
                 *slot.borrow_mut() = Some(dialog.clone());
@@ -284,12 +246,7 @@ impl HookSettingsDialog {
             },
 
             BTN_APPLY => {
-                self.sync_from_listboxes();
-                {
-                    let mut cfg = self.config.borrow_mut();
-                    cfg.hook.active_hooks = self.active_hooks.clone();
-                    cfg.hook.inactive_hooks = self.inactive_hooks.clone();
-                }
+                self.draft.clone().commit(&mut self.config.borrow_mut());
             }
 
             BTN_TO_INACTIVE => unsafe {
@@ -300,15 +257,15 @@ impl HookSettingsDialog {
                     return;
                 };
                 let sel = listbox_get_sel(active_lb);
-                self.sync_from_listboxes();
-                if let Some((source_sel, target_sel)) =
-                    transfer_item(&mut self.active_hooks, &mut self.inactive_hooks, sel)
+                if let Some(change) = usize::try_from(sel)
+                    .ok()
+                    .and_then(|index| self.draft.move_to_inactive(index))
                 {
                     self.refresh_listboxes();
-                    if let Some(new_sel) = source_sel {
-                        listbox_set_sel(active_lb, new_sel);
+                    if let Some(new_sel) = change.source_selection {
+                        listbox_set_sel(active_lb, new_sel as i32);
                     }
-                    listbox_set_sel(inactive_lb, target_sel);
+                    listbox_set_sel(inactive_lb, change.target_selection as i32);
                 }
             },
 
@@ -320,15 +277,15 @@ impl HookSettingsDialog {
                     return;
                 };
                 let sel = listbox_get_sel(inactive_lb);
-                self.sync_from_listboxes();
-                if let Some((source_sel, target_sel)) =
-                    transfer_item(&mut self.inactive_hooks, &mut self.active_hooks, sel)
+                if let Some(change) = usize::try_from(sel)
+                    .ok()
+                    .and_then(|index| self.draft.move_to_active(index))
                 {
                     self.refresh_listboxes();
-                    if let Some(new_sel) = source_sel {
-                        listbox_set_sel(inactive_lb, new_sel);
+                    if let Some(new_sel) = change.source_selection {
+                        listbox_set_sel(inactive_lb, new_sel as i32);
                     }
-                    listbox_set_sel(active_lb, target_sel);
+                    listbox_set_sel(active_lb, change.target_selection as i32);
                 }
             },
 
@@ -337,10 +294,12 @@ impl HookSettingsDialog {
                     return;
                 };
                 let sel = listbox_get_sel(active_lb);
-                self.sync_from_listboxes();
-                if let Some(new_sel) = move_item(&mut self.active_hooks, sel, -1) {
+                if let Some(new_sel) = usize::try_from(sel)
+                    .ok()
+                    .and_then(|index| self.draft.move_active_by(index, -1))
+                {
                     self.refresh_listboxes();
-                    listbox_set_sel(active_lb, new_sel);
+                    listbox_set_sel(active_lb, new_sel as i32);
                 }
             },
 
@@ -349,10 +308,12 @@ impl HookSettingsDialog {
                     return;
                 };
                 let sel = listbox_get_sel(active_lb);
-                self.sync_from_listboxes();
-                if let Some(new_sel) = move_item(&mut self.active_hooks, sel, 1) {
+                if let Some(new_sel) = usize::try_from(sel)
+                    .ok()
+                    .and_then(|index| self.draft.move_active_by(index, 1))
+                {
                     self.refresh_listboxes();
-                    listbox_set_sel(active_lb, new_sel);
+                    listbox_set_sel(active_lb, new_sel as i32);
                 }
             },
 
@@ -368,13 +329,13 @@ impl HookSettingsDialog {
         // listbox handles for the known control IDs created in create_controls.
         unsafe {
             if let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::ACTIVE_LIST as i32) {
-                for hook in &self.active_hooks {
+                for hook in self.draft.active() {
                     listbox_add_item(active_lb, hook);
                 }
             }
 
             if let Ok(inactive_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::INACTIVE_LIST as i32) {
-                for hook in &self.inactive_hooks {
+                for hook in self.draft.inactive() {
                     listbox_add_item(inactive_lb, hook);
                 }
             }
@@ -391,59 +352,5 @@ impl HookSettingsDialog {
             }
         }
         self.populate_listboxes();
-    }
-
-    /// 내부 후크 목록 동기화 (ListBox -> 내부 Vec)
-    fn sync_from_listboxes(&mut self) {
-        // SAFETY: self.hwnd is a valid dialog window handle. GetDlgItem returns valid
-        // listbox handles. All listbox helper calls use these valid handles.
-        unsafe {
-            if let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::ACTIVE_LIST as i32) {
-                self.active_hooks.clear();
-                let count = listbox_get_count(active_lb);
-                for i in 0..count {
-                    if let Some(text) = listbox_get_text(active_lb, i) {
-                        self.active_hooks.push(text);
-                    }
-                }
-            }
-
-            if let Ok(inactive_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::INACTIVE_LIST as i32) {
-                self.inactive_hooks.clear();
-                let count = listbox_get_count(inactive_lb);
-                for i in 0..count {
-                    if let Some(text) = listbox_get_text(inactive_lb, i) {
-                        self.inactive_hooks.push(text);
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{move_item, transfer_item};
-
-    #[test]
-    fn transfers_items_between_active_and_inactive_lists() {
-        let mut active = vec!["A", "B"];
-        let mut inactive = vec!["C"];
-
-        let selection = transfer_item(&mut active, &mut inactive, 0);
-
-        assert_eq!(active, ["B"]);
-        assert_eq!(inactive, ["C", "A"]);
-        assert_eq!(selection, Some((Some(0), 1)));
-    }
-
-    #[test]
-    fn moves_items_up_and_down_with_bounds_checks() {
-        let mut items = vec!["A", "B", "C"];
-
-        assert_eq!(move_item(&mut items, 1, -1), Some(0));
-        assert_eq!(items, ["B", "A", "C"]);
-        assert_eq!(move_item(&mut items, 0, -1), None);
-        assert_eq!(move_item(&mut items, 2, 1), None);
     }
 }

@@ -44,117 +44,7 @@ mod ctrl_id {
     pub const GROUP_ACTION: u16 = 3031;
 }
 
-/// 백로그 필터
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum BacklogFilter {
-    Original,
-    Translation,
-    #[default]
-    All,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TextKind {
-    Name,
-    Original,
-    Translation,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct TextSegment {
-    text: String,
-    kind: TextKind,
-}
-
-/// 로그 항목
-#[derive(Clone, Debug)]
-pub struct LogEntry {
-    pub name: Option<String>,
-    pub original: String,
-    pub translation: Option<String>,
-}
-
-impl LogEntry {
-    pub fn new(original: String) -> Self {
-        Self {
-            name: None,
-            original,
-            translation: None,
-        }
-    }
-
-    pub fn with_translation(mut self, translation: String) -> Self {
-        self.translation = Some(translation);
-        self
-    }
-}
-
-/// 창 수명과 독립적으로 애플리케이션 실행 중 번역 이력을 보관한다.
-#[derive(Default)]
-pub struct BacklogStore {
-    entries: Vec<LogEntry>,
-}
-
-impl BacklogStore {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn push(&mut self, entry: LogEntry) {
-        self.entries.push(entry);
-    }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-    }
-}
-
-fn format_entry(entry: &LogEntry, filter: BacklogFilter, add_linefeed: bool) -> Vec<TextSegment> {
-    let mut segments = Vec::new();
-
-    if let Some(name) = &entry.name
-        && filter != BacklogFilter::Translation
-    {
-        segments.push(TextSegment {
-            text: format!("[{name}] "),
-            kind: TextKind::Name,
-        });
-    }
-    if filter != BacklogFilter::Translation {
-        segments.push(TextSegment {
-            text: entry.original.clone(),
-            kind: TextKind::Original,
-        });
-        if add_linefeed {
-            segments.push(TextSegment {
-                text: "\r\n".to_string(),
-                kind: TextKind::Original,
-            });
-        }
-    }
-    if let Some(translation) = &entry.translation
-        && filter != BacklogFilter::Original
-    {
-        segments.push(TextSegment {
-            text: translation.clone(),
-            kind: TextKind::Translation,
-        });
-        if add_linefeed {
-            segments.push(TextSegment {
-                text: "\r\n".to_string(),
-                kind: TextKind::Translation,
-            });
-        }
-    }
-    if filter == BacklogFilter::All && add_linefeed {
-        segments.push(TextSegment {
-            text: "\r\n".to_string(),
-            kind: TextKind::Original,
-        });
-    }
-
-    segments
-}
+use crate::backlog::{BacklogFilter, BacklogStore, LogEntry, TextKind};
 
 /// 백로그 대화상자
 pub struct BacklogDialog {
@@ -425,7 +315,10 @@ impl BacklogDialog {
     }
 
     /// RichEdit에 항목 추가
-    fn append_entry_to_richedit(&self, entry: &LogEntry) {
+    fn append_styled_texts_to_richedit(
+        &self,
+        segments: impl IntoIterator<Item = crate::backlog::StyledText>,
+    ) {
         // SAFETY: self.richedit is a valid RichEdit control handle from create_controls.
         // SendMessageW and append_styled_text use valid control handles.
         unsafe {
@@ -441,7 +334,7 @@ impl BacklogDialog {
             const COLOR_ORIGINAL: u32 = 0x00000000; // #000000 검정 (원문)
             const COLOR_TRANSLATE: u32 = 0x00008000; // #008000 진녹색 (번역)
 
-            for segment in format_entry(entry, self.filter, self.add_linefeed) {
+            for segment in segments {
                 let (color, bold) = match segment.kind {
                     TextKind::Name => (COLOR_NAME, true),
                     TextKind::Original => (COLOR_ORIGINAL, false),
@@ -517,9 +410,8 @@ impl BacklogDialog {
         unsafe {
             let _ = SetWindowTextW(self.richedit, w!(""));
         }
-        for entry in &self.store.borrow().entries {
-            self.append_entry_to_richedit(entry);
-        }
+        let segments = self.store.borrow().render(self.filter, self.add_linefeed);
+        self.append_styled_texts_to_richedit(segments);
     }
 
     /// 폰트 선택 대화상자
@@ -548,8 +440,6 @@ impl BacklogDialog {
 
     /// 파일로 저장
     fn save_to_file(&self) {
-        use std::io::Write;
-
         let filters = [
             FileFilter {
                 name: "텍스트 파일 (*.txt)",
@@ -578,32 +468,8 @@ impl BacklogDialog {
             }
         };
 
-        let mut content = String::new();
-        for entry in &self.store.borrow().entries {
-            if let Some(ref name) = entry.name {
-                content.push_str(&format!("[{}] ", name));
-            }
-            content.push_str(&entry.original);
-            content.push_str("\r\n");
-            if let Some(ref trans) = entry.translation {
-                content.push_str(trans);
-                content.push_str("\r\n");
-            }
-            content.push_str("\r\n");
-        }
-
-        match std::fs::File::create(&path) {
-            Ok(mut file) => {
-                if let Err(e) = file
-                    .write_all(&[0xEF, 0xBB, 0xBF])
-                    .and_then(|_| file.write_all(content.as_bytes()))
-                {
-                    tracing::error!("backlog save write failed: {e}");
-                }
-            }
-            Err(e) => {
-                tracing::error!("backlog save file create failed: {e}");
-            }
+        if let Err(error) = self.store.borrow().export_utf8(&path) {
+            tracing::error!("backlog save failed: {error}");
         }
     }
 
@@ -663,6 +529,7 @@ impl BacklogDialog {
 
 /// 저장소에 항목을 추가하고, 백로그 창이 열려 있으면 즉시 화면에도 반영한다.
 pub fn add_to_backlog(store: &Rc<RefCell<BacklogStore>>, entry: LogEntry) {
+    let entry_for_render = entry.clone();
     store.borrow_mut().push(entry);
     BACKLOG_INSTANCE.with(|cell| {
         let Ok(guard) = cell.try_borrow() else {
@@ -670,56 +537,12 @@ pub fn add_to_backlog(store: &Rc<RefCell<BacklogStore>>, entry: LogEntry) {
         };
         if let Some(ref dialog) = *guard
             && let Ok(d) = dialog.try_borrow()
-            && let Some(entry) = store.borrow().entries.last()
         {
-            d.append_entry_to_richedit(entry);
+            d.append_styled_texts_to_richedit(BacklogStore::render_entry(
+                &entry_for_render,
+                d.filter,
+                d.add_linefeed,
+            ));
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{BacklogFilter, BacklogStore, LogEntry, TextKind, format_entry};
-
-    fn sample_entry() -> LogEntry {
-        LogEntry {
-            name: Some("화자".to_string()),
-            original: "원문".to_string(),
-            translation: Some("번역".to_string()),
-        }
-    }
-
-    fn combined_text(filter: BacklogFilter, add_linefeed: bool) -> String {
-        format_entry(&sample_entry(), filter, add_linefeed)
-            .into_iter()
-            .map(|segment| segment.text)
-            .collect()
-    }
-
-    #[test]
-    fn formats_each_backlog_filter() {
-        assert_eq!(
-            combined_text(BacklogFilter::All, true),
-            "[화자] 원문\r\n번역\r\n\r\n"
-        );
-        assert_eq!(combined_text(BacklogFilter::Original, false), "[화자] 원문");
-        assert_eq!(combined_text(BacklogFilter::Translation, true), "번역\r\n");
-    }
-
-    #[test]
-    fn preserves_text_roles_for_styled_rendering() {
-        let segments = format_entry(&sample_entry(), BacklogFilter::All, false);
-        assert_eq!(segments[0].kind, TextKind::Name);
-        assert_eq!(segments[1].kind, TextKind::Original);
-        assert_eq!(segments[2].kind, TextKind::Translation);
-    }
-
-    #[test]
-    fn store_keeps_entries_without_a_dialog() {
-        let mut store = BacklogStore::new();
-        store.push(sample_entry());
-
-        assert_eq!(store.entries.len(), 1);
-        assert_eq!(store.entries[0].original, "원문");
-    }
 }

@@ -329,38 +329,6 @@ pub fn listbox_set_sel(hwnd: HWND, index: i32) {
     }
 }
 
-pub fn listbox_get_count(hwnd: HWND) -> i32 {
-    unsafe { SendMessageW(hwnd, LB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
-}
-
-pub fn listbox_get_text(hwnd: HWND, index: i32) -> Option<String> {
-    unsafe {
-        let len = SendMessageW(
-            hwnd,
-            LB_GETTEXTLEN,
-            Some(WPARAM(index as usize)),
-            Some(LPARAM(0)),
-        )
-        .0 as i32;
-        if len == LB_ERR || len < 0 {
-            return None;
-        }
-        let mut buffer = vec![0; (len + 1) as usize];
-        let copied = SendMessageW(
-            hwnd,
-            LB_GETTEXT,
-            Some(WPARAM(index as usize)),
-            Some(LPARAM(buffer.as_mut_ptr() as isize)),
-        )
-        .0 as i32;
-        if copied == LB_ERR {
-            None
-        } else {
-            Some(String::from_utf16_lossy(&buffer[..copied as usize]))
-        }
-    }
-}
-
 /// 다이얼로그 타입별 thread-local 인스턴스 슬롯을 선언한다.
 ///
 /// 사용:

@@ -2,11 +2,13 @@
 // #![windows_subsystem = "windows"]
 
 mod app;
+mod backlog;
 mod cli;
 mod clipboard;
 mod config;
 mod constants;
 mod d2d;
+mod dialog_models;
 mod dialogs;
 mod dpi;
 mod file_trans;
