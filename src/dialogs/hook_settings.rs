@@ -12,12 +12,12 @@ use windows::{
 };
 
 use super::helpers::{
-    center_dialog_on_monitor, register_resource_dialog, show_dialog_window,
+    center_dialog_on_monitor, listbox_add_item, listbox_get_count, listbox_get_sel,
+    listbox_get_text, listbox_reset, listbox_set_sel, register_resource_dialog, show_dialog_window,
     unregister_resource_dialog,
 };
 use crate::config::Config;
 use crate::define_dialog_instance;
-use crate::util::to_wide;
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -30,6 +30,35 @@ mod ctrl_id {
     pub const BTN_DOWN: u16 = 6021;
     pub const BTN_APPLY: u16 = 6030;
     pub const BTN_CLOSE: u16 = 6031;
+}
+
+fn transfer_item<T>(
+    source: &mut Vec<T>,
+    target: &mut Vec<T>,
+    index: i32,
+) -> Option<(Option<i32>, i32)> {
+    let index = usize::try_from(index).ok()?;
+    if index >= source.len() {
+        return None;
+    }
+    let item = source.remove(index);
+    target.push(item);
+    let source_selection = if source.is_empty() {
+        None
+    } else {
+        Some(index.min(source.len() - 1) as i32)
+    };
+    Some((source_selection, (target.len() - 1) as i32))
+}
+
+fn move_item<T>(items: &mut [T], index: i32, offset: i32) -> Option<i32> {
+    let index = usize::try_from(index).ok()?;
+    let target = index.checked_add_signed(offset as isize)?;
+    if index >= items.len() || target >= items.len() {
+        return None;
+    }
+    items.swap(index, target);
+    Some(target as i32)
 }
 
 /// 후크 설정 대화상자
@@ -263,104 +292,69 @@ impl HookSettingsDialog {
                 }
             }
 
-            BTN_TO_INACTIVE => {
-                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns valid
-                // listbox handles for known control IDs. All listbox operations use these
-                // valid handles with indices verified against LB_ERR before use.
-                unsafe {
-                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
-                    };
-                    let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
-                    };
-                    let sel = self.listbox_get_sel(active_lb);
-                    if sel == LB_ERR {
-                        return;
+            BTN_TO_INACTIVE => unsafe {
+                let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) else {
+                    return;
+                };
+                let Ok(inactive_lb) = GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) else {
+                    return;
+                };
+                let sel = listbox_get_sel(active_lb);
+                self.sync_from_listboxes();
+                if let Some((source_sel, target_sel)) =
+                    transfer_item(&mut self.active_hooks, &mut self.inactive_hooks, sel)
+                {
+                    self.refresh_listboxes();
+                    if let Some(new_sel) = source_sel {
+                        listbox_set_sel(active_lb, new_sel);
                     }
-                    if let Some(text) = self.listbox_get_text(active_lb, sel) {
-                        self.listbox_delete_item(active_lb, sel);
-                        self.listbox_add_item(inactive_lb, &text);
-                        let count = self.listbox_get_count(active_lb);
-                        if count > 0 {
-                            let new_sel = if sel >= count { count - 1 } else { sel };
-                            self.listbox_set_sel(active_lb, new_sel);
-                        }
-                    }
+                    listbox_set_sel(inactive_lb, target_sel);
                 }
-            }
+            },
 
-            BTN_TO_ACTIVE => {
-                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns valid
-                // listbox handles. All listbox operations use valid handles with indices
-                // verified against LB_ERR before use.
-                unsafe {
-                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
-                    };
-                    let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
-                    };
-                    let sel = self.listbox_get_sel(inactive_lb);
-                    if sel == LB_ERR {
-                        return;
+            BTN_TO_ACTIVE => unsafe {
+                let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) else {
+                    return;
+                };
+                let Ok(inactive_lb) = GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) else {
+                    return;
+                };
+                let sel = listbox_get_sel(inactive_lb);
+                self.sync_from_listboxes();
+                if let Some((source_sel, target_sel)) =
+                    transfer_item(&mut self.inactive_hooks, &mut self.active_hooks, sel)
+                {
+                    self.refresh_listboxes();
+                    if let Some(new_sel) = source_sel {
+                        listbox_set_sel(inactive_lb, new_sel);
                     }
-                    if let Some(text) = self.listbox_get_text(inactive_lb, sel) {
-                        self.listbox_delete_item(inactive_lb, sel);
-                        self.listbox_add_item(active_lb, &text);
-                        let count = self.listbox_get_count(inactive_lb);
-                        if count > 0 {
-                            let new_sel = if sel >= count { count - 1 } else { sel };
-                            self.listbox_set_sel(inactive_lb, new_sel);
-                        }
-                    }
+                    listbox_set_sel(active_lb, target_sel);
                 }
-            }
+            },
 
-            BTN_UP => {
-                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns a valid
-                // listbox handle. Selection index is verified > 0 before moving up.
-                unsafe {
-                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
-                    };
-                    let sel = self.listbox_get_sel(active_lb);
-                    if sel == LB_ERR || sel == 0 {
-                        return;
-                    }
-                    if let Some(text) = self.listbox_get_text(active_lb, sel) {
-                        self.listbox_delete_item(active_lb, sel);
-                        self.listbox_insert_item(active_lb, sel - 1, &text);
-                        self.listbox_set_sel(active_lb, sel - 1);
-                    }
+            BTN_UP => unsafe {
+                let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) else {
+                    return;
+                };
+                let sel = listbox_get_sel(active_lb);
+                self.sync_from_listboxes();
+                if let Some(new_sel) = move_item(&mut self.active_hooks, sel, -1) {
+                    self.refresh_listboxes();
+                    listbox_set_sel(active_lb, new_sel);
                 }
-            }
+            },
 
-            BTN_DOWN => {
-                // SAFETY: self.hwnd is a valid dialog handle. GetDlgItem returns a valid
-                // listbox handle. Selection index is verified < count-1 before moving down.
-                unsafe {
-                    let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h,
-                        Err(_) => return,
-                    };
-                    let sel = self.listbox_get_sel(active_lb);
-                    let count = self.listbox_get_count(active_lb);
-                    if sel == LB_ERR || sel >= count - 1 {
-                        return;
-                    }
-                    if let Some(text) = self.listbox_get_text(active_lb, sel) {
-                        self.listbox_delete_item(active_lb, sel);
-                        self.listbox_insert_item(active_lb, sel + 1, &text);
-                        self.listbox_set_sel(active_lb, sel + 1);
-                    }
+            BTN_DOWN => unsafe {
+                let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) else {
+                    return;
+                };
+                let sel = listbox_get_sel(active_lb);
+                self.sync_from_listboxes();
+                if let Some(new_sel) = move_item(&mut self.active_hooks, sel, 1) {
+                    self.refresh_listboxes();
+                    listbox_set_sel(active_lb, new_sel);
                 }
-            }
+            },
 
             _ => {}
         }
@@ -375,113 +369,28 @@ impl HookSettingsDialog {
         unsafe {
             if let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::ACTIVE_LIST as i32) {
                 for hook in &self.active_hooks {
-                    self.listbox_add_item(active_lb, hook);
+                    listbox_add_item(active_lb, hook);
                 }
             }
 
             if let Ok(inactive_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::INACTIVE_LIST as i32) {
                 for hook in &self.inactive_hooks {
-                    self.listbox_add_item(inactive_lb, hook);
+                    listbox_add_item(inactive_lb, hook);
                 }
             }
         }
     }
 
-    // ====== ListBox 헬퍼 함수들 ======
-
-    unsafe fn listbox_add_item(&self, hwnd: HWND, text: &str) {
-        // SAFETY: hwnd is a valid listbox handle. The wide string pointer is valid for
-        // the duration of SendMessageW. LB_ADDSTRING copies the string internally.
+    fn refresh_listboxes(&self) {
         unsafe {
-            let text_wide = to_wide(text);
-            let _ = SendMessageW(
-                hwnd,
-                LB_ADDSTRING,
-                Some(WPARAM(0)),
-                Some(LPARAM(text_wide.as_ptr() as isize)),
-            );
-        }
-    }
-
-    unsafe fn listbox_insert_item(&self, hwnd: HWND, index: i32, text: &str) {
-        // SAFETY: hwnd is a valid listbox handle. index is a valid position within the
-        // listbox. The wide string pointer is valid for the duration of SendMessageW.
-        unsafe {
-            let text_wide = to_wide(text);
-            let _ = SendMessageW(
-                hwnd,
-                LB_INSERTSTRING,
-                Some(WPARAM(index as usize)),
-                Some(LPARAM(text_wide.as_ptr() as isize)),
-            );
-        }
-    }
-
-    unsafe fn listbox_delete_item(&self, hwnd: HWND, index: i32) {
-        // SAFETY: hwnd is a valid listbox handle. index is a valid item position
-        // verified by the caller before deletion.
-        unsafe {
-            let _ = SendMessageW(
-                hwnd,
-                LB_DELETESTRING,
-                Some(WPARAM(index as usize)),
-                Some(LPARAM(0)),
-            );
-        }
-    }
-
-    unsafe fn listbox_get_sel(&self, hwnd: HWND) -> i32 {
-        // SAFETY: hwnd is a valid listbox handle. LB_GETCURSEL requires no pointers.
-        unsafe { SendMessageW(hwnd, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
-    }
-
-    unsafe fn listbox_set_sel(&self, hwnd: HWND, index: i32) {
-        // SAFETY: hwnd is a valid listbox handle. index is within the valid range.
-        unsafe {
-            let _ = SendMessageW(
-                hwnd,
-                LB_SETCURSEL,
-                Some(WPARAM(index as usize)),
-                Some(LPARAM(0)),
-            );
-        }
-    }
-
-    unsafe fn listbox_get_count(&self, hwnd: HWND) -> i32 {
-        // SAFETY: hwnd is a valid listbox handle. LB_GETCOUNT requires no pointers.
-        unsafe { SendMessageW(hwnd, LB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
-    }
-
-    unsafe fn listbox_get_text(&self, hwnd: HWND, index: i32) -> Option<String> {
-        // SAFETY: hwnd is a valid listbox handle. index is checked via LB_GETTEXTLEN
-        // before reading. The buffer is allocated with len+1 capacity based on the
-        // reported text length. LB_GETTEXT writes into the buffer up to the reported length.
-        unsafe {
-            let len = SendMessageW(
-                hwnd,
-                LB_GETTEXTLEN,
-                Some(WPARAM(index as usize)),
-                Some(LPARAM(0)),
-            )
-            .0 as i32;
-            if len == LB_ERR || len <= 0 {
-                return None;
+            if let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::ACTIVE_LIST as i32) {
+                listbox_reset(active_lb);
             }
-
-            let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
-            let result = SendMessageW(
-                hwnd,
-                LB_GETTEXT,
-                Some(WPARAM(index as usize)),
-                Some(LPARAM(buffer.as_mut_ptr() as isize)),
-            );
-
-            if result.0 as i32 == LB_ERR {
-                return None;
+            if let Ok(inactive_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::INACTIVE_LIST as i32) {
+                listbox_reset(inactive_lb);
             }
-
-            String::from_utf16(&buffer[..len as usize]).ok()
         }
+        self.populate_listboxes();
     }
 
     /// 내부 후크 목록 동기화 (ListBox -> 내부 Vec)
@@ -491,9 +400,9 @@ impl HookSettingsDialog {
         unsafe {
             if let Ok(active_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::ACTIVE_LIST as i32) {
                 self.active_hooks.clear();
-                let count = self.listbox_get_count(active_lb);
+                let count = listbox_get_count(active_lb);
                 for i in 0..count {
-                    if let Some(text) = self.listbox_get_text(active_lb, i) {
+                    if let Some(text) = listbox_get_text(active_lb, i) {
                         self.active_hooks.push(text);
                     }
                 }
@@ -501,13 +410,40 @@ impl HookSettingsDialog {
 
             if let Ok(inactive_lb) = GetDlgItem(Some(self.hwnd), ctrl_id::INACTIVE_LIST as i32) {
                 self.inactive_hooks.clear();
-                let count = self.listbox_get_count(inactive_lb);
+                let count = listbox_get_count(inactive_lb);
                 for i in 0..count {
-                    if let Some(text) = self.listbox_get_text(inactive_lb, i) {
+                    if let Some(text) = listbox_get_text(inactive_lb, i) {
                         self.inactive_hooks.push(text);
                     }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{move_item, transfer_item};
+
+    #[test]
+    fn transfers_items_between_active_and_inactive_lists() {
+        let mut active = vec!["A", "B"];
+        let mut inactive = vec!["C"];
+
+        let selection = transfer_item(&mut active, &mut inactive, 0);
+
+        assert_eq!(active, ["B"]);
+        assert_eq!(inactive, ["C", "A"]);
+        assert_eq!(selection, Some((Some(0), 1)));
+    }
+
+    #[test]
+    fn moves_items_up_and_down_with_bounds_checks() {
+        let mut items = vec!["A", "B", "C"];
+
+        assert_eq!(move_item(&mut items, 1, -1), Some(0));
+        assert_eq!(items, ["B", "A", "C"]);
+        assert_eq!(move_item(&mut items, 0, -1), None);
+        assert_eq!(move_item(&mut items, 2, 1), None);
     }
 }

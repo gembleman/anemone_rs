@@ -12,12 +12,11 @@ use windows::{
 };
 
 use super::helpers::{
-    center_dialog_on_monitor, register_resource_dialog, show_dialog_window,
-    unregister_resource_dialog,
+    center_dialog_on_monitor, get_window_text, listbox_add_item, listbox_get_sel, listbox_reset,
+    register_resource_dialog, set_window_text, show_dialog_window, unregister_resource_dialog,
 };
 use crate::config::{Config, LlmGlossaryEntry};
 use crate::define_dialog_instance;
-use crate::util::to_wide;
 
 mod ctrl_id {
     pub const DIALOG: u16 = 102;
@@ -315,13 +314,7 @@ impl GlossaryDialog {
             }
             for e in &self.entries {
                 let line = format!("{} → {}", e.source, e.target);
-                let wide = to_wide(&line);
-                let _ = SendMessageW(
-                    lb,
-                    LB_ADDSTRING,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(wide.as_ptr() as isize)),
-                );
+                listbox_add_item(lb, &line);
             }
         }
     }
@@ -335,20 +328,10 @@ impl GlossaryDialog {
             if lb.is_invalid() {
                 return;
             }
-            // 전체 삭제: LB_GETCOUNT 만큼 하나씩 지우는 대신 reset
-            let count = SendMessageW(lb, LB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32;
-            for _ in 0..count {
-                let _ = SendMessageW(lb, LB_DELETESTRING, Some(WPARAM(0)), Some(LPARAM(0)));
-            }
+            listbox_reset(lb);
             for e in &self.entries {
                 let line = format!("{} → {}", e.source, e.target);
-                let wide = to_wide(&line);
-                let _ = SendMessageW(
-                    lb,
-                    LB_ADDSTRING,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(wide.as_ptr() as isize)),
-                );
+                listbox_add_item(lb, &line);
             }
         }
     }
@@ -362,7 +345,7 @@ impl GlossaryDialog {
             if lb.is_invalid() {
                 return LB_ERR;
             }
-            SendMessageW(lb, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32
+            listbox_get_sel(lb)
         }
     }
 
@@ -372,8 +355,7 @@ impl GlossaryDialog {
             if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32)
                 && !ctrl.is_invalid()
             {
-                let text_wide = to_wide(text);
-                let _ = SetWindowTextW(ctrl, PCWSTR(text_wide.as_ptr()));
+                let _ = set_window_text(ctrl, text);
             }
         }
     }
@@ -387,13 +369,7 @@ impl GlossaryDialog {
             if ctrl.is_invalid() {
                 return String::new();
             }
-            let len = GetWindowTextLengthW(ctrl);
-            if len == 0 {
-                return String::new();
-            }
-            let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
-            GetWindowTextW(ctrl, &mut buffer);
-            String::from_utf16_lossy(&buffer[..len as usize])
+            get_window_text(ctrl)
         }
     }
 }

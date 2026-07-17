@@ -1,9 +1,54 @@
 use windows::Win32::{
     Foundation::*,
     System::DataExchange::*,
-    System::Memory::{GlobalLock, GlobalSize, GlobalUnlock},
+    System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
     System::Ole::CF_UNICODETEXT,
 };
+use windows::core::Result;
+
+pub(crate) struct ClipboardGuard;
+
+impl ClipboardGuard {
+    pub(crate) fn open(owner: HWND) -> Result<Self> {
+        unsafe { OpenClipboard(Some(owner))? };
+        Ok(Self)
+    }
+}
+
+impl Drop for ClipboardGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseClipboard();
+        }
+    }
+}
+
+pub(crate) struct OwnedGlobalMemory(Option<HGLOBAL>);
+
+impl OwnedGlobalMemory {
+    pub(crate) fn allocate(bytes: usize) -> Result<Self> {
+        unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes) }.map(|handle| Self(Some(handle)))
+    }
+
+    pub(crate) fn handle(&self) -> HGLOBAL {
+        self.0
+            .expect("global memory exists until ownership transfer")
+    }
+
+    pub(crate) fn release_to_system(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for OwnedGlobalMemory {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            unsafe {
+                let _ = GlobalFree(Some(handle));
+            }
+        }
+    }
+}
 
 pub struct ClipboardWatcher {
     hwnd: HWND,
@@ -63,17 +108,14 @@ impl ClipboardWatcher {
 
     /// 클립보드에서 텍스트 읽기
     pub fn get_text(&self) -> Option<String> {
-        // SAFETY: OpenClipboard/CloseClipboard are called in matched pairs. GetClipboardData
-        // returns a HANDLE which we wrap into HGLOBAL — both are `*mut c_void` newtypes for
-        // the same kernel handle representation. GlobalLock/GlobalUnlock are paired and the
-        // returned pointer is valid until GlobalUnlock.
+        // SAFETY: GetClipboardData returns a HANDLE which we wrap into HGLOBAL — both are
+        // `*mut c_void` newtypes for the same kernel handle representation. GlobalLock/
+        // GlobalUnlock are paired and the returned pointer is valid until GlobalUnlock.
         unsafe {
-            if OpenClipboard(Some(self.hwnd)).is_err() {
-                return None;
-            }
+            let _clipboard = ClipboardGuard::open(self.hwnd).ok()?;
 
             let format = CF_UNICODETEXT.0 as u32;
-            let result = (|| {
+            (|| {
                 if IsClipboardFormatAvailable(format).is_err() {
                     return None;
                 }
@@ -114,10 +156,7 @@ impl ClipboardWatcher {
 
                 let _ = GlobalUnlock(hglobal);
                 Some(text)
-            })();
-
-            let _ = CloseClipboard();
-            result
+            })()
         }
     }
 }

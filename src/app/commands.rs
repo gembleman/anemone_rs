@@ -149,10 +149,9 @@ impl App {
     /// 백로그 대화상자 열기
     fn open_backlog_dialog(&mut self) {
         let main_hwnd = self.hwnd;
-        let config = self.config.clone();
         let store = self.backlog_store.clone();
         Self::open_dialog_generic(&mut self.backlog_hwnd, "backlog", || {
-            BacklogDialog::show(main_hwnd, (config, store))
+            BacklogDialog::show(main_hwnd, store)
         });
     }
 

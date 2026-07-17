@@ -22,13 +22,16 @@ use windows::{
 
 use super::file_dialog::{FileFilter, save_file};
 use super::font::{FontDialog, FontDialogConfig, FontStyle};
-use super::helpers::{Dialog, DialogControls};
-use crate::config::Config;
+use super::helpers::{
+    center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
+    show_dialog_window, unregister_resource_dialog,
+};
 use crate::define_dialog_instance;
 use crate::util::to_wide;
 
 // 컨트롤 ID
 mod ctrl_id {
+    pub const DIALOG: u16 = 106;
     pub const RICHEDIT: u16 = 3001;
     pub const CHK_LINEFEED: u16 = 3002;
     pub const RADIO_ORIGINAL: u16 = 3010;
@@ -37,10 +40,9 @@ mod ctrl_id {
     pub const BTN_CLEAR: u16 = 3020;
     pub const BTN_SAVE: u16 = 3021;
     pub const BTN_FONT: u16 = 3022;
+    pub const GROUP_FILTER: u16 = 3030;
+    pub const GROUP_ACTION: u16 = 3031;
 }
-
-const BACKLOG_WIDTH: i32 = 600;
-const BACKLOG_HEIGHT: i32 = 500;
 
 /// 백로그 필터
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -158,11 +160,11 @@ fn format_entry(entry: &LogEntry, filter: BacklogFilter, add_linefeed: bool) -> 
 pub struct BacklogDialog {
     hwnd: HWND,
     richedit: HWND,
-    /// 필터 그룹박스 핸들 — `WM_SIZE` 재배치용. 그룹박스는 ID=0 으로
-    /// 생성되어 `GetDlgItem` 으로 못 찾으므로 직접 보관.
+    /// 필터 그룹박스 핸들 — `WM_SIZE` 재배치용.
     group_filter: HWND,
-    /// 동작 그룹박스 핸들 — 위와 동일.
+    /// 동작 그룹박스 핸들 — `WM_SIZE` 재배치용.
     group_action: HWND,
+    applied_dpi: u32,
     filter: BacklogFilter,
     add_linefeed: bool,
     store: Rc<RefCell<BacklogStore>>,
@@ -174,54 +176,106 @@ pub struct BacklogDialog {
     font_italic: bool,
 }
 
-impl DialogControls for BacklogDialog {
-    fn dialog_hwnd(&self) -> HWND {
-        self.hwnd
-    }
-}
-
 thread_local! {
     static RICHEDIT_LOADED: RefCell<bool> = const { RefCell::new(false) };
+    static BACKLOG_PENDING: RefCell<Option<Rc<RefCell<BacklogStore>>>> = const { RefCell::new(None) };
+    static BACKLOG_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 define_dialog_instance!(BACKLOG_INSTANCE: BacklogDialog);
 
-impl Dialog for BacklogDialog {
-    type Params = (Rc<RefCell<Config>>, Rc<RefCell<BacklogStore>>);
+unsafe extern "system" fn backlog_dialog_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> isize {
+    unsafe {
+        if msg == WM_INITDIALOG {
+            let store = BACKLOG_PENDING.with(|slot| slot.borrow_mut().take());
+            let Some(store) = store else {
+                BACKLOG_INIT_ERROR.with(|slot| {
+                    *slot.borrow_mut() = Some("백로그 창 초기화 인자가 없습니다".into());
+                });
+                return 0;
+            };
 
-    const CLASS_NAME: PCWSTR = w!("AnemoneBacklogClass");
-    const TITLE: PCWSTR = w!("백로그");
-    const WIDTH: i32 = BACKLOG_WIDTH;
-    const HEIGHT: i32 = BACKLOG_HEIGHT;
-    const EXTRA_STYLE: WINDOW_STYLE = WS_SIZEBOX;
-
-    fn instance_slot() -> &'static std::thread::LocalKey<
-        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-    > {
-        &BACKLOG_INSTANCE
-    }
-
-    fn init(hwnd: HWND, _parent: HWND, (_config, store): Self::Params) -> Self {
-        // RichEdit 4.1+ DLL 로드 (Msftedit.dll, Vista+)
-        //
-        // System32 한정 검색으로 DLL hijacking 방어 (cwd/PATH 무시).
-        RICHEDIT_LOADED.with(|loaded| {
-            if !*loaded.borrow() {
-                // SAFETY: System32 한정 검색 플래그를 쓰는 정적 DLL 이름 로드.
-                let load_result = unsafe {
-                    LoadLibraryExW(w!("Msftedit.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)
-                };
-                if let Err(e) = load_result {
-                    tracing::error!("Failed to load Msftedit.dll: {e}");
-                }
-                *loaded.borrow_mut() = true;
+            let dialog = Rc::new(RefCell::new(BacklogDialog::new(hwnd, store)));
+            BACKLOG_INSTANCE.with(|slot| *slot.borrow_mut() = Some(dialog.clone()));
+            if let Err(error) = dialog.borrow_mut().initialize_controls() {
+                BACKLOG_INSTANCE.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                BACKLOG_INIT_ERROR.with(|slot| {
+                    *slot.borrow_mut() = Some(error.to_string());
+                });
+                return 0;
             }
+            register_resource_dialog(hwnd);
+            return 1;
+        }
+
+        let instance = BACKLOG_INSTANCE.with(|slot| {
+            let Ok(guard) = slot.try_borrow() else {
+                return None;
+            };
+            guard.clone()
         });
-        BacklogDialog {
+        let Some(dialog) = instance else {
+            return 0;
+        };
+
+        match msg {
+            WM_SIZE => {
+                if let Ok(dialog) = dialog.try_borrow() {
+                    dialog.on_size(
+                        (lparam.0 & 0xFFFF) as i32,
+                        ((lparam.0 >> 16) & 0xFFFF) as i32,
+                    );
+                }
+                1
+            }
+            WM_DPICHANGED => {
+                if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                    dialog.handle_dpi_changed(wparam, lparam);
+                }
+                1
+            }
+            WM_COMMAND => {
+                let id = (wparam.0 & 0xFFFF) as u16;
+                if id == IDCANCEL.0 as u16 {
+                    let _ = DestroyWindow(hwnd);
+                } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                    dialog.handle_command(id);
+                }
+                1
+            }
+            WM_CLOSE => {
+                let _ = DestroyWindow(hwnd);
+                1
+            }
+            WM_DESTROY => {
+                unregister_resource_dialog(hwnd);
+                BACKLOG_INSTANCE.with(|slot| {
+                    if let Ok(mut guard) = slot.try_borrow_mut() {
+                        *guard = None;
+                    }
+                });
+                1
+            }
+            _ => 0,
+        }
+    }
+}
+
+impl BacklogDialog {
+    fn new(hwnd: HWND, store: Rc<RefCell<BacklogStore>>) -> Self {
+        Self {
             hwnd,
             richedit: HWND::default(),
             group_filter: HWND::default(),
             group_action: HWND::default(),
+            applied_dpi: crate::dpi::dpi_for_window(hwnd),
             filter: BacklogFilter::All,
             add_linefeed: true,
             store,
@@ -231,126 +285,101 @@ impl Dialog for BacklogDialog {
         }
     }
 
-    fn create_controls(&mut self) -> Result<()> {
-        // SAFETY: self.hwnd is a valid window handle from show_impl. CreateWindowExW and
-        // SendMessageW use valid handles and parameters.
+    pub fn show(parent: HWND, store: Rc<RefCell<BacklogStore>>) -> Result<HWND> {
+        let existing =
+            BACKLOG_INSTANCE.with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
+        if let Some(hwnd) = existing
+            && unsafe { IsWindow(Some(hwnd)).as_bool() }
+        {
+            unsafe {
+                let _ = SetForegroundWindow(hwnd);
+            }
+            return Ok(hwnd);
+        }
+
+        RICHEDIT_LOADED.with(|loaded| -> Result<()> {
+            if !*loaded.borrow() {
+                unsafe {
+                    LoadLibraryExW(w!("Msftedit.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)?;
+                }
+                *loaded.borrow_mut() = true;
+            }
+            Ok(())
+        })?;
+
+        let instance = unsafe { GetModuleHandleW(None)? };
+        BACKLOG_INIT_ERROR.with(|slot| {
+            slot.borrow_mut().take();
+        });
+        BACKLOG_PENDING.with(|slot| *slot.borrow_mut() = Some(store));
+        let result = unsafe {
+            CreateDialogParamW(
+                Some(instance.into()),
+                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
+                Some(parent),
+                Some(backlog_dialog_proc),
+                LPARAM(0),
+            )
+        };
+        let hwnd = match result {
+            Ok(hwnd) => hwnd,
+            Err(error) => {
+                BACKLOG_PENDING.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                return Err(error);
+            }
+        };
+        if let Some(message) = BACKLOG_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+            return Err(Error::new(E_FAIL, message));
+        }
+
         unsafe {
-            let hinst = GetModuleHandleW(None)?;
-            let dpi = crate::dpi::dpi_for_window(self.hwnd);
-            let s = |v: i32| crate::dpi::scale(v, dpi);
+            center_dialog_on_monitor(hwnd, parent);
+            show_dialog_window(hwnd);
+        }
+        Ok(hwnd)
+    }
 
-            // RichEdit 4.1+ 컨트롤 생성 (MSFTEDIT_CLASS)
-            self.richedit = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                w!("RICHEDIT50W"),
-                w!(""),
-                WINDOW_STYLE(
-                    WS_CHILD.0
-                        | WS_VISIBLE.0
-                        | WS_VSCROLL.0
-                        | WS_HSCROLL.0
-                        | ES_MULTILINE as u32
-                        | ES_AUTOVSCROLL as u32
-                        | ES_AUTOHSCROLL as u32
-                        | ES_READONLY as u32,
-                ),
-                s(10),
-                s(10),
-                s(BACKLOG_WIDTH - 30),
-                s(BACKLOG_HEIGHT - 120),
-                Some(self.hwnd),
-                Some(HMENU(ctrl_id::RICHEDIT as isize as *mut _)),
-                Some(hinst.into()),
-                None,
-            )?;
-
-            // 배경색: 시스템 기본 (밝은 흰색 계열) — wParam=1 이면 lParam 무시하고
-            // COLOR_WINDOW 사용. 다른 다이얼로그와 톤 통일.
+    fn initialize_controls(&mut self) -> Result<()> {
+        let get_control = |id| {
+            unsafe { GetDlgItem(Some(self.hwnd), id) }.map_err(|_| {
+                Error::new(E_FAIL, format!("백로그 컨트롤 ID {id}를 찾을 수 없습니다"))
+            })
+        };
+        self.richedit = get_control(ctrl_id::RICHEDIT as i32)?;
+        self.group_filter = get_control(ctrl_id::GROUP_FILTER as i32)?;
+        self.group_action = get_control(ctrl_id::GROUP_ACTION as i32)?;
+        for id in [
+            ctrl_id::CHK_LINEFEED,
+            ctrl_id::RADIO_ORIGINAL,
+            ctrl_id::RADIO_TRANSLATION,
+            ctrl_id::RADIO_ALL,
+            ctrl_id::BTN_CLEAR,
+            ctrl_id::BTN_SAVE,
+            ctrl_id::BTN_FONT,
+        ] {
+            get_control(id as i32)?;
+        }
+        unsafe {
+            let _ = CheckDlgButton(self.hwnd, ctrl_id::RADIO_ALL as i32, BST_CHECKED);
+            let _ = CheckDlgButton(self.hwnd, ctrl_id::CHK_LINEFEED as i32, BST_CHECKED);
             let _ = SendMessageW(
                 self.richedit,
                 EM_SETBKGNDCOLOR,
                 Some(WPARAM(1)),
                 Some(LPARAM(0)),
             );
-
-            // ====== 옵션 그룹 ======
-            self.group_filter = self.create_group_box(10, BACKLOG_HEIGHT - 100, 350, 60, "필터")?;
-
-            self.create_radio(
-                20,
-                BACKLOG_HEIGHT - 80,
-                80,
-                20,
-                ctrl_id::RADIO_ORIGINAL,
-                "원문만",
-                self.filter == BacklogFilter::Original,
-            )?;
-            self.create_radio(
-                105,
-                BACKLOG_HEIGHT - 80,
-                80,
-                20,
-                ctrl_id::RADIO_TRANSLATION,
-                "번역만",
-                self.filter == BacklogFilter::Translation,
-            )?;
-            self.create_radio(
-                190,
-                BACKLOG_HEIGHT - 80,
-                60,
-                20,
-                ctrl_id::RADIO_ALL,
-                "전체",
-                self.filter == BacklogFilter::All,
-            )?;
-
-            self.create_checkbox(
-                260,
-                BACKLOG_HEIGHT - 80,
-                90,
-                20,
-                ctrl_id::CHK_LINEFEED,
-                "줄바꿈 추가",
-                self.add_linefeed,
-            )?;
-
-            // ====== 버튼 그룹 ======
-            self.group_action =
-                self.create_group_box(370, BACKLOG_HEIGHT - 100, 200, 60, "동작")?;
-
-            self.create_button(
-                380,
-                BACKLOG_HEIGHT - 78,
-                55,
-                28,
-                ctrl_id::BTN_CLEAR,
-                "초기화",
-            )?;
-            self.create_button(445, BACKLOG_HEIGHT - 78, 55, 28, ctrl_id::BTN_SAVE, "저장")?;
-            self.create_button(510, BACKLOG_HEIGHT - 78, 55, 28, ctrl_id::BTN_FONT, "폰트")?;
-
-            self.refresh_richedit();
-            Ok(())
         }
+        self.refresh_richedit();
+        Ok(())
     }
 
-    /// 커스텀 메시지 핸들러
-    fn handle_message(&mut self, msg: u32, _wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-        match msg {
-            WM_SIZE => {
-                let width = (lparam.0 & 0xFFFF) as i32;
-                let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
-                self.on_size(width, height);
-                Some(LRESULT(0))
-            }
-            _ => None,
-        }
-    }
-
-    /// 명령 처리
-    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
+    fn handle_command(&mut self, cmd: u16) {
         use ctrl_id::*;
-
         match cmd {
             CHK_LINEFEED => {
                 self.add_linefeed = !self.add_linefeed;
@@ -374,9 +403,27 @@ impl Dialog for BacklogDialog {
             _ => {}
         }
     }
-}
 
-impl BacklogDialog {
+    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
+        let new_dpi = (wparam.0 & 0xFFFF) as u32;
+        rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
+        self.applied_dpi = new_dpi;
+        if lparam.0 != 0 {
+            unsafe {
+                let rect = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    None,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+    }
+
     /// RichEdit에 항목 추가
     fn append_entry_to_richedit(&self, entry: &LogEntry) {
         // SAFETY: self.richedit is a valid RichEdit control handle from create_controls.
@@ -513,9 +560,22 @@ impl BacklogDialog {
                 spec: "*.*",
             },
         ];
-        let Some(path) = save_file(self.hwnd, "백로그 저장", &filters, Some("txt"), None)
-        else {
-            return;
+        let path = match save_file(self.hwnd, "백로그 저장", &filters, Some("txt"), None) {
+            Ok(Some(path)) => path,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::error!("백로그 저장 대화상자 오류: {error}");
+                let message = to_wide(&format!("저장 대화상자를 열 수 없습니다.\n{error}"));
+                unsafe {
+                    let _ = MessageBoxW(
+                        Some(self.hwnd),
+                        PCWSTR(message.as_ptr()),
+                        w!("오류"),
+                        MB_ICONERROR,
+                    );
+                }
+                return;
+            }
         };
 
         let mut content = String::new();
@@ -549,34 +609,28 @@ impl BacklogDialog {
 
     /// 윈도우 크기 변경 시 컨트롤 재배치
     ///
-    /// RichEdit 는 새 client size 에 맞춰 늘리고, 하단 필터/동작 그룹은
-    /// 원본 디자인 좌표 (`BACKLOG_HEIGHT - 100` 등) 를 새 height 기준으로
-    /// 평행이동해 그룹/라디오/버튼이 클라이언트 밖으로 사라지지 않게 한다.
-    /// X·width·height 는 디자인 그대로 유지.
+    /// RichEdit는 새 client size에 맞춰 늘리고 하단 그룹은 아래쪽에 고정한다.
     fn on_size(&self, width: i32, height: i32) {
-        // SAFETY: self.richedit, self.group_* 는 create_controls 이후 유효.
-        // GetDlgItem 은 컨트롤 ID 가 매칭되면 유효 핸들을 돌려주고,
-        // 실패하면 Err 라 무시한다.
         unsafe {
             let dpi = crate::dpi::dpi_for_window(self.hwnd);
             let s = |v: i32| crate::dpi::scale(v, dpi);
+            let margin = s(10);
+            let group_y = height - s(100);
+            let filter_width = (width - s(240)).max(s(250));
+            let action_x = width - s(220);
 
             let _ = SetWindowPos(
                 self.richedit,
                 None,
-                s(10),
-                s(10),
-                width - s(30),
-                height - s(120),
+                margin,
+                margin,
+                (width - margin * 2).max(1),
+                (height - s(120)).max(1),
                 SWP_NOZORDER,
             );
 
-            // 디자인 좌표를 새 height 기준으로 평행이동.
-            // 원본은 BACKLOG_HEIGHT 기준 절대 좌표이므로 height/BACKLOG_HEIGHT
-            // 비율이 아니라 height - design_height 차분 (dy) 으로 환산.
-            let dy = height - s(BACKLOG_HEIGHT);
             let move_to = |ctrl: HWND, x: i32, y: i32, w: i32, h: i32| {
-                let _ = SetWindowPos(ctrl, None, s(x), s(y) + dy, s(w), s(h), SWP_NOZORDER);
+                let _ = SetWindowPos(ctrl, None, x, y, w, h, SWP_NOZORDER);
             };
             let move_ctrl = |id: u16, x: i32, y: i32, w: i32, h: i32| {
                 if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), id as i32) {
@@ -584,18 +638,25 @@ impl BacklogDialog {
                 }
             };
 
-            // 그룹박스 (ID=0, GetDlgItem 으로 못 찾으므로 저장 핸들 사용)
-            move_to(self.group_filter, 10, BACKLOG_HEIGHT - 100, 350, 60);
-            move_to(self.group_action, 370, BACKLOG_HEIGHT - 100, 200, 60);
+            move_to(self.group_filter, margin, group_y, filter_width, s(60));
+            move_to(self.group_action, action_x, group_y, s(210), s(60));
 
             use ctrl_id::*;
-            move_ctrl(RADIO_ORIGINAL, 20, BACKLOG_HEIGHT - 80, 80, 20);
-            move_ctrl(RADIO_TRANSLATION, 105, BACKLOG_HEIGHT - 80, 80, 20);
-            move_ctrl(RADIO_ALL, 190, BACKLOG_HEIGHT - 80, 60, 20);
-            move_ctrl(CHK_LINEFEED, 260, BACKLOG_HEIGHT - 80, 90, 20);
-            move_ctrl(BTN_CLEAR, 380, BACKLOG_HEIGHT - 78, 55, 28);
-            move_ctrl(BTN_SAVE, 445, BACKLOG_HEIGHT - 78, 55, 28);
-            move_ctrl(BTN_FONT, 510, BACKLOG_HEIGHT - 78, 55, 28);
+            let option_y = group_y + s(20);
+            move_ctrl(RADIO_ORIGINAL, margin + s(10), option_y, s(80), s(20));
+            move_ctrl(RADIO_TRANSLATION, margin + s(95), option_y, s(80), s(20));
+            move_ctrl(RADIO_ALL, margin + s(180), option_y, s(60), s(20));
+            move_ctrl(
+                CHK_LINEFEED,
+                margin + filter_width - s(100),
+                option_y,
+                s(90),
+                s(20),
+            );
+            let button_y = group_y + s(22);
+            move_ctrl(BTN_CLEAR, action_x + s(10), button_y, s(55), s(28));
+            move_ctrl(BTN_SAVE, action_x + s(75), button_y, s(55), s(28));
+            move_ctrl(BTN_FONT, action_x + s(140), button_y, s(55), s(28));
         }
     }
 }

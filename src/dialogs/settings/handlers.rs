@@ -256,24 +256,28 @@ impl SettingsDialog {
             ),
 
             // EzTrans DLL 찾아보기
-            EZTRANS_DLL_BROWSE => {
-                if let Some(path) = self.browse_dll_file("J2KEngine.dll 선택") {
+            EZTRANS_DLL_BROWSE => match self.browse_dll_file("J2KEngine.dll 선택") {
+                Ok(Some(path)) => {
                     self.config.borrow_mut().translation.eztrans_dll_path = path.clone();
                     self.set_control_text(EZTRANS_DLL_EDIT, &path);
                     self.sync_translation_manager();
                     self.notify_change();
                 }
-            }
+                Ok(None) => {}
+                Err(error) => self.show_file_dialog_error(&error),
+            },
 
             // EzTrans Dat 폴더 찾아보기
-            EZTRANS_DAT_BROWSE => {
-                if let Some(path) = self.browse_folder_with_title("EzTrans Dat 폴더 선택") {
+            EZTRANS_DAT_BROWSE => match self.browse_folder_with_title("EzTrans Dat 폴더 선택") {
+                Ok(Some(path)) => {
                     self.config.borrow_mut().translation.eztrans_dat_path = path.clone();
                     self.set_control_text(EZTRANS_DAT_EDIT, &path);
                     self.sync_translation_manager();
                     self.notify_change();
                 }
-            }
+                Ok(None) => {}
+                Err(error) => self.show_file_dialog_error(&error),
+            },
 
             // DeepL 보조 키 추가
             DEEPL_KEY_ADD_BTN => self.deepl_keys_add(),
@@ -535,19 +539,32 @@ impl SettingsDialog {
     }
 
     /// 제목 지정 폴더 브라우저 열기
-    fn browse_folder_with_title(&self, title: &str) -> Option<String> {
+    fn browse_folder_with_title(&self, title: &str) -> Result<Option<String>> {
         crate::dialogs::file_dialog::pick_folder(self.hwnd, title)
-            .map(|p| p.to_string_lossy().into_owned())
+            .map(|path| path.map(|p| p.to_string_lossy().into_owned()))
     }
 
     /// DLL 파일 브라우저 열기
-    fn browse_dll_file(&self, title: &str) -> Option<String> {
+    fn browse_dll_file(&self, title: &str) -> Result<Option<String>> {
         let filters = [crate::dialogs::file_dialog::FileFilter {
             name: "DLL 파일",
             spec: "*.dll",
         }];
         crate::dialogs::file_dialog::open_file(self.hwnd, title, &filters)
-            .map(|p| p.to_string_lossy().into_owned())
+            .map(|path| path.map(|p| p.to_string_lossy().into_owned()))
+    }
+
+    fn show_file_dialog_error(&self, error: &windows::core::Error) {
+        tracing::error!("설정 파일 대화상자 오류: {error}");
+        let message = to_wide(&format!("파일 대화상자를 열 수 없습니다.\n{error}"));
+        unsafe {
+            let _ = MessageBoxW(
+                Some(self.hwnd),
+                PCWSTR(message.as_ptr()),
+                w!("오류"),
+                MB_ICONERROR,
+            );
+        }
     }
 
     /// Edit 컨트롤 포커스 해제 시 값 저장

@@ -25,7 +25,7 @@ use crate::constants::{
     WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
 use crate::d2d::{CompositionRenderer, D2DRenderer};
-use crate::dialogs::helpers::{Dialog, dispatch_resource_dialog_message};
+use crate::dialogs::helpers::dispatch_resource_dialog_message;
 use crate::dialogs::{
     BacklogDialog, BacklogStore, FileTransDialog, HookSettingsDialog, LogEntry, SettingsDialog,
     TranslateDialog, add_to_backlog,

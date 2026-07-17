@@ -25,7 +25,7 @@ use windows::{
 };
 
 use super::helpers::{
-    register_resource_dialog, rescale_dialog_children_for_dpi, show_dialog_window,
+    register_resource_dialog, rescale_dialog_children_for_dpi, set_window_text, show_dialog_window,
     unregister_resource_dialog,
 };
 use crate::constants::WM_PROGRESS_EVENT;
@@ -472,15 +472,6 @@ impl FileTransProgressDialog {
         }
     }
 
-    /// 텍스트 설정
-    unsafe fn set_text(hwnd: HWND, text: &str) {
-        // SAFETY: hwnd is a valid control handle. wide string is valid for the call duration.
-        unsafe {
-            let wide = to_wide(text);
-            let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
-        }
-    }
-
     fn drain_progress_events(&mut self) {
         let events = self.event_queue.drain();
         for event in events {
@@ -496,25 +487,25 @@ impl FileTransProgressDialog {
             match event {
                 ProgressEvent::TotalLines(_) => {
                     let text = format!("전체: 0/{}", self.state.total_lines);
-                    Self::set_text(self.total_text, &text);
+                    let _ = set_window_text(self.total_text, &text);
                 }
                 ProgressEvent::TotalFiles(_) => {
                     let text = format!("파일: 0/{}", self.state.total_files);
-                    Self::set_text(self.index_text, &text);
+                    let _ = set_window_text(self.index_text, &text);
                 }
                 ProgressEvent::FileIndex(_) => {
                     let text = format!(
                         "파일: {}/{}",
                         self.state.current_file_index, self.state.total_files
                     );
-                    Self::set_text(self.index_text, &text);
+                    let _ = set_window_text(self.index_text, &text);
                 }
                 ProgressEvent::FileName(filename) => {
                     let text = format!(
                         "{} ({}/{})",
                         filename, self.state.current_file_index, self.state.total_files
                     );
-                    Self::set_text(self.name_text, &text);
+                    let _ = set_window_text(self.name_text, &text);
                     // 프로그레스바 초기화
                     let _ = SendMessageW(
                         self.progress_bar,
@@ -547,14 +538,14 @@ impl FileTransProgressDialog {
                         Some(LPARAM(0)),
                     );
                     let text = format!("{}/{}", current, self.state.list_size);
-                    Self::set_text(self.progress_text, &text);
+                    let _ = set_window_text(self.progress_text, &text);
                 }
                 ProgressEvent::TotalProgress(_) => {
                     let text = format!(
                         "전체: {}/{}",
                         self.state.current_line, self.state.total_lines
                     );
-                    Self::set_text(self.total_text, &text);
+                    let _ = set_window_text(self.total_text, &text);
 
                     // 작업 표시줄 진행률 갱신 (전체 라인 기준 — 가장 안정적인 단조 증가 신호).
                     if let Some(ref tb) = self.taskbar
@@ -568,8 +559,8 @@ impl FileTransProgressDialog {
                     }
                 }
                 ProgressEvent::Complete => {
-                    Self::set_text(self.name_text, "완료!");
-                    Self::set_text(self.progress_text, "번역 완료");
+                    let _ = set_window_text(self.name_text, "완료!");
+                    let _ = set_window_text(self.progress_text, "번역 완료");
                     let _ = EnableWindow(self.cancel_btn, false);
 
                     // 작업 표시줄 진행률 해제
@@ -589,7 +580,7 @@ impl FileTransProgressDialog {
                     let _ = DestroyWindow(self.hwnd);
                 }
                 ProgressEvent::Error(error_msg) => {
-                    Self::set_text(self.name_text, "오류 발생");
+                    let _ = set_window_text(self.name_text, "오류 발생");
                     let _ = EnableWindow(self.cancel_btn, false);
 
                     // 작업 표시줄 진행률을 ERROR 상태로 잠깐 표시한 뒤
@@ -619,7 +610,7 @@ impl FileTransProgressDialog {
         // SAFETY: self.cancel_btn is a valid control handle from the RC template.
         unsafe {
             let _ = EnableWindow(self.cancel_btn, false);
-            Self::set_text(self.progress_text, "취소 중...");
+            let _ = set_window_text(self.progress_text, "취소 중...");
             // 작업 표시줄을 PAUSED 로 표시 — 실제 종료/정리는 워커 스레드가
             // 취소 토큰을 감지해 오류 이벤트를 보낼 때 마무리된다.
             if let Some(ref tb) = self.taskbar {

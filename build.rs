@@ -24,6 +24,9 @@ fn main() {
     let translate_rc = fs::read_to_string("resources/translate.rc")
         .expect("Failed to read translation dialog resource");
     res.append_rc_content(&translate_rc);
+    let backlog_rc =
+        fs::read_to_string("resources/backlog.rc").expect("Failed to read backlog dialog resource");
+    res.append_rc_content(&backlog_rc);
     res.compile().expect("Failed to compile Windows resources");
 
     println!("cargo:rerun-if-changed=assets/Anemone.ico");
@@ -33,6 +36,7 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/file_trans_progress.rc");
     println!("cargo:rerun-if-changed=resources/file_trans.rc");
     println!("cargo:rerun-if-changed=resources/translate.rc");
+    println!("cargo:rerun-if-changed=resources/backlog.rc");
 
     copy_eztrans_dll();
 }

@@ -26,7 +26,7 @@ use super::file_dialog::{FileFilter, open_files_multi, save_file};
 use super::file_trans_progress::{FileTransProgressDialog, ProgressEventQueue, ProgressReporter};
 use super::helpers::{
     center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
-    show_dialog_window, unregister_resource_dialog,
+    set_window_text, show_dialog_window, unregister_resource_dialog,
 };
 use crate::config::Config;
 use crate::define_dialog_instance;
@@ -444,20 +444,7 @@ impl FileTransDialog {
             "현재 번역 엔진: {} ({} → {})\r\n엔진/언어는 \"번역\" 또는 \"설정\" 다이얼로그에서 변경할 수 있습니다.",
             engine_name, source, target,
         );
-        // SAFETY: engine_label is a valid static label control handle from create_controls.
-        unsafe {
-            Self::set_edit_text(self.engine_label, &text);
-        }
-    }
-
-    /// Edit 컨트롤에 텍스트 설정
-    unsafe fn set_edit_text(hwnd: HWND, text: &str) {
-        // SAFETY: hwnd is a valid edit control handle. The wide string pointer is valid
-        // for the duration of the SetWindowTextW call.
-        unsafe {
-            let wide = to_wide(text);
-            let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
-        }
+        let _ = set_window_text(self.engine_label, &text);
     }
 
     /// 입력 파일 선택 (다중 선택)
@@ -472,10 +459,14 @@ impl FileTransDialog {
                 spec: "*.*",
             },
         ];
-        let picked = open_files_multi(self.hwnd, "입력 파일 선택", &filters);
-        if picked.is_empty() {
-            return;
-        }
+        let picked = match open_files_multi(self.hwnd, "입력 파일 선택", &filters) {
+            Ok(Some(paths)) => paths,
+            Ok(None) => return,
+            Err(error) => {
+                self.show_file_dialog_error(&error);
+                return;
+            }
+        };
 
         self.input_files = picked;
         self.output_files = match default_output_paths(&self.input_files) {
@@ -509,8 +500,8 @@ impl FileTransDialog {
         // SAFETY: load_edit/save_edit/save_browser_btn are valid control handles
         // from create_controls.
         unsafe {
-            Self::set_edit_text(self.load_edit, &input_display.join(", "));
-            Self::set_edit_text(self.save_edit, &output_display.join(", "));
+            let _ = set_window_text(self.load_edit, &input_display.join(", "));
+            let _ = set_window_text(self.save_edit, &output_display.join(", "));
             let _ = EnableWindow(self.save_browser_btn, self.input_files.len() == 1);
         }
 
@@ -536,17 +527,19 @@ impl FileTransDialog {
             },
         ];
         let initial = self.output_files.first().map(|p| p.as_path());
-        let Some(path) = save_file(self.hwnd, "출력 파일 위치", &filters, Some("txt"), initial)
-        else {
-            return;
+        let path = match save_file(self.hwnd, "출력 파일 위치", &filters, Some("txt"), initial)
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => return,
+            Err(error) => {
+                self.show_file_dialog_error(&error);
+                return;
+            }
         };
 
         let path_str = path.to_string_lossy().to_string();
         self.output_files[0] = path;
-        // SAFETY: save_edit is a valid control handle from create_controls.
-        unsafe {
-            Self::set_edit_text(self.save_edit, &path_str);
-        }
+        let _ = set_window_text(self.save_edit, &path_str);
     }
 
     /// 파일 미리보기 (처음 7줄). 입력은 UTF-8 / UTF-8 BOM 만 허용한다.
@@ -562,9 +555,19 @@ impl FileTransDialog {
             Err(msg) => format!("! {msg}"),
         };
 
-        // SAFETY: self.preview_edit is a valid edit control handle created in create_controls.
+        let _ = set_window_text(self.preview_edit, &content);
+    }
+
+    fn show_file_dialog_error(&self, error: &windows::core::Error) {
+        tracing::error!("파일 대화상자 오류: {error}");
+        let message = to_wide(&format!("파일 대화상자를 열 수 없습니다.\n{error}"));
         unsafe {
-            Self::set_edit_text(self.preview_edit, &content);
+            let _ = MessageBoxW(
+                Some(self.hwnd),
+                PCWSTR(message.as_ptr()),
+                w!("오류"),
+                MB_ICONERROR,
+            );
         }
     }
 

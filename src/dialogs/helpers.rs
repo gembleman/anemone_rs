@@ -1,22 +1,20 @@
 //! 다이얼로그 공통 헬퍼
 //!
-//! 윈도우 클래스 등록, 윈도우 생성 등 다이얼로그 간 공통 패턴 추출.
+//! 리소스 다이얼로그 생명주기, DPI, 텍스트와 ListBox 공통 처리.
 
 use std::collections::HashMap;
 
 use windows::{
     Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW, UI::Controls::*,
-        UI::HiDpi::AdjustWindowRectExForDpi, UI::WindowsAndMessaging::*,
+        Foundation::*, Graphics::Gdi::*, UI::HiDpi::AdjustWindowRectExForDpi,
+        UI::WindowsAndMessaging::*,
     },
     core::*,
 };
 
-use crate::{constants::APP_ICON_ID, util::to_wide};
+use crate::util::to_wide;
 
 thread_local! {
-    static DIALOG_APPLIED_DPI: std::cell::RefCell<HashMap<isize, u32>> =
-        std::cell::RefCell::new(HashMap::new());
     static RESOURCE_DIALOGS: std::cell::RefCell<Vec<isize>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -98,14 +96,6 @@ pub unsafe fn center_dialog_on_monitor(hwnd: HWND, parent: HWND) {
     }
 }
 
-/// 다이얼로그 공용 한글 폰트 (Malgun Gothic 9pt).
-///
-/// 최초 호출 시 `CreateFontW`로 생성 후 캐시. 실패 시 DEFAULT_GUI_FONT로 폴백.
-/// 프로세스 종료 시 OS가 핸들을 정리하므로 명시적 해제는 하지 않는다.
-pub fn dialog_font() -> HFONT {
-    dialog_font_for_dpi(crate::dpi::dpi_for_window(HWND::default()))
-}
-
 /// 지정 DPI 용 다이얼로그 폰트.
 ///
 /// 컨트롤은 DPI 변경 시 새 폰트를 다시 받아야 하므로 DPI 별로 캐시한다.
@@ -152,84 +142,6 @@ pub fn dialog_font_for_dpi(dpi: u32) -> HFONT {
     })
 }
 
-fn remember_dialog_dpi(hwnd: HWND, dpi: u32) {
-    let dpi = if dpi > 0 { dpi } else { crate::dpi::BASE_DPI };
-    DIALOG_APPLIED_DPI.with(|m| {
-        m.borrow_mut().insert(hwnd.0 as isize, dpi);
-    });
-}
-
-fn take_remembered_dialog_dpi(hwnd: HWND) {
-    DIALOG_APPLIED_DPI.with(|m| {
-        m.borrow_mut().remove(&(hwnd.0 as isize));
-    });
-}
-
-fn remembered_dialog_dpi(hwnd: HWND) -> u32 {
-    DIALOG_APPLIED_DPI.with(|m| {
-        m.borrow()
-            .get(&(hwnd.0 as isize))
-            .copied()
-            .unwrap_or_else(|| crate::dpi::dpi_for_window(hwnd))
-    })
-}
-
-/// 표준 다이얼로그 윈도우 클래스를 등록한다.
-///
-/// 이미 등록된 클래스면 무시한다.
-/// 모든 다이얼로그가 동일한 WNDCLASSEXW 설정을 사용하므로
-/// `class_name`과 `wndproc`만 다르게 받는다.
-// SAFETY: Caller must provide a valid class_name and wndproc function pointer.
-pub unsafe fn register_dialog_class(
-    class_name: PCWSTR,
-    wndproc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
-) -> Result<()> {
-    // SAFETY: GetModuleHandleW(None) returns a valid module handle. RegisterClassExW is
-    // called with a properly initialized WNDCLASSEXW. ERROR_CLASS_ALREADY_EXISTS is handled.
-    unsafe {
-        let instance = GetModuleHandleW(None)?;
-
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(wndproc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: instance.into(),
-            hIcon: LoadIconW(
-                Some(instance.into()),
-                PCWSTR(APP_ICON_ID as usize as *const u16),
-            )?,
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as *mut _),
-            lpszMenuName: PCWSTR::null(),
-            lpszClassName: class_name,
-            hIconSm: HICON::default(),
-        };
-
-        let atom = RegisterClassExW(&wc);
-        if atom == 0 {
-            let err = GetLastError();
-            if err != ERROR_CLASS_ALREADY_EXISTS {
-                return Err(Error::from_hresult(HRESULT::from_win32(err.0)));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-/// 다이얼로그 윈도우 생성 옵션
-pub struct DialogWindowOptions {
-    pub class_name: PCWSTR,
-    pub title: PCWSTR,
-    pub width: i32,
-    pub height: i32,
-    pub parent: HWND,
-    /// 추가 윈도우 스타일 (WS_SIZEBOX 등). 기본: WS_POPUP | WS_CAPTION | WS_SYSMENU
-    pub extra_style: WINDOW_STYLE,
-}
-
 /// `(width, height)` 를 클라이언트 영역 크기로 보고 타이틀/테두리를 더한
 /// 전체 윈도우 크기로 변환한다. DPI 와 윈도우 스타일을 함께 반영해, 자식
 /// 컨트롤이 디자인 좌표 (96 DPI, 클라이언트 기준) 그대로 배치돼도 잘리지
@@ -264,9 +176,8 @@ fn client_size_to_window_size(
 /// 다이얼로그의 현재 스타일·DPI 기준으로 디자인 좌표(96 DPI 클라이언트
 /// 크기)를 윈도우 전체 픽셀 크기로 변환한다.
 ///
-/// `create_dialog_window` 가 적용한 "디자인 좌표 = 클라이언트 크기" 계약을
-/// 다이얼로그 자체 크기를 재조정할 때(예: 탭 전환 후 SetWindowPos)에도
-/// 유지하기 위한 공용 헬퍼.
+/// 리소스 다이얼로그의 디자인 크기로 창을 재조정할 때 타이틀과 테두리를
+/// 포함한 전체 크기를 계산하는 공용 헬퍼.
 pub fn design_to_window_size(hwnd: HWND, design_w: i32, design_h: i32) -> (i32, i32) {
     let dpi = crate::dpi::dpi_for_window(hwnd);
     // SAFETY: hwnd 는 유효 윈도우. GetWindowLongPtrW 는 표준 GDI 호출.
@@ -358,103 +269,8 @@ pub(super) fn rescale_dialog_children_for_dpi(hwnd: HWND, old_dpi: u32, new_dpi:
     }
 }
 
-/// 화면 중앙에 표준 다이얼로그 윈도우를 생성한다.
-///
-/// 스타일: WS_EX_TOOLWINDOW + (WS_POPUP | WS_CAPTION | WS_SYSMENU | extra_style)
-// SAFETY: Caller must provide valid options (parent HWND, class name previously registered).
-pub unsafe fn create_dialog_window(opts: &DialogWindowOptions) -> Result<HWND> {
-    // SAFETY: All parameters are valid. The class was registered via register_dialog_class.
-    unsafe {
-        let instance = GetModuleHandleW(None)?;
-
-        // 디자인 좌표는 96 DPI 의 "클라이언트 영역" 기준. 자식 컨트롤이
-        // 디자인 좌표 그대로 배치돼도 안 잘리도록, 타이틀바/테두리를 포함한
-        // 윈도우 전체 크기로 환산해서 CreateWindowExW 에 넘긴다.
-        let dpi = crate::dpi::dpi_for_window(opts.parent);
-        let style = WS_POPUP | WS_CAPTION | WS_SYSMENU | opts.extra_style;
-        let (w, h) =
-            client_size_to_window_size(opts.width, opts.height, style, WS_EX_TOOLWINDOW, dpi);
-
-        // 부모 윈도우가 위치한 모니터의 작업 영역(작업 표시줄 제외) 중앙에 배치.
-        // 다중 모니터 / Per-Monitor V2 환경에서 primary 모니터로 튀는 문제를 방지.
-        let monitor = MonitorFromWindow(opts.parent, MONITOR_DEFAULTTONEAREST);
-        let mut mi = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let work = if GetMonitorInfoW(monitor, &mut mi).as_bool() {
-            mi.rcWork
-        } else {
-            RECT {
-                left: 0,
-                top: 0,
-                right: GetSystemMetrics(SM_CXSCREEN),
-                bottom: GetSystemMetrics(SM_CYSCREEN),
-            }
-        };
-        let x = work.left + (work.right - work.left - w) / 2;
-        let y = work.top + (work.bottom - work.top - h) / 2;
-
-        let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW,
-            opts.class_name,
-            opts.title,
-            style,
-            x,
-            y,
-            w,
-            h,
-            Some(opts.parent),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-
-        Ok(hwnd)
-    }
-}
-
-/// 부모 윈도우 중앙에 다이얼로그 윈도우를 생성한다 (진행률 대화상자 등).
-// SAFETY: Caller must provide valid options (parent HWND, class name previously registered).
-pub unsafe fn create_dialog_window_centered_on_parent(opts: &DialogWindowOptions) -> Result<HWND> {
-    // SAFETY: opts.parent is a valid window handle. GetWindowRect and CreateWindowExW use
-    // valid parameters. The class was registered via register_dialog_class.
-    unsafe {
-        let instance = GetModuleHandleW(None)?;
-
-        // create_dialog_window 과 동일: WIDTH/HEIGHT 를 클라이언트 크기로 보고
-        // 타이틀/테두리를 포함한 윈도우 전체 크기로 환산.
-        let dpi = crate::dpi::dpi_for_window(opts.parent);
-        let style = WS_POPUP | WS_CAPTION | WS_SYSMENU | opts.extra_style;
-        let (w, h) =
-            client_size_to_window_size(opts.width, opts.height, style, WS_EX_TOOLWINDOW, dpi);
-
-        let mut parent_rect = RECT::default();
-        let _ = GetWindowRect(opts.parent, &mut parent_rect);
-        let x = parent_rect.left + (parent_rect.right - parent_rect.left - w) / 2;
-        let y = parent_rect.top + (parent_rect.bottom - parent_rect.top - h) / 2;
-
-        let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW,
-            opts.class_name,
-            opts.title,
-            style,
-            x,
-            y,
-            w,
-            h,
-            Some(opts.parent),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-
-        Ok(hwnd)
-    }
-}
-
 /// 다이얼로그 윈도우를 표시한다.
-// SAFETY: Caller must provide a valid hwnd from create_dialog_window.
+// SAFETY: Caller must provide a valid dialog hwnd.
 pub unsafe fn show_dialog_window(hwnd: HWND) {
     // SAFETY: hwnd is a valid window handle from CreateWindowExW.
     unsafe {
@@ -463,453 +279,93 @@ pub unsafe fn show_dialog_window(hwnd: HWND) {
     }
 }
 
-// ============================================================
-// 컨트롤 생성 헬퍼
-// ============================================================
-
-/// 자식 컨트롤의 위치/크기/식별자 묶음 (96 DPI 디자인 단위).
-struct ChildSpec {
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
+pub fn set_window_text(hwnd: HWND, text: &str) -> Result<()> {
+    let wide = to_wide(text);
+    unsafe { SetWindowTextW(hwnd, PCWSTR(wide.as_ptr())) }
 }
 
-/// 자식 컨트롤을 생성하고 기본 GUI 폰트를 설정한다.
-///
-/// `spec` 의 좌표는 96 DPI 디자인 단위로 받으며, 부모 윈도우의 DPI 로
-/// 자동 스케일링된다.
-// SAFETY: Caller must provide a valid parent HWND, class name, and text pointer.
-unsafe fn create_child(
-    parent: HWND,
-    class: PCWSTR,
-    text: PCWSTR,
-    style: WINDOW_STYLE,
-    ex_style: WINDOW_EX_STYLE,
-    spec: ChildSpec,
-) -> Result<HWND> {
-    // SAFETY: parent is a valid window handle. CreateWindowExW creates a child control
-    // with valid class and style. GetStockObject returns a valid font handle.
+pub fn get_window_text(hwnd: HWND) -> String {
     unsafe {
-        let hinst = GetModuleHandleW(None)?;
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return String::new();
+        }
+        let mut buffer = vec![0; (len + 1) as usize];
+        let copied = GetWindowTextW(hwnd, &mut buffer);
+        String::from_utf16_lossy(&buffer[..copied as usize])
+    }
+}
 
-        let dpi = crate::dpi::dpi_for_window(parent);
-        let sx = crate::dpi::scale(spec.x, dpi);
-        let sy = crate::dpi::scale(spec.y, dpi);
-        let sw = crate::dpi::scale(spec.w, dpi);
-        let sh = crate::dpi::scale(spec.h, dpi);
-
-        let hwnd = CreateWindowExW(
-            ex_style,
-            class,
-            text,
-            style,
-            sx,
-            sy,
-            sw,
-            sh,
-            Some(parent),
-            Some(HMENU(spec.id as isize as *mut _)),
-            Some(hinst.into()),
-            None,
-        )?;
-
-        let hfont = dialog_font();
+pub fn listbox_add_item(hwnd: HWND, text: &str) {
+    let wide = to_wide(text);
+    unsafe {
         let _ = SendMessageW(
             hwnd,
-            WM_SETFONT,
-            Some(WPARAM(hfont.0 as usize)),
+            LB_ADDSTRING,
+            Some(WPARAM(0)),
+            Some(LPARAM(wide.as_ptr() as isize)),
+        );
+    }
+}
+
+pub fn listbox_reset(hwnd: HWND) {
+    unsafe {
+        let _ = SendMessageW(hwnd, LB_RESETCONTENT, Some(WPARAM(0)), Some(LPARAM(0)));
+    }
+}
+
+pub fn listbox_get_sel(hwnd: HWND) -> i32 {
+    unsafe { SendMessageW(hwnd, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
+}
+
+pub fn listbox_set_sel(hwnd: HWND, index: i32) {
+    unsafe {
+        let _ = SendMessageW(
+            hwnd,
+            LB_SETCURSEL,
+            Some(WPARAM(index as usize)),
             Some(LPARAM(0)),
         );
-
-        Ok(hwnd)
     }
 }
 
-/// 그룹 박스 생성
-// SAFETY: Caller must provide a valid parent HWND.
-pub unsafe fn create_group_box(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    text: &str,
-) -> Result<HWND> {
-    let text_wide = to_wide(text);
-    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
+pub fn listbox_get_count(hwnd: HWND) -> i32 {
+    unsafe { SendMessageW(hwnd, LB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
+}
+
+pub fn listbox_get_text(hwnd: HWND, index: i32) -> Option<String> {
     unsafe {
-        create_child(
-            parent,
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_GROUPBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            WINDOW_EX_STYLE::default(),
-            ChildSpec { x, y, w, h, id: 0 },
+        let len = SendMessageW(
+            hwnd,
+            LB_GETTEXTLEN,
+            Some(WPARAM(index as usize)),
+            Some(LPARAM(0)),
         )
-    }
-}
-
-/// 푸시 버튼 생성
-// SAFETY: Caller must provide a valid parent HWND.
-pub unsafe fn create_button(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    text: &str,
-) -> Result<HWND> {
-    let text_wide = to_wide(text);
-    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
-    unsafe {
-        create_child(
-            parent,
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_PUSHBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            WINDOW_EX_STYLE::default(),
-            ChildSpec { x, y, w, h, id },
+        .0 as i32;
+        if len == LB_ERR || len < 0 {
+            return None;
+        }
+        let mut buffer = vec![0; (len + 1) as usize];
+        let copied = SendMessageW(
+            hwnd,
+            LB_GETTEXT,
+            Some(WPARAM(index as usize)),
+            Some(LPARAM(buffer.as_mut_ptr() as isize)),
         )
-    }
-}
-
-/// 체크박스 생성
-// SAFETY: Caller must provide a valid parent HWND.
-#[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
-pub unsafe fn create_checkbox(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    text: &str,
-    checked: bool,
-) -> Result<HWND> {
-    let text_wide = to_wide(text);
-    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
-    // SendMessageW with BM_SETCHECK uses a valid control handle returned by create_child.
-    unsafe {
-        let hwnd = create_child(
-            parent,
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_AUTOCHECKBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            WINDOW_EX_STYLE::default(),
-            ChildSpec { x, y, w, h, id },
-        )?;
-
-        if checked {
-            let _ = SendMessageW(
-                hwnd,
-                BM_SETCHECK,
-                Some(WPARAM(BST_CHECKED.0 as usize)),
-                Some(LPARAM(0)),
-            );
-        }
-
-        Ok(hwnd)
-    }
-}
-
-/// 라디오 버튼 생성
-// SAFETY: Caller must provide a valid parent HWND.
-#[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
-pub unsafe fn create_radio(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    text: &str,
-    checked: bool,
-) -> Result<HWND> {
-    let text_wide = to_wide(text);
-    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
-    unsafe {
-        let hwnd = create_child(
-            parent,
-            w!("BUTTON"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(BS_AUTORADIOBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-            WINDOW_EX_STYLE::default(),
-            ChildSpec { x, y, w, h, id },
-        )?;
-
-        if checked {
-            let _ = SendMessageW(
-                hwnd,
-                BM_SETCHECK,
-                Some(WPARAM(BST_CHECKED.0 as usize)),
-                Some(LPARAM(0)),
-            );
-        }
-
-        Ok(hwnd)
-    }
-}
-
-// ============================================================
-// DialogControls 트레이트
-// ============================================================
-
-/// `dialog_hwnd()`만 구현하면 모든 컨트롤 생성 래퍼를 자동으로 사용할 수 있는 트레이트.
-pub trait DialogControls {
-    fn dialog_hwnd(&self) -> HWND;
-
-    unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
-        unsafe { create_group_box(self.dialog_hwnd(), x, y, w, h, text) }
-    }
-
-    unsafe fn create_button(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        text: &str,
-    ) -> Result<HWND> {
-        unsafe { create_button(self.dialog_hwnd(), x, y, w, h, id, text) }
-    }
-
-    #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
-    unsafe fn create_checkbox(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        text: &str,
-        checked: bool,
-    ) -> Result<HWND> {
-        unsafe { create_checkbox(self.dialog_hwnd(), x, y, w, h, id, text, checked) }
-    }
-
-    #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
-    unsafe fn create_radio(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        text: &str,
-        checked: bool,
-    ) -> Result<HWND> {
-        unsafe { create_radio(self.dialog_hwnd(), x, y, w, h, id, text, checked) }
-    }
-}
-
-// ============================================================
-// Dialog 트레이트 (modal-less popup 다이얼로그 공통 보일러플레이트)
-// ============================================================
-
-/// 다이얼로그 메타데이터 + 생명주기 콜백을 묶은 트레이트.
-///
-/// 각 다이얼로그는 이 trait 를 구현하면 `show()` / `wndproc` 가 자동 제공된다.
-/// `INSTANCE_SLOT` 만은 다이얼로그 타입별로 별개의 `thread_local!` static 이
-/// 필요하므로 `define_dialog_instance!` 매크로로 선언한 뒤 `instance_slot()`
-/// 에서 반환하는 식으로 연결한다 (static 은 모노모피제이션을 따라가지 않음).
-pub trait Dialog: Sized + 'static {
-    /// `show()` 가 받는 추가 인자. 인자가 여러 개면 튜플로 모아 넘긴다.
-    /// 인자가 없으면 `()` 사용.
-    type Params;
-
-    const CLASS_NAME: PCWSTR;
-    const TITLE: PCWSTR;
-    const WIDTH: i32;
-    const HEIGHT: i32;
-    /// 추가 스타일 (WS_SIZEBOX 등). 기본 없음은 `WINDOW_STYLE(0)`.
-    const EXTRA_STYLE: WINDOW_STYLE;
-
-    /// 다이얼로그 타입별 thread-local 인스턴스 슬롯.
-    /// `define_dialog_instance!` 매크로로 선언한 static 을 반환한다.
-    #[allow(clippy::type_complexity)]
-    fn instance_slot() -> &'static std::thread::LocalKey<
-        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-    >;
-
-    /// 윈도우 생성 직후 호출되어 자기 자신을 만든다.
-    /// `hwnd` 는 새로 만든 다이얼로그 윈도우, `parent` 는 부모.
-    fn init(hwnd: HWND, parent: HWND, params: Self::Params) -> Self;
-
-    fn create_controls(&mut self) -> Result<()>;
-
-    fn handle_command(&mut self, id: u16, notify_code: u32);
-
-    /// WM_COMMAND/WM_CLOSE/WM_DESTROY 이전에 호출되는 커스텀 메시지 후크.
-    /// `Some(LRESULT)` 를 반환하면 wndproc 가 그 값으로 즉시 반환한다.
-    fn handle_message(&mut self, _msg: u32, _w: WPARAM, _l: LPARAM) -> Option<LRESULT> {
-        None
-    }
-
-    /// 인스턴스가 없는 상태에서 wndproc 가 메시지를 받았을 때 호출된다.
-    /// lparam 으로 박스 포인터를 받는 메시지를 쓰는 다이얼로그는, 이 hook 에서
-    /// 박스를 회수해 누수를 막을 수 있다. 기본 구현은 no-op.
-    fn on_orphan_message(_msg: u32, _w: WPARAM, _l: LPARAM) {}
-
-    /// `true` 이면 부모 윈도우 중앙에, `false` 이면 모니터 작업 영역 중앙에
-    /// 다이얼로그를 배치한다. 진행률 다이얼로그처럼 부모와 시각적으로 묶여야
-    /// 하는 경우에만 override 한다.
-    fn use_parent_centered() -> bool {
-        false
-    }
-
-    /// 다이얼로그를 등록/생성/표시하고 hwnd 를 반환한다.
-    fn show(parent: HWND, params: Self::Params) -> Result<HWND> {
-        let opts = DialogWindowOptions {
-            class_name: Self::CLASS_NAME,
-            title: Self::TITLE,
-            width: Self::WIDTH,
-            height: Self::HEIGHT,
-            parent,
-            extra_style: Self::EXTRA_STYLE,
-        };
-
-        // SAFETY: 클래스 이름은 정적 PCWSTR, 부모는 호출자 책임. 본 trait 의
-        // 계약에 따라 호출자가 유효한 부모 핸들을 넘긴다고 가정한다.
-        let hwnd = unsafe {
-            register_dialog_class(opts.class_name, Self::wndproc_thunk)?;
-            if Self::use_parent_centered() {
-                create_dialog_window_centered_on_parent(&opts)?
-            } else {
-                create_dialog_window(&opts)?
-            }
-        };
-
-        let this = Self::init(hwnd, parent, params);
-        let dialog = std::rc::Rc::new(std::cell::RefCell::new(this));
-
-        Self::instance_slot().with(|cell| {
-            *cell.borrow_mut() = Some(dialog.clone());
-        });
-
-        dialog.borrow_mut().create_controls()?;
-        remember_dialog_dpi(hwnd, crate::dpi::dpi_for_window(hwnd));
-
-        // SAFETY: 위에서 막 만든 유효 핸들.
-        unsafe {
-            show_dialog_window(hwnd);
-        }
-
-        Ok(hwnd)
-    }
-
-    /// 다이얼로그 wndproc. RegisterClassExW 에 `Self::wndproc_thunk` 가
-    /// 등록되어 모든 메시지가 이리로 들어온다.
-    ///
-    /// # Safety
-    /// Win32 가 wndproc 로 호출하므로 `extern "system"`. hwnd/wparam/lparam 은
-    /// OS 가 넘기는 값으로 유효성은 OS 가 보장한다.
-    unsafe extern "system" fn wndproc_thunk(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
-        unsafe {
-            let instance = Self::instance_slot().with(|cell| {
-                let Ok(guard) = cell.try_borrow() else {
-                    return None;
-                };
-                guard.clone()
-            });
-
-            if let Some(dialog) = instance {
-                if let Ok(mut d) = dialog.try_borrow_mut()
-                    && let Some(result) = d.handle_message(msg, wparam, lparam)
-                {
-                    return result;
-                }
-
-                match msg {
-                    WM_DPICHANGED => {
-                        let old_dpi = remembered_dialog_dpi(hwnd);
-                        let new_dpi = (wparam.0 & 0xFFFF) as u32;
-                        rescale_dialog_children_for_dpi(hwnd, old_dpi, new_dpi);
-                        remember_dialog_dpi(hwnd, new_dpi);
-                        if lparam.0 != 0 {
-                            let rect = &*(lparam.0 as *const RECT);
-                            let _ = SetWindowPos(
-                                hwnd,
-                                None,
-                                rect.left,
-                                rect.top,
-                                rect.right - rect.left,
-                                rect.bottom - rect.top,
-                                SWP_NOZORDER | SWP_NOACTIVATE,
-                            );
-                        }
-                        return LRESULT(0);
-                    }
-                    WM_COMMAND => {
-                        let id = (wparam.0 & 0xFFFF) as u16;
-                        let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-                        if let Ok(mut d) = dialog.try_borrow_mut() {
-                            d.handle_command(id, notify_code);
-                        }
-                        return LRESULT(0);
-                    }
-                    WM_CLOSE => {
-                        let _ = DestroyWindow(hwnd);
-                        return LRESULT(0);
-                    }
-                    WM_DESTROY => {
-                        take_remembered_dialog_dpi(hwnd);
-                        Self::instance_slot().with(|cell| {
-                            if let Ok(mut guard) = cell.try_borrow_mut() {
-                                *guard = None;
-                            }
-                        });
-                        return LRESULT(0);
-                    }
-                    WM_LBUTTONDOWN => {
-                        let _ = SendMessageW(
-                            hwnd,
-                            WM_NCLBUTTONDOWN,
-                            Some(WPARAM(HTCAPTION as usize)),
-                            Some(LPARAM(0)),
-                        );
-                        return LRESULT(0);
-                    }
-                    _ => {
-                        // handle_message 가 None 을 반환했거나 borrow_mut 실패로
-                        // 호출조차 못 됐고, 위의 명시적 분기에도 매치되지 않은 메시지.
-                        // lparam 으로 박스 포인터를 넘기는 메시지를 쓰는 다이얼로그는
-                        // 여기서 회수해야 누수가 발생하지 않는다.
-                        Self::on_orphan_message(msg, wparam, lparam);
-                    }
-                }
-            } else {
-                // 다이얼로그 인스턴스가 사라진 뒤 도착한 메시지. lparam 으로 박스
-                // 포인터를 넘기는 메시지를 쓰는 다이얼로그는 여기서 회수해야 누수가
-                // 발생하지 않는다.
-                Self::on_orphan_message(msg, wparam, lparam);
-            }
-
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+        .0 as i32;
+        if copied == LB_ERR {
+            None
+        } else {
+            Some(String::from_utf16_lossy(&buffer[..copied as usize]))
         }
     }
 }
 
 /// 다이얼로그 타입별 thread-local 인스턴스 슬롯을 선언한다.
 ///
-/// trait 의 provided method 만으로는 정적 변수를 타입마다 분리할 수 없어서
-/// (모노모피제이션이 static 을 복제하지 않음) 이 미니 매크로로 선언한다.
-///
 /// 사용:
 /// ```ignore
 /// define_dialog_instance!(GLOSSARY_INSTANCE: GlossaryDialog);
-/// impl Dialog for GlossaryDialog {
-///     fn instance_slot() -> &'static ... { &GLOSSARY_INSTANCE }
-///     // ...
-/// }
 /// ```
 #[macro_export]
 macro_rules! define_dialog_instance {

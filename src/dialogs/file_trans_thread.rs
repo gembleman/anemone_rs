@@ -224,13 +224,13 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     }
 
     // 전체 라인 수 계산
-    let total_lines = calculate_total_lines(&job_data.input_files);
-    if total_lines < 0 {
-        job_data
-            .progress
-            .send(ProgressEvent::Error("파일을 읽을 수 없습니다.".to_string()));
-        return;
-    }
+    let total_lines = match calculate_total_lines(&job_data.input_files) {
+        Ok(total) => total,
+        Err(error) => {
+            job_data.progress.send(ProgressEvent::Error(error));
+            return;
+        }
+    };
 
     // 전체 파일 수 및 라인 수 전송
     job_data
@@ -295,30 +295,30 @@ fn validate_inputs_utf8(files: &[PathBuf]) -> Result<(), String> {
 }
 
 /// 전체 라인 수 계산
-fn calculate_total_lines(files: &[PathBuf]) -> i32 {
+fn calculate_total_lines(files: &[PathBuf]) -> Result<i32, String> {
     let mut total = 0i32;
 
     for path in files {
-        match File::open(path) {
-            Ok(file) => {
-                let reader = BufReader::new(file);
-                total += reader.lines().count() as i32;
-            }
-            Err(e) => {
-                tracing::error!("Failed to open file {}: {e}", path.display());
-                return -1;
-            }
-        }
+        let file = File::open(path)
+            .map_err(|e| format!("입력 파일을 열 수 없습니다: {}\n{e}", path.display()))?;
+        total += count_reader_lines(BufReader::new(file), path)? as i32;
     }
 
-    total
+    Ok(total)
+}
+
+fn count_reader_lines<R: BufRead>(reader: R, path: &Path) -> Result<usize, String> {
+    reader.lines().try_fold(0usize, |count, line| {
+        line.map(|_| count + 1)
+            .map_err(|e| format!("입력 파일을 읽을 수 없습니다: {}\n{e}", path.display()))
+    })
 }
 
 /// 단일 파일의 라인 수를 카운트. 진행률 바 범위 산정용.
 fn count_lines(path: &Path) -> Result<usize, String> {
     let file = File::open(path)
         .map_err(|e| format!("입력 파일을 열 수 없습니다: {}\n{}", path.display(), e))?;
-    Ok(BufReader::new(file).lines().count())
+    count_reader_lines(BufReader::new(file), path)
 }
 
 /// 단일 파일 처리
@@ -363,12 +363,14 @@ fn process_single_file(
     // 스트리밍 라인 처리. 마지막 라인 판정을 위해 1-라인 lookahead 패턴 사용 —
     // `prev` 가 직전에 읽은 라인이고, 새 라인이 도착하면 prev 를 "마지막 아님"
     // 으로 출력한다. 루프 종료 후 남은 prev 가 진짜 마지막 라인.
-    let mut lines_iter = reader.lines().filter_map(|l| {
-        l.inspect_err(|e| tracing::warn!("Failed to read line: {e}"))
-            .ok()
-    });
+    let mut lines_iter = reader.lines();
 
-    let mut prev: Option<String> = lines_iter.next();
+    let mut prev = lines_iter.next().transpose().map_err(|e| {
+        format!(
+            "입력 파일을 읽을 수 없습니다: {}\n{e}",
+            input_path.display()
+        )
+    })?;
     // 첫 줄이 UTF-8 BOM 으로 시작하면 떼어낸다. 사전 검증에서 인코딩은
     // 확인되었지만, BOM 자체는 본문에 섞이지 않도록 명시적으로 제거.
     if let Some(first) = prev.as_mut()
@@ -379,6 +381,12 @@ fn process_single_file(
     let mut idx: usize = 0;
 
     for next in lines_iter {
+        let next = next.map_err(|e| {
+            format!(
+                "입력 파일을 읽을 수 없습니다: {}\n{e}",
+                input_path.display()
+            )
+        })?;
         // 취소 체크
         if job_data.cancel_token.load(Ordering::SeqCst) {
             return Err("사용자가 취소했습니다.".to_string());
@@ -530,9 +538,9 @@ fn send_filename(job_data: &FileTransJobData, path: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::PendingOutput;
-    use std::io::Write;
-    use std::path::PathBuf;
+    use super::{PendingOutput, count_reader_lines};
+    use std::io::{BufReader, Cursor, Write};
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -584,5 +592,15 @@ mod tests {
 
         assert_eq!(std::fs::read_to_string(output).unwrap(), "완성 결과");
         assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn line_read_error_is_returned_instead_of_skipped() {
+        let reader = BufReader::new(Cursor::new(vec![0xFF, b'\n']));
+
+        let error = count_reader_lines(reader, Path::new("invalid.txt")).unwrap_err();
+
+        assert!(error.contains("invalid.txt"));
+        assert!(error.contains("입력 파일을 읽을 수 없습니다"));
     }
 }

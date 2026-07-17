@@ -23,12 +23,14 @@ use windows::{
 };
 
 use super::helpers::{
-    center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
-    show_dialog_window, unregister_resource_dialog,
+    center_dialog_on_monitor, get_window_text, register_resource_dialog,
+    rescale_dialog_children_for_dpi, set_window_text, show_dialog_window,
+    unregister_resource_dialog,
 };
 use crate::define_dialog_instance;
 use crate::util::to_wide;
 
+use crate::clipboard::{ClipboardGuard, OwnedGlobalMemory};
 use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::{
@@ -387,8 +389,8 @@ impl TranslateDialog {
                 Some(WPARAM(provider_index)),
                 None,
             );
-            Self::set_edit_text(self.llm_model_edit, &model);
-            Self::set_edit_text(self.llm_api_key_edit, &api_key);
+            let _ = set_window_text(self.llm_model_edit, &model);
+            let _ = set_window_text(self.llm_api_key_edit, &api_key);
         }
         self.update_llm_group_visibility(engine);
         Ok(())
@@ -510,13 +512,13 @@ impl TranslateDialog {
 
     fn apply_llm_model(&self) {
         // SAFETY: edit 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
-        let text = unsafe { Self::get_edit_text(self.llm_model_edit) };
+        let text = get_window_text(self.llm_model_edit);
         self.config.borrow_mut().translation.llm.model = text;
     }
 
     fn apply_llm_api_key(&self) {
         // SAFETY: edit 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
-        let text = unsafe { Self::get_edit_text(self.llm_api_key_edit) };
+        let text = get_window_text(self.llm_api_key_edit);
         self.config.borrow_mut().translation.llm.api_key = text;
     }
 
@@ -563,37 +565,13 @@ impl TranslateDialog {
     /// 원문 텍스트 가져오기
     fn get_source_text(&self) -> String {
         // SAFETY: self.source_edit is a valid edit control handle from the resource template.
-        unsafe { Self::get_edit_text(self.source_edit) }
-    }
-
-    /// Edit 컨트롤에서 텍스트 가져오기
-    unsafe fn get_edit_text(hwnd: HWND) -> String {
-        // SAFETY: hwnd is a valid edit control. GetWindowTextLengthW returns the text length,
-        // and GetWindowTextW fills the buffer up to that length.
-        unsafe {
-            let len = GetWindowTextLengthW(hwnd);
-            if len == 0 {
-                return String::new();
-            }
-            let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
-            GetWindowTextW(hwnd, &mut buffer);
-            String::from_utf16_lossy(&buffer[..len as usize])
-        }
-    }
-
-    /// Edit 컨트롤에 텍스트 설정
-    unsafe fn set_edit_text(hwnd: HWND, text: &str) {
-        // SAFETY: hwnd is a valid edit control. wide string is valid for the call duration.
-        unsafe {
-            let wide = to_wide(text);
-            let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
-        }
+        get_window_text(self.source_edit)
     }
 
     /// 번역 결과 설정
     fn set_dest_text(&self, text: &str) {
         // SAFETY: self.dest_edit is a valid edit control handle from the resource template.
-        unsafe { Self::set_edit_text(self.dest_edit, text) }
+        let _ = set_window_text(self.dest_edit, text);
     }
 
     /// 번역 엔진 초기화
@@ -748,59 +726,50 @@ impl TranslateDialog {
 
     /// 번역 결과를 클립보드에 복사
     fn copy_to_clipboard(&self) {
-        // SAFETY: self.dest_edit and self.hwnd are valid resource dialog handles.
-        unsafe {
-            let text = Self::get_edit_text(self.dest_edit);
-            if text.is_empty() {
-                return;
-            }
-            Self::set_clipboard_text(&text, self.hwnd);
+        let text = get_window_text(self.dest_edit);
+        if text.is_empty() {
+            return;
         }
+        Self::set_clipboard_text(&text, self.hwnd);
     }
 
     /// 클립보드에 텍스트 설정
-    unsafe fn set_clipboard_text(text: &str, hwnd: HWND) {
-        // SAFETY: hwnd is a valid window handle. OpenClipboard/CloseClipboard are called in
-        // matched pairs. GlobalAlloc/GlobalLock/GlobalUnlock manage clipboard memory.
-        // copy_nonoverlapping copies wide.len() elements to the locked global memory.
+    fn set_clipboard_text(text: &str, hwnd: HWND) {
         unsafe {
             let wide = to_wide(text);
             let byte_len = wide.len() * 2;
 
-            if let Err(e) = OpenClipboard(Some(hwnd)) {
-                tracing::warn!("OpenClipboard failed: {e}");
-                return;
-            }
+            let _clipboard = match ClipboardGuard::open(hwnd) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    tracing::warn!("OpenClipboard failed: {error}");
+                    return;
+                }
+            };
             if let Err(e) = EmptyClipboard() {
                 tracing::warn!("EmptyClipboard failed: {e}");
+                return;
             }
 
-            let hmem = GlobalAlloc(GMEM_MOVEABLE, byte_len)
-                .inspect_err(|e| tracing::warn!("GlobalAlloc failed: {e}"))
-                .ok();
-            if let Some(hmem) = hmem {
-                // SetClipboardData 가 성공하면 HGLOBAL 소유권이 OS 로 이관되므로
-                // 호출자는 더이상 GlobalFree 하면 안 된다 (MSDN). 그 외 모든
-                // 실패 경로 (Lock 실패 / SetClipboardData 실패) 에서는 명시적으로
-                // GlobalFree 해야 한다 — 32-bit 프로세스라 GMEM 풀이 작아
-                // 반복 누수가 빠르게 누적된다.
-                let ptr = GlobalLock(hmem) as *mut u16;
-                let mut ownership_transferred = false;
-                if !ptr.is_null() {
-                    std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
-                    let _ = GlobalUnlock(hmem);
-                    match SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hmem.0))) {
-                        Ok(_) => ownership_transferred = true,
-                        Err(e) => tracing::warn!("SetClipboardData failed: {e}"),
-                    }
-                } else {
-                    tracing::warn!("GlobalLock returned null");
+            let mut memory = match OwnedGlobalMemory::allocate(byte_len) {
+                Ok(memory) => memory,
+                Err(error) => {
+                    tracing::warn!("GlobalAlloc failed: {error}");
+                    return;
                 }
-                if !ownership_transferred {
-                    let _ = GlobalFree(Some(hmem));
-                }
+            };
+            let handle = memory.handle();
+            let ptr = GlobalLock(handle) as *mut u16;
+            if ptr.is_null() {
+                tracing::warn!("GlobalLock returned null");
+                return;
             }
-            let _ = CloseClipboard();
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+            let _ = GlobalUnlock(handle);
+            match SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(handle.0))) {
+                Ok(_) => memory.release_to_system(),
+                Err(error) => tracing::warn!("SetClipboardData failed: {error}"),
+            }
         }
     }
 
@@ -808,8 +777,8 @@ impl TranslateDialog {
     fn clear_text(&self) {
         // SAFETY: source_edit and dest_edit are valid edit control handles.
         unsafe {
-            Self::set_edit_text(self.source_edit, "");
-            Self::set_edit_text(self.dest_edit, "");
+            let _ = set_window_text(self.source_edit, "");
+            let _ = set_window_text(self.dest_edit, "");
             let _ = SetFocus(Some(self.source_edit));
         }
     }
