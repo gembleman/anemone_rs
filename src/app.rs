@@ -42,6 +42,14 @@ const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
 const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
 const WINDOW_TITLE: PCWSTR = w!("아네모네");
 
+fn should_translate_clipboard_text(
+    text: &str,
+    auto_detect: bool,
+    source_lang: isolang::Language,
+) -> bool {
+    !auto_detect || crate::translation::is_source_language(text, source_lang)
+}
+
 pub struct App {
     hwnd: HWND,
     width: i32,
@@ -947,26 +955,13 @@ impl App {
     /// 클립보드 텍스트 처리 (언어 감지 및 비동기 번역)
     fn process_clipboard_text_async(&mut self, text: &str) {
         let config = self.config.borrow();
-
-        // 자동 감지가 비활성화되면 원문 표시
-        if !config.translation.auto_detect {
-            drop(config);
-            self.current_text = text.to_string();
-            if let Err(e) = self.paint() {
-                tracing::warn!("paint failed after clipboard text: {e}");
-            }
-
-            // 백로그에 추가
-            let entry = LogEntry::new(text.to_string());
-            add_to_backlog(entry);
-            return;
-        }
-
+        let auto_detect = config.translation.auto_detect;
         let source_lang = config.translation.get_source_language();
         drop(config);
 
-        // 소스 언어가 아니면 번역하지 않음
-        if !crate::translation::is_source_language(text, source_lang) {
+        // 자동 감지가 활성화된 경우에만 소스 언어가 아닌 텍스트를 건너뛴다.
+        // 비활성화된 경우에는 사용자가 선택한 소스 언어로 바로 번역한다.
+        if !should_translate_clipboard_text(text, auto_detect, source_lang) {
             self.current_text = text.to_string();
             if let Err(e) = self.paint() {
                 tracing::warn!("paint failed after non-source text: {e}");
@@ -1365,6 +1360,21 @@ impl App {
 
         // SAFETY: Forwarding valid system-provided parameters to DefWindowProcW.
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_translate_clipboard_text;
+    use isolang::Language;
+
+    #[test]
+    fn clipboard_translation_skips_detection_when_auto_detect_is_disabled() {
+        assert!(should_translate_clipboard_text(
+            "언어 감지 결과와 관계없이 번역",
+            false,
+            Language::Jpn,
+        ));
     }
 }
 
