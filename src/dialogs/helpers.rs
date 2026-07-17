@@ -12,7 +12,7 @@ use windows::{
     core::*,
 };
 
-use crate::util::to_wide;
+use crate::{constants::APP_ICON_ID, util::to_wide};
 
 thread_local! {
     static DIALOG_APPLIED_DPI: std::cell::RefCell<HashMap<isize, u32>> =
@@ -117,7 +117,10 @@ pub unsafe fn register_dialog_class(
             cbClsExtra: 0,
             cbWndExtra: 0,
             hInstance: instance.into(),
-            hIcon: LoadIconW(None, IDI_APPLICATION)?,
+            hIcon: LoadIconW(
+                Some(instance.into()),
+                PCWSTR(APP_ICON_ID as usize as *const u16),
+            )?,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as *mut _),
             lpszMenuName: PCWSTR::null(),
@@ -254,7 +257,7 @@ unsafe extern "system" fn rescale_child_for_dpi(hwnd: HWND, lparam: LPARAM) -> B
     TRUE
 }
 
-fn rescale_dialog_children_for_dpi(hwnd: HWND, old_dpi: u32, new_dpi: u32) {
+pub(super) fn rescale_dialog_children_for_dpi(hwnd: HWND, old_dpi: u32, new_dpi: u32) {
     if old_dpi == 0 || new_dpi == 0 || old_dpi == new_dpi {
         return;
     }
@@ -668,66 +671,6 @@ pub unsafe fn create_edit(
     }
 }
 
-/// 숫자 전용 에디트 컨트롤 생성 (ES_NUMBER)
-// SAFETY: Caller must provide a valid parent HWND.
-pub unsafe fn create_edit_numeric(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    text: &str,
-) -> Result<HWND> {
-    let text_wide = to_wide(text);
-    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
-    unsafe {
-        create_child(
-            parent,
-            w!("EDIT"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(
-                ES_AUTOHSCROLL as u32 | ES_NUMBER as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0,
-            ),
-            WS_EX_CLIENTEDGE,
-            ChildSpec { x, y, w, h, id },
-        )
-    }
-}
-
-/// 멀티라인 에디트 컨트롤 생성 (수직 스크롤 + 줄바꿈 보존)
-// SAFETY: Caller must provide a valid parent HWND.
-pub unsafe fn create_multiline_edit(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    text: &str,
-) -> Result<HWND> {
-    let text_wide = to_wide(text);
-    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
-    unsafe {
-        create_child(
-            parent,
-            w!("EDIT"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(
-                ES_MULTILINE as u32
-                    | ES_AUTOVSCROLL as u32
-                    | ES_WANTRETURN as u32
-                    | WS_CHILD.0
-                    | WS_VISIBLE.0
-                    | WS_VSCROLL.0
-                    | WS_TABSTOP.0,
-            ),
-            WS_EX_CLIENTEDGE,
-            ChildSpec { x, y, w, h, id },
-        )
-    }
-}
-
 /// 리스트박스 생성
 // SAFETY: Caller must provide a valid parent HWND.
 pub unsafe fn create_listbox(
@@ -852,58 +795,8 @@ pub trait DialogControls {
         unsafe { create_edit(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 
-    unsafe fn create_edit_numeric(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        text: &str,
-    ) -> Result<HWND> {
-        unsafe { create_edit_numeric(self.dialog_hwnd(), x, y, w, h, id, text) }
-    }
-
-    unsafe fn create_multiline_edit(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        text: &str,
-    ) -> Result<HWND> {
-        unsafe { create_multiline_edit(self.dialog_hwnd(), x, y, w, h, id, text) }
-    }
-
     unsafe fn create_listbox(&self, x: i32, y: i32, w: i32, h: i32, id: u16) -> Result<HWND> {
         unsafe { create_listbox(self.dialog_hwnd(), x, y, w, h, id) }
-    }
-
-    #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/min/max는 의도된 시그니처.
-    unsafe fn create_trackbar(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        min: i32,
-        max: i32,
-    ) -> Result<HWND> {
-        unsafe { create_trackbar(self.dialog_hwnd(), x, y, w, h, id, min, max) }
-    }
-
-    unsafe fn create_tab_control(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        tabs: &[&str],
-    ) -> Result<HWND> {
-        unsafe { create_tab_control(self.dialog_hwnd(), x, y, w, h, id, tabs) }
     }
 }
 
@@ -1121,86 +1014,4 @@ macro_rules! define_dialog_instance {
                 = const { std::cell::RefCell::new(None) };
         }
     };
-}
-
-/// 탭 컨트롤 생성
-// SAFETY: Caller must provide a valid parent HWND.
-pub unsafe fn create_tab_control(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    tabs: &[&str],
-) -> Result<HWND> {
-    // SAFETY: parent is valid. SysTabControl32 is a standard common control class.
-    unsafe {
-        let hwnd = create_child(
-            parent,
-            w!("SysTabControl32"),
-            w!(""),
-            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPSIBLINGS.0),
-            WINDOW_EX_STYLE::default(),
-            ChildSpec { x, y, w, h, id },
-        )?;
-
-        for (i, tab_text) in tabs.iter().enumerate() {
-            let mut text_wide = to_wide(tab_text);
-            let item = TCITEMW {
-                mask: TCIF_TEXT,
-                pszText: PWSTR(text_wide.as_mut_ptr()),
-                iImage: -1,
-                ..Default::default()
-            };
-            let _ = SendMessageW(
-                hwnd,
-                TCM_INSERTITEMW,
-                Some(WPARAM(i)),
-                Some(LPARAM(&item as *const TCITEMW as isize)),
-            );
-        }
-
-        Ok(hwnd)
-    }
-}
-
-/// 트랙바(슬라이더) 생성
-// SAFETY: Caller must provide a valid parent HWND.
-#[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/min/max는 의도된 시그니처.
-pub unsafe fn create_trackbar(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    min: i32,
-    max: i32,
-) -> Result<HWND> {
-    // SAFETY: parent is valid. create_child creates a valid trackbar control.
-    // TBM_SETRANGE uses valid control handle with packed min/max in lparam.
-    unsafe {
-        let hwnd = create_child(
-            parent,
-            w!("msctls_trackbar32"),
-            w!(""),
-            WINDOW_STYLE(TBS_HORZ | TBS_NOTICKS | WS_CHILD.0 | WS_VISIBLE.0),
-            WINDOW_EX_STYLE::default(),
-            ChildSpec { x, y, w, h, id },
-        )?;
-
-        // TBM_SETRANGE lparam: LOWORD=min, HIWORD=max.
-        // min 이 음수일 때 sign extension 으로 상위 워드가 오염되지 않도록
-        // 0xFFFF 마스크 후 결합.
-        let packed = ((max & 0xFFFF) << 16) | (min & 0xFFFF);
-        let _ = SendMessageW(
-            hwnd,
-            TBM_SETRANGE,
-            Some(WPARAM(1)),
-            Some(LPARAM(packed as isize)),
-        );
-
-        Ok(hwnd)
-    }
 }

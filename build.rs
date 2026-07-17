@@ -3,8 +3,16 @@ use std::{env, fs};
 
 fn main() {
     let mut res = winresource::WindowsResource::new();
+    res.add_toolkit_include(true);
     res.set_manifest_file("app.manifest");
+    res.set_icon("assets/Anemone.ico");
+    let settings_rc = fs::read_to_string("resources/settings.rc")
+        .expect("Failed to read settings dialog resource");
+    res.append_rc_content(&settings_rc);
     res.compile().expect("Failed to compile Windows resources");
+
+    println!("cargo:rerun-if-changed=assets/Anemone.ico");
+    println!("cargo:rerun-if-changed=resources/settings.rc");
 
     copy_eztrans_dll();
 }

@@ -1,0 +1,154 @@
+#include <windows.h>
+#include <commctrl.h>
+
+#define IDD_SETTINGS 100
+
+IDD_SETTINGS DIALOGEX 0, 0, 277, 461
+STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW
+CAPTION "아네모네 설정"
+FONT 9, "맑은 고딕", 400, 0, 0x81
+BEGIN
+    CONTROL         "", 1290, "SysTabControl32", WS_TABSTOP | WS_CLIPSIBLINGS, 3, 3, 271, 424
+
+    // 외관 탭
+    GROUPBOX        "배경 설정", 2000, 9, 19, 126, 40
+    LTEXT           "투명도:", 2001, 14, 29, 29, 10
+    CONTROL         "", 1001, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 43, 28, 86, 12
+    CONTROL         "배경색", 1002, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 14, 43, 40, 13
+    CONTROL         "표시", 1003, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 60, 44, 46, 11
+
+    GROUPBOX        "텍스트 크기", 2002, 140, 19, 131, 40
+    CONTROL         "", 1010, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 146, 28, 120, 12
+    PUSHBUTTON      "-", 1011, 146, 43, 20, 13
+    PUSHBUTTON      "+", 1012, 169, 43, 20, 13
+    LTEXT           "크기:", 1013, 194, 44, 57, 10
+
+    GROUPBOX        "외곽선 설정", 2003, 9, 61, 263, 40
+    LTEXT           "외곽선1:", 2004, 14, 71, 37, 10
+    CONTROL         "", 1020, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 51, 70, 51, 12
+    PUSHBUTTON      "-", 1021, 106, 70, 14, 12
+    PUSHBUTTON      "+", 1022, 122, 70, 14, 12
+    LTEXT           "외곽선2:", 2005, 146, 71, 37, 10
+    CONTROL         "", 1030, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 183, 70, 51, 12
+    PUSHBUTTON      "-", 1031, 237, 70, 14, 12
+    PUSHBUTTON      "+", 1032, 253, 70, 14, 12
+    LTEXT           "그림자 X:", 2006, 14, 86, 37, 10
+    CONTROL         "", 1040, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 51, 85, 57, 12
+    LTEXT           "그림자 Y:", 2007, 146, 86, 37, 10
+    CONTROL         "", 1042, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 183, 85, 57, 12
+
+    GROUPBOX        "이름 설정", 2008, 9, 104, 86, 67
+    CONTROL         "주색상", 1100, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 11, 115, 38, 12
+    CONTROL         "외곽1", 1101, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 53, 115, 38, 12
+    CONTROL         "외곽2", 1102, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 11, 129, 38, 12
+    CONTROL         "그림자색", 1103, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 53, 129, 38, 12
+    PUSHBUTTON      "폰트 선택", 1104, 11, 143, 79, 12
+    CONTROL         "그림자 사용", 1105, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 11, 157, 63, 11
+
+    GROUPBOX        "원문 설정", 2009, 97, 104, 86, 67
+    CONTROL         "주색상", 1110, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 100, 115, 38, 12
+    CONTROL         "외곽1", 1111, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 141, 115, 38, 12
+    CONTROL         "외곽2", 1112, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 100, 129, 38, 12
+    CONTROL         "그림자색", 1113, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 141, 129, 38, 12
+    PUSHBUTTON      "폰트 선택", 1114, 100, 143, 79, 12
+    CONTROL         "그림자 사용", 1115, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 100, 157, 63, 11
+
+    GROUPBOX        "번역문 설정", 2010, 186, 104, 86, 67
+    CONTROL         "주색상", 1120, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 189, 115, 38, 12
+    CONTROL         "외곽1", 1121, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 230, 115, 38, 12
+    CONTROL         "외곽2", 1122, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 189, 129, 38, 12
+    CONTROL         "그림자색", 1123, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 230, 129, 38, 12
+    PUSHBUTTON      "폰트 선택", 1124, 189, 143, 79, 12
+    CONTROL         "그림자 사용", 1125, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 189, 157, 63, 11
+
+    GROUPBOX        "텍스트 여백", 2011, 9, 173, 263, 27
+    LTEXT           "좌우:", 2012, 14, 185, 20, 10
+    CONTROL         "", 1050, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 34, 184, 51, 12
+    LTEXT           "상하:", 2013, 97, 185, 20, 10
+    CONTROL         "", 1052, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 117, 184, 51, 12
+    LTEXT           "이름:", 2014, 186, 185, 20, 10
+    CONTROL         "", 1054, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 206, 184, 51, 12
+
+    GROUPBOX        "테두리 설정", 2015, 9, 203, 263, 27
+    CONTROL         "표시", 1130, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 214, 34, 11
+    CONTROL         "테두리색", 1131, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 51, 213, 46, 13
+    LTEXT           "두께:", 2016, 103, 214, 23, 10
+    CONTROL         "", 1132, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 126, 213, 86, 12
+
+    // 표시·윈도우 탭
+    GROUPBOX        "표시 옵션", 2100, 9, 19, 263, 53
+    CONTROL         "원문 표시", 1200, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 17, 32, 57, 11
+    CONTROL         "번역 표시", 1201, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 83, 32, 57, 11
+    CONTROL         "이름 표시", 1202, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 149, 32, 57, 11
+    CONTROL         "이름 줄바꿈", 1203, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 214, 32, 57, 11
+    PUSHBUTTON      "반복: 끄기", 1204, 17, 48, 51, 13
+    CONTROL         "왼쪽", 1220, "BUTTON", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 77, 50, 31, 11
+    CONTROL         "중앙", 1221, "BUTTON", BS_AUTORADIOBUTTON | WS_TABSTOP, 114, 50, 31, 11
+    CONTROL         "오른쪽", 1222, "BUTTON", BS_AUTORADIOBUTTON | WS_TABSTOP, 151, 50, 37, 11
+
+    GROUPBOX        "윈도우 옵션", 2101, 9, 77, 263, 43
+    CONTROL         "항상 위", 1210, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 17, 91, 46, 11
+    CONTROL         "자석", 1211, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 71, 91, 40, 11
+    CONTROL         "자석 최소화", 1212, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 120, 91, 63, 11
+    CONTROL         "숨기기", 1213, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 17, 104, 46, 11
+    CONTROL         "클립보드", 1214, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 71, 104, 46, 11
+    CONTROL         "클릭 통과", 1215, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 126, 104, 51, 11
+
+    // 번역 탭
+    GROUPBOX        "번역 설정", 2200, 9, 19, 263, 69
+    LTEXT           "엔진:", 2201, 17, 32, 23, 10
+    COMBOBOX        1260, 40, 31, 51, 64, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "소스:", 2202, 100, 32, 23, 10
+    COMBOBOX        1261, 123, 31, 46, 107, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "타겟:", 2203, 177, 32, 23, 10
+    COMBOBOX        1262, 200, 31, 46, 107, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "EzTrans DLL:", 2204, 17, 51, 46, 10
+    EDITTEXT        1264, 63, 50, 160, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "찾아보기", 1265, 226, 50, 40, 12
+    LTEXT           "EzTrans Dat:", 2205, 17, 67, 46, 10
+    EDITTEXT        1266, 63, 66, 160, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "찾아보기", 1267, 226, 66, 40, 12
+
+    GROUPBOX        "DeepL", 2210, 9, 93, 263, 83
+    LTEXT           "API 키 (단일):", 2211, 17, 107, 46, 10
+    EDITTEXT        1268, 66, 106, 197, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "* 보조 키 목록이 비어있을 때만 단일 키를 사용합니다.", 2212, 17, 120, 246, 9
+    LTEXT           "보조 키 목록:", 2213, 17, 131, 57, 10
+    LTEXT           "전략:", 2214, 183, 131, 29, 10
+    COMBOBOX        1276, 206, 130, 57, 64, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LISTBOX         1272, 17, 142, 163, 29, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        1273, 183, 142, 80, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "추가", 1274, 183, 157, 37, 12
+    PUSHBUTTON      "삭제", 1275, 226, 157, 37, 12
+
+    GROUPBOX        "Papago", 2220, 9, 181, 263, 37
+    LTEXT           "Client ID:", 2221, 17, 193, 46, 10
+    EDITTEXT        1270, 66, 192, 197, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "Secret:", 2222, 17, 206, 46, 10
+    EDITTEXT        1271, 66, 205, 197, 12, ES_AUTOHSCROLL | WS_TABSTOP
+
+    GROUPBOX        "LLM 번역", 2230, 9, 224, 263, 184
+    LTEXT           "제공자:", 2231, 17, 237, 29, 10
+    COMBOBOX        1280, 46, 236, 57, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "모델:", 2232, 111, 237, 23, 10
+    EDITTEXT        1281, 134, 236, 131, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "API 키:", 2233, 17, 253, 29, 10
+    EDITTEXT        1282, 46, 252, 220, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "Base URL:", 2234, 17, 269, 34, 10
+    EDITTEXT        1283, 54, 268, 211, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "시스템 프롬프트:", 2235, 17, 285, 57, 10
+    EDITTEXT        1284, 17, 296, 249, 59, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Temperature:", 2236, 17, 360, 51, 10
+    CONTROL         "", 1287, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 69, 359, 103, 12
+    LTEXT           "0.00", 1288, 174, 361, 29, 10
+    LTEXT           "Max:", 2237, 206, 361, 24, 10
+    EDITTEXT        1286, 231, 360, 34, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "디바운스(ms):", 2238, 17, 377, 51, 10
+    EDITTEXT        1289, 69, 376, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "사전 항목: 0", 1298, 120, 377, 69, 10
+    PUSHBUTTON      "사전 편집...", 1297, 194, 376, 71, 12
+    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 392, 249, 10
+
+    DEFPUSHBUTTON   "닫기", 1300, 211, 427, 57, 16
+END

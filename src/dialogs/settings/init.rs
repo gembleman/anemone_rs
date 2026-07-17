@@ -1,0 +1,430 @@
+//! DIALOGEX 리소스에서 생성된 설정 컨트롤의 런타임 초기화.
+
+use super::*;
+
+const APPEARANCE_IDS: &[u16] = &[
+    ctrl_id::BACKGROUND_TRACKBAR,
+    ctrl_id::BACKGROUND_COLOR,
+    ctrl_id::BACKGROUND_SWITCH,
+    ctrl_id::TEXTSIZE_TRACKBAR,
+    ctrl_id::TEXTSIZE_MINUS,
+    ctrl_id::TEXTSIZE_PLUS,
+    ctrl_id::TEXTSIZE_TEXT,
+    ctrl_id::OUTLINE1_TRACKBAR,
+    ctrl_id::OUTLINE1_MINUS,
+    ctrl_id::OUTLINE1_PLUS,
+    ctrl_id::OUTLINE2_TRACKBAR,
+    ctrl_id::OUTLINE2_MINUS,
+    ctrl_id::OUTLINE2_PLUS,
+    ctrl_id::SHADOW_X_TRACKBAR,
+    ctrl_id::SHADOW_Y_TRACKBAR,
+    ctrl_id::NAME_COLOR,
+    ctrl_id::NAME_OUTLINE1,
+    ctrl_id::NAME_OUTLINE2,
+    ctrl_id::NAME_SHADOW_COLOR,
+    ctrl_id::NAME_FONT,
+    ctrl_id::NAME_SHADOW,
+    ctrl_id::ORG_COLOR,
+    ctrl_id::ORG_OUTLINE1,
+    ctrl_id::ORG_OUTLINE2,
+    ctrl_id::ORG_SHADOW_COLOR,
+    ctrl_id::ORG_FONT,
+    ctrl_id::ORG_SHADOW,
+    ctrl_id::TRANS_COLOR,
+    ctrl_id::TRANS_OUTLINE1,
+    ctrl_id::TRANS_OUTLINE2,
+    ctrl_id::TRANS_SHADOW_COLOR,
+    ctrl_id::TRANS_FONT,
+    ctrl_id::TRANS_SHADOW,
+    ctrl_id::MARGIN_X_TRACKBAR,
+    ctrl_id::MARGIN_Y_TRACKBAR,
+    ctrl_id::MARGIN_NAME_TRACKBAR,
+    ctrl_id::BORDER_MODE,
+    ctrl_id::BORDER_COLOR,
+    ctrl_id::BORDER_SIZE_TRACKBAR,
+];
+
+const DISPLAY_IDS: &[u16] = &[
+    ctrl_id::PRINT_ORGTEXT,
+    ctrl_id::PRINT_TRANSTEXT,
+    ctrl_id::PRINT_ORGNAME,
+    ctrl_id::SEPERATE_NAME,
+    ctrl_id::REPEAT_TEXT,
+    ctrl_id::TEXTALIGN_LEFT,
+    ctrl_id::TEXTALIGN_MID,
+    ctrl_id::TEXTALIGN_RIGHT,
+    ctrl_id::TOPMOST,
+    ctrl_id::USE_MAGNETIC,
+    ctrl_id::MAGNETIC_MINIMIZE,
+    ctrl_id::HIDEWIN,
+    ctrl_id::CLIPBOARD_WATCH,
+    ctrl_id::WNDCLICK_THROUGH,
+];
+
+const TRANSLATION_IDS: &[u16] = &[
+    ctrl_id::TRANS_ENGINE,
+    ctrl_id::TRANS_SOURCE_LANG,
+    ctrl_id::TRANS_TARGET_LANG,
+    ctrl_id::EZTRANS_DLL_EDIT,
+    ctrl_id::EZTRANS_DLL_BROWSE,
+    ctrl_id::EZTRANS_DAT_EDIT,
+    ctrl_id::EZTRANS_DAT_BROWSE,
+    ctrl_id::DEEPL_API_KEY_EDIT,
+    ctrl_id::DEEPL_KEYS_LIST,
+    ctrl_id::DEEPL_KEY_ADD_EDIT,
+    ctrl_id::DEEPL_KEY_ADD_BTN,
+    ctrl_id::DEEPL_KEY_REMOVE_BTN,
+    ctrl_id::DEEPL_STRATEGY_COMBO,
+    ctrl_id::PAPAGO_ID_EDIT,
+    ctrl_id::PAPAGO_SECRET_EDIT,
+    ctrl_id::LLM_PROVIDER,
+    ctrl_id::LLM_MODEL_EDIT,
+    ctrl_id::LLM_API_KEY_EDIT,
+    ctrl_id::LLM_BASE_URL_EDIT,
+    ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
+    ctrl_id::LLM_MAX_TOKENS_EDIT,
+    ctrl_id::LLM_TEMPERATURE_TRACKBAR,
+    ctrl_id::LLM_TEMPERATURE_LABEL,
+    ctrl_id::LLM_DEBOUNCE_EDIT,
+    ctrl_id::LLM_GLOSSARY_EDIT_BTN,
+    ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
+];
+
+impl SettingsDialog {
+    /// 리소스에 정의된 컨트롤을 탭/엔진 그룹에 연결하고 설정값을 주입한다.
+    pub(super) fn initialize_controls(&mut self) -> Result<()> {
+        self.register_ids(TAB_APPEARANCE, ctrl_id::APPEARANCE_STATIC_IDS)?;
+        self.register_ids(TAB_APPEARANCE, APPEARANCE_IDS)?;
+        self.register_ids(TAB_DISPLAY, ctrl_id::DISPLAY_STATIC_IDS)?;
+        self.register_ids(TAB_DISPLAY, DISPLAY_IDS)?;
+        self.register_ids(TAB_TRANSLATION, ctrl_id::TRANSLATION_STATIC_IDS)?;
+        self.register_ids(TAB_TRANSLATION, TRANSLATION_IDS)?;
+        self.register_engine_controls()?;
+        self.initialize_tab_titles()?;
+        self.initialize_values()?;
+
+        for &hwnd in &self.tab_controls[TAB_DISPLAY] {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        for &hwnd in &self.tab_controls[TAB_TRANSLATION] {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+
+        self.adjust_dialog_size_for_tab(TAB_APPEARANCE);
+        let engine = self.config.borrow().translation.get_engine();
+        self.apply_engine_state(engine);
+        Ok(())
+    }
+
+    fn register_engine_controls(&mut self) -> Result<()> {
+        self.register_engine_ids(EngineGroup::EzTrans, ctrl_id::EZTRANS_STATIC_IDS)?;
+        self.register_engine_ids(
+            EngineGroup::EzTrans,
+            &[
+                ctrl_id::EZTRANS_DLL_EDIT,
+                ctrl_id::EZTRANS_DLL_BROWSE,
+                ctrl_id::EZTRANS_DAT_EDIT,
+                ctrl_id::EZTRANS_DAT_BROWSE,
+            ],
+        )?;
+        self.register_engine_ids(EngineGroup::DeepL, ctrl_id::DEEPL_STATIC_IDS)?;
+        self.register_engine_ids(
+            EngineGroup::DeepL,
+            &[
+                ctrl_id::DEEPL_API_KEY_EDIT,
+                ctrl_id::DEEPL_KEYS_LIST,
+                ctrl_id::DEEPL_KEY_ADD_EDIT,
+                ctrl_id::DEEPL_KEY_ADD_BTN,
+                ctrl_id::DEEPL_KEY_REMOVE_BTN,
+                ctrl_id::DEEPL_STRATEGY_COMBO,
+            ],
+        )?;
+        self.register_engine_ids(EngineGroup::Papago, ctrl_id::PAPAGO_STATIC_IDS)?;
+        self.register_engine_ids(
+            EngineGroup::Papago,
+            &[ctrl_id::PAPAGO_ID_EDIT, ctrl_id::PAPAGO_SECRET_EDIT],
+        )?;
+        self.register_engine_ids(EngineGroup::Llm, ctrl_id::LLM_STATIC_IDS)?;
+        self.register_engine_ids(
+            EngineGroup::Llm,
+            &[
+                ctrl_id::LLM_PROVIDER,
+                ctrl_id::LLM_MODEL_EDIT,
+                ctrl_id::LLM_API_KEY_EDIT,
+                ctrl_id::LLM_BASE_URL_EDIT,
+                ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
+                ctrl_id::LLM_MAX_TOKENS_EDIT,
+                ctrl_id::LLM_TEMPERATURE_TRACKBAR,
+                ctrl_id::LLM_TEMPERATURE_LABEL,
+                ctrl_id::LLM_DEBOUNCE_EDIT,
+                ctrl_id::LLM_GLOSSARY_EDIT_BTN,
+                ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
+            ],
+        )
+    }
+
+    fn initialize_values(&self) -> Result<()> {
+        let config = self.config.borrow();
+
+        self.initialize_trackbar(
+            ctrl_id::BACKGROUND_TRACKBAR,
+            0,
+            255,
+            ((config.background_color >> 24) & 0xff) as i32,
+        )?;
+        self.set_checked(ctrl_id::BACKGROUND_SWITCH, config.background_visible)?;
+        self.initialize_trackbar(
+            ctrl_id::TEXTSIZE_TRACKBAR,
+            6,
+            100,
+            config.translation_style.size,
+        )?;
+        self.set_text(
+            ctrl_id::TEXTSIZE_TEXT,
+            &format!("크기: {}", config.translation_style.size),
+        )?;
+        self.initialize_trackbar(
+            ctrl_id::OUTLINE1_TRACKBAR,
+            0,
+            20,
+            config.translation_style.outline1_size,
+        )?;
+        self.initialize_trackbar(
+            ctrl_id::OUTLINE2_TRACKBAR,
+            0,
+            20,
+            config.translation_style.outline2_size,
+        )?;
+        self.initialize_trackbar(ctrl_id::SHADOW_X_TRACKBAR, 0, 20, config.shadow_offset_x)?;
+        self.initialize_trackbar(ctrl_id::SHADOW_Y_TRACKBAR, 0, 20, config.shadow_offset_y)?;
+        self.set_checked(ctrl_id::NAME_SHADOW, config.name_style.shadow_enabled)?;
+        self.set_checked(ctrl_id::ORG_SHADOW, config.original_style.shadow_enabled)?;
+        self.set_checked(
+            ctrl_id::TRANS_SHADOW,
+            config.translation_style.shadow_enabled,
+        )?;
+        self.initialize_trackbar(ctrl_id::MARGIN_X_TRACKBAR, 0, 300, config.text_margin_x)?;
+        self.initialize_trackbar(ctrl_id::MARGIN_Y_TRACKBAR, 0, 300, config.text_margin_y)?;
+        self.initialize_trackbar(ctrl_id::MARGIN_NAME_TRACKBAR, 0, 300, config.name_margin)?;
+        self.set_checked(ctrl_id::BORDER_MODE, config.border_visible)?;
+        self.initialize_trackbar(ctrl_id::BORDER_SIZE_TRACKBAR, 0, 10, config.border_width)?;
+
+        self.set_checked(ctrl_id::PRINT_ORGTEXT, config.show_original)?;
+        self.set_checked(ctrl_id::PRINT_TRANSTEXT, config.show_translation)?;
+        self.set_checked(ctrl_id::PRINT_ORGNAME, config.show_name)?;
+        self.set_checked(ctrl_id::SEPERATE_NAME, config.separate_name)?;
+        self.set_text(
+            ctrl_id::REPEAT_TEXT,
+            &repeat_mode_label(config.repeat_text_mode),
+        )?;
+        self.set_checked(
+            ctrl_id::TEXTALIGN_LEFT,
+            config.text_align == TextAlign::Left,
+        )?;
+        self.set_checked(
+            ctrl_id::TEXTALIGN_MID,
+            config.text_align == TextAlign::Center,
+        )?;
+        self.set_checked(
+            ctrl_id::TEXTALIGN_RIGHT,
+            config.text_align == TextAlign::Right,
+        )?;
+        self.set_checked(ctrl_id::TOPMOST, config.window_topmost)?;
+        self.set_checked(ctrl_id::USE_MAGNETIC, config.magnetic_mode)?;
+        self.set_checked(ctrl_id::MAGNETIC_MINIMIZE, config.magnetic_minimize)?;
+        self.set_checked(ctrl_id::HIDEWIN, config.temp_window_hide)?;
+        self.set_checked(ctrl_id::CLIPBOARD_WATCH, config.clipboard_watch)?;
+        self.set_checked(ctrl_id::WNDCLICK_THROUGH, config.click_through)?;
+
+        self.initialize_combo(
+            ctrl_id::TRANS_ENGINE,
+            &["EzTrans", "Google", "DeepL", "Papago", "LLM"],
+            config.translation.engine_as_u8() as usize,
+        )?;
+        self.set_text(
+            ctrl_id::EZTRANS_DLL_EDIT,
+            &config.translation.eztrans_dll_path,
+        )?;
+        self.set_text(
+            ctrl_id::EZTRANS_DAT_EDIT,
+            &config.translation.eztrans_dat_path,
+        )?;
+        self.set_text(
+            ctrl_id::DEEPL_API_KEY_EDIT,
+            &config.translation.deepl_api_key,
+        )?;
+        let strategy = match config.translation.deepl_strategy.to_lowercase().as_str() {
+            "round-robin" | "roundrobin" | "rr" => 1,
+            _ => 0,
+        };
+        self.initialize_combo(
+            ctrl_id::DEEPL_STRATEGY_COMBO,
+            &["failover", "round-robin"],
+            strategy,
+        )?;
+        let key_list = self.control(ctrl_id::DEEPL_KEYS_LIST)?;
+        for key in &config.translation.deepl_keys {
+            let wide = to_wide(key);
+            unsafe {
+                let _ = SendMessageW(
+                    key_list,
+                    LB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(wide.as_ptr() as isize)),
+                );
+            }
+        }
+        self.set_text(
+            ctrl_id::PAPAGO_ID_EDIT,
+            &config.translation.papago_client_id,
+        )?;
+        self.set_text(
+            ctrl_id::PAPAGO_SECRET_EDIT,
+            &config.translation.papago_client_secret,
+        )?;
+
+        let providers: Vec<&str> = crate::translation::LlmProvider::ALL
+            .iter()
+            .map(|provider| provider.display_name())
+            .collect();
+        self.initialize_combo(
+            ctrl_id::LLM_PROVIDER,
+            &providers,
+            config.translation.llm.get_provider() as u8 as usize,
+        )?;
+        self.set_text(ctrl_id::LLM_MODEL_EDIT, &config.translation.llm.model)?;
+        self.set_text(ctrl_id::LLM_API_KEY_EDIT, &config.translation.llm.api_key)?;
+        self.set_text(ctrl_id::LLM_BASE_URL_EDIT, &config.translation.llm.base_url)?;
+        self.set_text(
+            ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
+            &config.translation.llm.system_prompt,
+        )?;
+        let temperature = config.translation.llm.temperature;
+        self.initialize_trackbar(
+            ctrl_id::LLM_TEMPERATURE_TRACKBAR,
+            0,
+            200,
+            (temperature * 100.0).clamp(0.0, 200.0) as i32,
+        )?;
+        self.set_text(ctrl_id::LLM_TEMPERATURE_LABEL, &format!("{temperature:.2}"))?;
+        self.set_text(
+            ctrl_id::LLM_MAX_TOKENS_EDIT,
+            &config.translation.llm.max_tokens.to_string(),
+        )?;
+        self.set_text(
+            ctrl_id::LLM_DEBOUNCE_EDIT,
+            &config.translation.llm.debounce_ms.to_string(),
+        )?;
+        self.set_text(
+            ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
+            &format!("사전 항목: {}", config.translation.llm.glossary.len()),
+        )
+    }
+
+    fn control(&self, id: u16) -> Result<HWND> {
+        unsafe { GetDlgItem(Some(self.hwnd), id as i32) }
+    }
+
+    fn register_ids(&mut self, tab: usize, ids: &[u16]) -> Result<()> {
+        let controls = ids
+            .iter()
+            .map(|&id| self.control(id))
+            .collect::<Result<Vec<_>>>()?;
+        self.tab_controls[tab].extend(controls);
+        Ok(())
+    }
+
+    fn register_engine_ids(&mut self, group: EngineGroup, ids: &[u16]) -> Result<()> {
+        let controls = ids
+            .iter()
+            .map(|&id| self.control(id))
+            .collect::<Result<Vec<_>>>()?;
+        self.engine_controls[group as usize].extend(controls);
+        Ok(())
+    }
+
+    fn initialize_tab_titles(&self) -> Result<()> {
+        let tab = self.control(ctrl_id::TAB_CONTROL)?;
+        for (index, title) in ["외관", "표시·윈도우", "번역"].iter().enumerate() {
+            let mut wide = to_wide(title);
+            let item = TCITEMW {
+                mask: TCIF_TEXT,
+                pszText: PWSTR(wide.as_mut_ptr()),
+                iImage: -1,
+                ..Default::default()
+            };
+            unsafe {
+                let _ = SendMessageW(
+                    tab,
+                    TCM_INSERTITEMW,
+                    Some(WPARAM(index)),
+                    Some(LPARAM(&item as *const TCITEMW as isize)),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn initialize_combo(&self, id: u16, items: &[&str], selected: usize) -> Result<()> {
+        let combo = self.control(id)?;
+        for item in items {
+            let wide = to_wide(item);
+            unsafe {
+                let _ = SendMessageW(
+                    combo,
+                    CB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(wide.as_ptr() as isize)),
+                );
+            }
+        }
+        unsafe {
+            let _ = SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(selected)), Some(LPARAM(0)));
+        }
+        Ok(())
+    }
+
+    fn initialize_trackbar(&self, id: u16, min: i32, max: i32, value: i32) -> Result<()> {
+        let trackbar = self.control(id)?;
+        let range = ((max & 0xffff) << 16) | (min & 0xffff);
+        unsafe {
+            let _ = SendMessageW(
+                trackbar,
+                TBM_SETRANGE,
+                Some(WPARAM(1)),
+                Some(LPARAM(range as isize)),
+            );
+            let _ = SendMessageW(
+                trackbar,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(value as isize)),
+            );
+        }
+        Ok(())
+    }
+
+    fn set_checked(&self, id: u16, checked: bool) -> Result<()> {
+        let control = self.control(id)?;
+        let state = if checked { BST_CHECKED } else { BST_UNCHECKED };
+        unsafe {
+            let _ = SendMessageW(
+                control,
+                BM_SETCHECK,
+                Some(WPARAM(state.0 as usize)),
+                Some(LPARAM(0)),
+            );
+        }
+        Ok(())
+    }
+
+    fn set_text(&self, id: u16, text: &str) -> Result<()> {
+        let control = self.control(id)?;
+        let wide = to_wide(text);
+        unsafe { SetWindowTextW(control, PCWSTR(wide.as_ptr())) }
+    }
+}

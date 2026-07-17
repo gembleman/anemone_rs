@@ -1,5 +1,8 @@
 //! 설정 대화상자 컨트롤 ID 상수
 
+/// `resources/settings.rc`의 설정 다이얼로그 리소스 ID.
+pub const DIALOG: u16 = 100;
+
 // 배경 설정
 pub const BACKGROUND_TRACKBAR: u16 = 1001;
 pub const BACKGROUND_COLOR: u16 = 1002;
@@ -116,3 +119,20 @@ pub const TAB_CONTROL: u16 = 1290;
 
 // 닫기 버튼
 pub const CLOSE: u16 = 1300;
+
+// 리소스에서만 텍스트/그룹 박스를 식별하기 위한 ID. 탭 전환과 엔진별
+// 활성화에 사용하므로 `resources/settings.rc`의 값과 동기화해야 한다.
+pub const APPEARANCE_STATIC_IDS: &[u16] = &[
+    2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015,
+    2016,
+];
+pub const DISPLAY_STATIC_IDS: &[u16] = &[2100, 2101];
+pub const TRANSLATION_STATIC_IDS: &[u16] = &[
+    2200, 2201, 2202, 2203, 2204, 2205, 2210, 2211, 2212, 2213, 2214, 2220, 2221, 2222, 2230, 2231,
+    2232, 2233, 2234, 2235, 2236, 2237, 2238, 2239,
+];
+
+pub const EZTRANS_STATIC_IDS: &[u16] = &[2204, 2205];
+pub const DEEPL_STATIC_IDS: &[u16] = &[2210, 2211, 2212, 2213, 2214];
+pub const PAPAGO_STATIC_IDS: &[u16] = &[2220, 2221, 2222];
+pub const LLM_STATIC_IDS: &[u16] = &[2230, 2231, 2232, 2233, 2234, 2235, 2236, 2237, 2238, 2239];

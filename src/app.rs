@@ -20,7 +20,7 @@ use windows::{
 use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
 use crate::constants::{
-    INITIAL_WINDOW_HEIGHT, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_X, INITIAL_WINDOW_Y,
+    APP_ICON_ID, INITIAL_WINDOW_HEIGHT, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_X, INITIAL_WINDOW_Y,
     MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_DEFERRED_CLIPBOARD,
     WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
@@ -175,7 +175,7 @@ impl App {
                 let mut app_ref = app.borrow_mut();
 
                 // 트레이 아이콘 생성
-                app_ref.tray.create(hwnd, 0)?;
+                app_ref.tray.create(hwnd, APP_ICON_ID)?;
 
                 // 핫키 등록
                 let mut hotkey = HotkeyManager::new(hwnd);
@@ -241,6 +241,18 @@ impl App {
             // 메시지 루프
             let mut msg: MSG = zeroed();
             while GetMessageW(&mut msg, None, 0, 0).into() {
+                // 리소스 기반 모델리스 설정창의 Tab/Shift+Tab/기본 버튼 처리를
+                // 다이얼로그 매니저에 먼저 맡긴다.
+                let handled_by_settings = app
+                    .try_borrow()
+                    .ok()
+                    .and_then(|app| app.settings_hwnd)
+                    .is_some_and(|hwnd| {
+                        IsWindow(Some(hwnd)).as_bool() && IsDialogMessageW(hwnd, &msg).as_bool()
+                    });
+                if handled_by_settings {
+                    continue;
+                }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -270,7 +282,10 @@ impl App {
                 cbClsExtra: 0,
                 cbWndExtra: 0,
                 hInstance: instance.into(),
-                hIcon: LoadIconW(None, IDI_APPLICATION)?,
+                hIcon: LoadIconW(
+                    Some(instance.into()),
+                    PCWSTR(APP_ICON_ID as usize as *const u16),
+                )?,
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
                 hbrBackground: HBRUSH(null_mut()),
                 lpszMenuName: PCWSTR::null(),

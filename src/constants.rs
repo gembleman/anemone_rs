@@ -7,6 +7,8 @@ use windows::Win32::UI::WindowsAndMessaging::{WM_APP, WM_USER};
 
 // ── 메인 윈도우 ─────────────────────────────────────────
 
+/// 실행 파일에 포함된 애플리케이션 아이콘 리소스 ID
+pub const APP_ICON_ID: u32 = 1;
 /// 메인 윈도우 초기 너비
 pub const INITIAL_WINDOW_WIDTH: i32 = 400;
 /// 메인 윈도우 초기 높이
