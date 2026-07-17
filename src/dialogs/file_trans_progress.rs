@@ -2,6 +2,8 @@
 //!
 //! 번역 진행 상황 표시 및 취소 기능.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -9,6 +11,7 @@ use windows::{
     Win32::{
         Foundation::*,
         System::Com::{CLSCTX_ALL, CoCreateInstance},
+        System::LibraryLoader::GetModuleHandleW,
         UI::Controls::*,
         UI::Input::KeyboardAndMouse::EnableWindow,
         UI::Shell::{
@@ -19,7 +22,10 @@ use windows::{
     core::*,
 };
 
-use super::helpers::{Dialog, DialogControls};
+use super::helpers::{
+    register_resource_dialog, rescale_dialog_children_for_dpi, show_dialog_window,
+    unregister_resource_dialog,
+};
 use crate::constants::{
     WM_PROGRESS_COMPLETE, WM_PROGRESS_CURRENT, WM_PROGRESS_ERROR, WM_PROGRESS_INDEX,
     WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
@@ -30,6 +36,7 @@ use crate::util::to_wide;
 
 // 컨트롤 ID
 mod ctrl_id {
+    pub const DIALOG: u16 = 103;
     pub const NAME_TEXT: u16 = 5001; // 현재 파일명
     pub const PROGRESS_BAR: u16 = 5002; // 프로그레스바
     pub const PROGRESS_TEXT: u16 = 5003; // 진행 텍스트
@@ -37,12 +44,6 @@ mod ctrl_id {
     pub const TOTAL_TEXT: u16 = 5005; // 전체 진행
     pub const BTN_CANCEL: u16 = 5010; // 취소 버튼
 }
-
-const PROGRESS_WIDTH: i32 = 450;
-// WIDTH / HEIGHT 는 캡션·테두리를 포함한 전체 윈도우 크기다. 캡션(~24~30px)+테두리(~2px)
-// 가 클라이언트에서 차감되므로, 취소 버튼 하단 Y=180 이 잘리지 않으려면 캡션 여유까지
-// 합쳐 220 이상이 필요. 200 일 때는 일부 윈도우 테마에서 버튼 하단 ~8px 가 잘릴 수 있다.
-const PROGRESS_HEIGHT: i32 = 220;
 
 /// 진행률 대화상자 상태
 struct ProgressState {
@@ -58,6 +59,7 @@ pub struct FileTransProgressDialog {
     hwnd: HWND,
     parent_hwnd: HWND,
     cancel_token: Arc<AtomicBool>,
+    applied_dpi: u32,
     name_text: HWND,
     progress_bar: HWND,
     progress_text: HWND,
@@ -69,62 +71,154 @@ pub struct FileTransProgressDialog {
     taskbar: Option<ITaskbarList3>,
 }
 
-impl DialogControls for FileTransProgressDialog {
-    fn dialog_hwnd(&self) -> HWND {
-        self.hwnd
+define_dialog_instance!(PROGRESS_INSTANCE: FileTransProgressDialog);
+
+struct PendingProgress {
+    parent: HWND,
+    cancel_token: Arc<AtomicBool>,
+}
+
+thread_local! {
+    static PROGRESS_PENDING: RefCell<Option<PendingProgress>> = const { RefCell::new(None) };
+    static PROGRESS_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// 인스턴스가 메시지를 처리할 수 없을 때 워커가 넘긴 문자열 버퍼를 회수한다.
+fn reclaim_progress_payload(msg: u32, lparam: LPARAM) {
+    if (msg == WM_PROGRESS_NAME || msg == WM_PROGRESS_ERROR) && lparam.0 != 0 {
+        // SAFETY: 해당 두 메시지의 lparam은 워커가 Box::into_raw로 넘긴 *mut Vec<u16>이다.
+        unsafe {
+            let _ = Box::from_raw(lparam.0 as *mut Vec<u16>);
+        }
     }
 }
 
-define_dialog_instance!(PROGRESS_INSTANCE: FileTransProgressDialog);
+/// `resources/file_trans_progress.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
+unsafe extern "system" fn file_trans_progress_dialog_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> isize {
+    if msg == WM_INITDIALOG {
+        let pending = PROGRESS_PENDING.with(|slot| slot.borrow_mut().take());
+        let Some(PendingProgress {
+            parent,
+            cancel_token,
+        }) = pending
+        else {
+            PROGRESS_INIT_ERROR.with(|slot| {
+                *slot.borrow_mut() = Some("파일 번역 진행률 창 초기화 인자가 없습니다".into());
+            });
+            return 0;
+        };
 
-impl Dialog for FileTransProgressDialog {
-    type Params = Arc<AtomicBool>;
+        let dialog = Rc::new(RefCell::new(FileTransProgressDialog::new(
+            hwnd,
+            parent,
+            cancel_token,
+        )));
+        PROGRESS_INSTANCE.with(|slot| {
+            *slot.borrow_mut() = Some(dialog.clone());
+        });
 
-    const CLASS_NAME: PCWSTR = w!("AnemoneFileTransProgressClass");
-    const TITLE: PCWSTR = w!("파일 번역 진행 중");
-    const WIDTH: i32 = PROGRESS_WIDTH;
-    const HEIGHT: i32 = PROGRESS_HEIGHT;
-    const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
-
-    fn instance_slot() -> &'static std::thread::LocalKey<
-        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-    > {
-        &PROGRESS_INSTANCE
+        let initialization = dialog.borrow_mut().initialize_controls();
+        if let Err(error) = initialization {
+            dialog.borrow().clear_taskbar_progress();
+            PROGRESS_INSTANCE.with(|slot| {
+                slot.borrow_mut().take();
+            });
+            PROGRESS_INIT_ERROR.with(|slot| {
+                *slot.borrow_mut() = Some(error.to_string());
+            });
+            return 0;
+        }
+        register_resource_dialog(hwnd);
+        return 1;
     }
 
-    fn use_parent_centered() -> bool {
-        true
+    let instance = PROGRESS_INSTANCE.with(|slot| {
+        let Ok(guard) = slot.try_borrow() else {
+            return None;
+        };
+        guard.clone()
+    });
+    let Some(dialog) = instance else {
+        reclaim_progress_payload(msg, lparam);
+        return 0;
+    };
+
+    if (WM_PROGRESS_TOTAL_SIZE..=WM_PROGRESS_ERROR).contains(&msg) {
+        if let Ok(mut dialog) = dialog.try_borrow_mut() {
+            dialog.handle_progress_message(msg, wparam, lparam);
+        } else {
+            reclaim_progress_payload(msg, lparam);
+        }
+        return 1;
     }
 
-    fn init(hwnd: HWND, parent: HWND, cancel_token: Self::Params) -> Self {
-        // 작업 표시줄 진행률 인터페이스 초기화.
-        // UI 스레드는 main()에서 STA 로 1회 초기화되어 있다. CoCreateInstance / HrInit
-        // 실패는 모두 Option 으로 흡수해 작업표시줄 진행률 없이 동작하도록 한다.
-        // SAFETY: STA 초기화는 main()에서 보장. parent 는 호출자가 제공한 유효 핸들.
-        let taskbar: Option<ITaskbarList3> = unsafe {
+    match msg {
+        WM_DPICHANGED => {
+            if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                dialog.handle_dpi_changed(wparam, lparam);
+            }
+            1
+        }
+        WM_COMMAND => {
+            let id = (wparam.0 & 0xFFFF) as u16;
+            if (id == ctrl_id::BTN_CANCEL || id == IDCANCEL.0 as u16)
+                && let Ok(mut dialog) = dialog.try_borrow_mut()
+            {
+                dialog.handle_cancel();
+            }
+            1
+        }
+        // 닫기 버튼은 무시한다. 취소 버튼/Esc 또는 워커 완료·에러로만 닫힌다.
+        WM_CLOSE => 1,
+        WM_DESTROY => {
+            if let Ok(dialog) = dialog.try_borrow() {
+                dialog.clear_taskbar_progress();
+            }
+            unregister_resource_dialog(hwnd);
+            PROGRESS_INSTANCE.with(|slot| {
+                if let Ok(mut guard) = slot.try_borrow_mut() {
+                    *guard = None;
+                }
+            });
+            1
+        }
+        _ => 0,
+    }
+}
+
+impl FileTransProgressDialog {
+    fn new(hwnd: HWND, parent: HWND, cancel_token: Arc<AtomicBool>) -> Self {
+        // UI 스레드는 main()에서 STA로 초기화된다. 작업 표시줄 초기화 실패는
+        // 진행률 창 자체의 실패로 취급하지 않는다.
+        let taskbar = unsafe {
             match CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_ALL) {
-                Ok(t) => match t.HrInit() {
+                Ok(taskbar) => match taskbar.HrInit() {
                     Ok(()) => {
-                        // 부모 윈도우에 진행 중 상태 표시 시작
-                        let _ = t.SetProgressState(parent, TBPF_NORMAL);
-                        Some(t)
+                        let _ = taskbar.SetProgressState(parent, TBPF_NORMAL);
+                        Some(taskbar)
                     }
-                    Err(e) => {
-                        tracing::warn!("ITaskbarList3::HrInit failed: {e}");
+                    Err(error) => {
+                        tracing::warn!("ITaskbarList3::HrInit failed: {error}");
                         None
                     }
                 },
-                Err(e) => {
-                    tracing::warn!("CoCreateInstance(TaskbarList) failed: {e}");
+                Err(error) => {
+                    tracing::warn!("CoCreateInstance(TaskbarList) failed: {error}");
                     None
                 }
             }
         };
 
-        FileTransProgressDialog {
+        Self {
             hwnd,
             parent_hwnd: parent,
             cancel_token,
+            applied_dpi: crate::dpi::dpi_for_window(hwnd),
             name_text: HWND::default(),
             progress_bar: HWND::default(),
             progress_text: HWND::default(),
@@ -142,104 +236,140 @@ impl Dialog for FileTransProgressDialog {
         }
     }
 
-    fn create_controls(&mut self) -> Result<()> {
-        // SAFETY: self.hwnd 는 show() 단계에서 만든 유효 핸들. DialogControls 의 모든 헬퍼는
-        // 그 hwnd 위에서 자식 컨트롤만 생성한다.
-        unsafe {
-            // ====== 현재 파일 정보 그룹 ======
-            self.create_group_box(10, 5, 425, 50, "현재 파일")?;
-            self.name_text =
-                self.create_label_with_id(20, 25, 405, 20, ctrl_id::NAME_TEXT, "대기 중...")?;
-
-            // ====== 진행률 그룹 ======
-            self.create_group_box(10, 60, 425, 85, "진행률")?;
-
-            // 프로그레스바 (msctls_progress32) — DialogControls 에 헬퍼가 없어 직접 생성.
-            self.progress_bar = self.create_progress_bar(20, 80, 405, 20, ctrl_id::PROGRESS_BAR)?;
-
-            self.progress_text =
-                self.create_label_with_id(20, 105, 200, 20, ctrl_id::PROGRESS_TEXT, "0/0")?;
-            self.index_text =
-                self.create_label_with_id(230, 105, 90, 20, ctrl_id::INDEX_TEXT, "파일: 0/0")?;
-            self.total_text =
-                self.create_label_with_id(330, 105, 95, 20, ctrl_id::TOTAL_TEXT, "전체: 0/0")?;
-
-            // ====== 취소 버튼 ======
-            self.cancel_btn = self.create_button(175, 150, 100, 30, ctrl_id::BTN_CANCEL, "취소")?;
-
-            Ok(())
-        }
-    }
-
-    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
-        if cmd == ctrl_id::BTN_CANCEL {
-            self.handle_cancel();
-        }
-    }
-
-    fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-        // 진행률 메시지는 trait 의 기본 분기보다 먼저 잡아서 처리.
-        if (WM_PROGRESS_TOTAL_SIZE..=WM_PROGRESS_ERROR).contains(&msg) {
-            self.handle_progress_message(msg, wparam, lparam);
-            return Some(LRESULT(0));
-        }
-
-        match msg {
-            // 닫기 버튼은 무시 — 취소 버튼 또는 워커 완료/에러로만 닫힌다.
-            WM_CLOSE => Some(LRESULT(0)),
-            // WM_DESTROY 시점에 작업 표시줄 진행률을 비운 뒤, 기본 cleanup
-            // (인스턴스 슬롯 해제) 으로 흘려보낸다.
-            WM_DESTROY => {
-                if let Some(ref tb) = self.taskbar {
-                    // SAFETY: self.parent_hwnd 는 init() 에서 받은 유효 핸들.
-                    unsafe {
-                        let _ = tb.SetProgressState(self.parent_hwnd, TBPF_NOPROGRESS);
-                    }
-                }
-                None
-            }
-            _ => None,
-        }
-    }
-
-    /// 다이얼로그 인스턴스가 사라진 뒤 도착한 진행률 메시지의 lparam 박스를 회수.
-    fn on_orphan_message(msg: u32, _w: WPARAM, lparam: LPARAM) {
-        if (msg == WM_PROGRESS_NAME || msg == WM_PROGRESS_ERROR) && lparam.0 != 0 {
-            // SAFETY: lparam 은 워커가 Box::into_raw 로 넘긴 *mut Vec<u16> 이다.
+    /// `resources/file_trans_progress.rc`의 모델리스 DIALOGEX 리소스를 연다.
+    pub fn show(parent: HWND, cancel_token: Arc<AtomicBool>) -> Result<HWND> {
+        let existing = PROGRESS_INSTANCE
+            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
+        if let Some(hwnd) = existing
+            && unsafe { IsWindow(Some(hwnd)).as_bool() }
+        {
             unsafe {
-                let _ = Box::from_raw(lparam.0 as *mut Vec<u16>);
+                let _ = SetForegroundWindow(hwnd);
+            }
+            return Err(Error::new(
+                E_FAIL,
+                "파일 번역 진행률 창이 이미 열려 있습니다",
+            ));
+        }
+
+        let instance = unsafe { GetModuleHandleW(None)? };
+        PROGRESS_INIT_ERROR.with(|slot| {
+            slot.borrow_mut().take();
+        });
+        PROGRESS_PENDING.with(|slot| {
+            *slot.borrow_mut() = Some(PendingProgress {
+                parent,
+                cancel_token,
+            });
+        });
+
+        let result = unsafe {
+            CreateDialogParamW(
+                Some(instance.into()),
+                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
+                Some(parent),
+                Some(file_trans_progress_dialog_proc),
+                LPARAM(0),
+            )
+        };
+
+        let hwnd = match result {
+            Ok(hwnd) => hwnd,
+            Err(error) => {
+                PROGRESS_PENDING.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                PROGRESS_INIT_ERROR.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                return Err(error);
+            }
+        };
+
+        if let Some(message) = PROGRESS_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+            return Err(Error::new(E_FAIL, message));
+        }
+
+        unsafe {
+            Self::center_on_parent(hwnd, parent);
+            show_dialog_window(hwnd);
+        }
+        Ok(hwnd)
+    }
+
+    fn initialize_controls(&mut self) -> Result<()> {
+        let get_control = |id| {
+            unsafe { GetDlgItem(Some(self.hwnd), id) }.map_err(|_| {
+                Error::new(
+                    E_FAIL,
+                    format!("파일 번역 진행률 컨트롤 ID {id}를 찾을 수 없습니다"),
+                )
+            })
+        };
+
+        self.name_text = get_control(ctrl_id::NAME_TEXT as i32)?;
+        self.progress_bar = get_control(ctrl_id::PROGRESS_BAR as i32)?;
+        self.progress_text = get_control(ctrl_id::PROGRESS_TEXT as i32)?;
+        self.index_text = get_control(ctrl_id::INDEX_TEXT as i32)?;
+        self.total_text = get_control(ctrl_id::TOTAL_TEXT as i32)?;
+        self.cancel_btn = get_control(ctrl_id::BTN_CANCEL as i32)?;
+        Ok(())
+    }
+
+    unsafe fn center_on_parent(hwnd: HWND, parent: HWND) {
+        unsafe {
+            let mut dialog_rect = RECT::default();
+            let mut parent_rect = RECT::default();
+            if GetWindowRect(hwnd, &mut dialog_rect).is_err()
+                || GetWindowRect(parent, &mut parent_rect).is_err()
+            {
+                return;
+            }
+            let width = dialog_rect.right - dialog_rect.left;
+            let height = dialog_rect.bottom - dialog_rect.top;
+            let x = parent_rect.left + (parent_rect.right - parent_rect.left - width) / 2;
+            let y = parent_rect.top + (parent_rect.bottom - parent_rect.top - height) / 2;
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
+        let new_dpi = (wparam.0 & 0xFFFF) as u32;
+        rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
+        self.applied_dpi = new_dpi;
+
+        if lparam.0 != 0 {
+            unsafe {
+                let rect = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    None,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
             }
         }
     }
-}
 
-impl FileTransProgressDialog {
-    /// 프로그레스바(msctls_progress32) 자식 컨트롤을 생성한다.
-    unsafe fn create_progress_bar(&self, x: i32, y: i32, w: i32, h: i32, id: u16) -> Result<HWND> {
-        // SAFETY: self.hwnd 는 유효 핸들. msctls_progress32 는 표준 공통 컨트롤 클래스.
-        unsafe {
-            use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-
-            let hinst = GetModuleHandleW(None)?;
-            let dpi = crate::dpi::dpi_for_window(self.hwnd);
-            let s = |v: i32| crate::dpi::scale(v, dpi);
-
-            let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                w!("msctls_progress32"),
-                w!(""),
-                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
-                s(x),
-                s(y),
-                s(w),
-                s(h),
-                Some(self.hwnd),
-                Some(HMENU(id as isize as *mut _)),
-                Some(hinst.into()),
-                None,
-            )?;
-
-            Ok(hwnd)
+    fn clear_taskbar_progress(&self) {
+        if let Some(taskbar) = &self.taskbar {
+            unsafe {
+                let _ = taskbar.SetProgressState(self.parent_hwnd, TBPF_NOPROGRESS);
+            }
         }
     }
 
@@ -254,7 +384,7 @@ impl FileTransProgressDialog {
 
     /// 진행률 메시지 처리
     fn handle_progress_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) {
-        // SAFETY: All control handles were created in create_controls and are valid.
+        // SAFETY: All control handles were loaded from the RC template and are valid.
         // lparam for WM_PROGRESS_NAME/WM_PROGRESS_ERROR is a *mut Vec<u16> leaked by
         // file_trans_thread::post_wide_string; we reclaim ownership via Box::from_raw below.
         unsafe {
@@ -392,6 +522,7 @@ impl FileTransProgressDialog {
                         MB_ICONERROR,
                     );
 
+                    self.clear_taskbar_progress();
                     let _ = DestroyWindow(self.hwnd);
                 }
                 _ => {}
@@ -402,7 +533,7 @@ impl FileTransProgressDialog {
     /// 취소 처리
     fn handle_cancel(&mut self) {
         self.cancel_token.store(true, Ordering::SeqCst);
-        // SAFETY: self.cancel_btn is a valid control handle from create_controls.
+        // SAFETY: self.cancel_btn is a valid control handle from the RC template.
         unsafe {
             let _ = EnableWindow(self.cancel_btn, false);
             Self::set_text(self.progress_text, "취소 중...");

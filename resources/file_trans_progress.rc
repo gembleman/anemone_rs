@@ -1,0 +1,21 @@
+#include <windows.h>
+
+#define IDD_FILE_TRANS_PROGRESS 103
+
+IDD_FILE_TRANS_PROGRESS DIALOGEX 0, 0, 257, 117
+STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW
+CAPTION "파일 번역 진행 중"
+FONT 9, "맑은 고딕", 400, 0, 0x81
+BEGIN
+    GROUPBOX        "현재 파일", -1, 6, 3, 243, 27
+    LTEXT           "대기 중...", 5001, 11, 13, 231, 11
+
+    GROUPBOX        "진행률", -1, 6, 32, 243, 45
+    CONTROL         "", 5002, "msctls_progress32", WS_VISIBLE, 11, 43, 231, 11
+    LTEXT           "0/0", 5003, 11, 56, 114, 11
+    LTEXT           "파일: 0/0", 5004, 131, 56, 51, 11
+    LTEXT           "전체: 0/0", 5005, 189, 56, 54, 11
+
+    DEFPUSHBUTTON   "취소", 5010, 100, 80, 57, 16
+END

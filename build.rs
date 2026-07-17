@@ -15,12 +15,16 @@ fn main() {
     let glossary_rc = fs::read_to_string("resources/glossary.rc")
         .expect("Failed to read glossary dialog resource");
     res.append_rc_content(&glossary_rc);
+    let file_trans_progress_rc = fs::read_to_string("resources/file_trans_progress.rc")
+        .expect("Failed to read file translation progress dialog resource");
+    res.append_rc_content(&file_trans_progress_rc);
     res.compile().expect("Failed to compile Windows resources");
 
     println!("cargo:rerun-if-changed=assets/Anemone.ico");
     println!("cargo:rerun-if-changed=resources/settings.rc");
     println!("cargo:rerun-if-changed=resources/hook_settings.rc");
     println!("cargo:rerun-if-changed=resources/glossary.rc");
+    println!("cargo:rerun-if-changed=resources/file_trans_progress.rc");
 
     copy_eztrans_dll();
 }
