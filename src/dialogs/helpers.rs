@@ -766,18 +766,6 @@ pub trait DialogControls {
         unsafe { create_label(self.dialog_hwnd(), x, y, w, h, 0, text) }
     }
 
-    unsafe fn create_label_with_id(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        text: &str,
-    ) -> Result<HWND> {
-        unsafe { create_label(self.dialog_hwnd(), x, y, w, h, id, text) }
-    }
-
     unsafe fn create_button(
         &self,
         x: i32,

@@ -11,15 +11,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::{
     Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
-        UI::Input::KeyboardAndMouse::EnableWindow, UI::WindowsAndMessaging::*,
+        Foundation::*,
+        System::LibraryLoader::GetModuleHandleW,
+        UI::Controls::{BST_CHECKED, CheckDlgButton},
+        UI::Input::KeyboardAndMouse::EnableWindow,
+        UI::WindowsAndMessaging::*,
     },
     core::*,
 };
 
 use super::file_dialog::{FileFilter, open_files_multi, save_file};
 use super::file_trans_progress::FileTransProgressDialog;
-use super::helpers::{Dialog, DialogControls};
+use super::helpers::{
+    center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
+    show_dialog_window, unregister_resource_dialog,
+};
 use crate::config::Config;
 use crate::define_dialog_instance;
 use crate::translation::{EngineCredentials, Language, TranslationEngine};
@@ -27,6 +33,7 @@ use crate::util::to_wide;
 
 // 컨트롤 ID
 mod ctrl_id {
+    pub const DIALOG: u16 = 104;
     pub const LOAD_EDIT: u16 = 4001;
     pub const SAVE_EDIT: u16 = 4002;
     pub const LOAD_BROWSER: u16 = 4003;
@@ -78,6 +85,7 @@ unsafe impl Sync for FileTransJobData {}
 pub struct FileTransDialog {
     hwnd: HWND,
     config: Rc<RefCell<Config>>,
+    applied_dpi: u32,
     load_edit: HWND,
     save_edit: HWND,
     save_browser_btn: HWND,
@@ -90,33 +98,103 @@ pub struct FileTransDialog {
     cancel_token: Arc<AtomicBool>,
 }
 
-impl DialogControls for FileTransDialog {
-    fn dialog_hwnd(&self) -> HWND {
-        self.hwnd
+define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
+
+struct PendingFileTrans {
+    config: Rc<RefCell<Config>>,
+}
+
+thread_local! {
+    static FILE_TRANS_PENDING: RefCell<Option<PendingFileTrans>> = const { RefCell::new(None) };
+    static FILE_TRANS_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// `resources/file_trans.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
+unsafe extern "system" fn file_trans_dialog_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> isize {
+    unsafe {
+        if msg == WM_INITDIALOG {
+            let pending = FILE_TRANS_PENDING.with(|slot| slot.borrow_mut().take());
+            let Some(PendingFileTrans { config }) = pending else {
+                FILE_TRANS_INIT_ERROR.with(|slot| {
+                    *slot.borrow_mut() = Some("파일 번역 창 초기화 인자가 없습니다".into());
+                });
+                return 0;
+            };
+
+            let dialog = Rc::new(RefCell::new(FileTransDialog::new(hwnd, config)));
+            FILE_TRANS_INSTANCE.with(|slot| {
+                *slot.borrow_mut() = Some(dialog.clone());
+            });
+
+            if let Err(error) = dialog.borrow_mut().initialize_controls() {
+                FILE_TRANS_INSTANCE.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                FILE_TRANS_INIT_ERROR.with(|slot| {
+                    *slot.borrow_mut() = Some(error.to_string());
+                });
+                return 0;
+            }
+            register_resource_dialog(hwnd);
+            return 1;
+        }
+
+        let instance = FILE_TRANS_INSTANCE.with(|slot| {
+            let Ok(guard) = slot.try_borrow() else {
+                return None;
+            };
+            guard.clone()
+        });
+        let Some(dialog) = instance else {
+            return 0;
+        };
+
+        match msg {
+            WM_DPICHANGED => {
+                if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                    dialog.handle_dpi_changed(wparam, lparam);
+                }
+                1
+            }
+            WM_COMMAND => {
+                let id = (wparam.0 & 0xFFFF) as u16;
+                let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                if id == IDCANCEL.0 as u16 {
+                    let _ = DestroyWindow(hwnd);
+                } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                    dialog.handle_command(id, notify_code);
+                }
+                1
+            }
+            WM_CLOSE => {
+                let _ = DestroyWindow(hwnd);
+                1
+            }
+            WM_DESTROY => {
+                unregister_resource_dialog(hwnd);
+                FILE_TRANS_INSTANCE.with(|slot| {
+                    if let Ok(mut guard) = slot.try_borrow_mut() {
+                        *guard = None;
+                    }
+                });
+                1
+            }
+            _ => 0,
+        }
     }
 }
 
-define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
-
-impl Dialog for FileTransDialog {
-    type Params = Rc<RefCell<Config>>;
-
-    const CLASS_NAME: PCWSTR = w!("AnemoneFileTransClass");
-    const TITLE: PCWSTR = w!("파일 번역");
-    const WIDTH: i32 = 560;
-    const HEIGHT: i32 = 450;
-    const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
-
-    fn instance_slot() -> &'static std::thread::LocalKey<
-        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-    > {
-        &FILE_TRANS_INSTANCE
-    }
-
-    fn init(hwnd: HWND, _parent: HWND, config: Self::Params) -> Self {
-        FileTransDialog {
+impl FileTransDialog {
+    fn new(hwnd: HWND, config: Rc<RefCell<Config>>) -> Self {
+        Self {
             hwnd,
             config,
+            applied_dpi: crate::dpi::dpi_for_window(hwnd),
             load_edit: HWND::default(),
             save_edit: HWND::default(),
             save_browser_btn: HWND::default(),
@@ -130,176 +208,120 @@ impl Dialog for FileTransDialog {
         }
     }
 
-    fn create_controls(&mut self) -> Result<()> {
-        // SAFETY: self.hwnd is a valid dialog window handle. GetModuleHandleW(None) returns
-        // the current module. All CreateWindowExW calls use valid parent handle, module
-        // instance, and control IDs cast to HMENU. SendMessageW WM_SETFONT uses a valid
-        // stock font object.
+    /// `resources/file_trans.rc`의 모델리스 DIALOGEX 리소스를 연다.
+    pub fn show(parent: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> {
+        let existing = FILE_TRANS_INSTANCE
+            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
+        if let Some(hwnd) = existing
+            && unsafe { IsWindow(Some(hwnd)).as_bool() }
+        {
+            unsafe {
+                let _ = SetForegroundWindow(hwnd);
+            }
+            return Ok(hwnd);
+        }
+
+        let instance = unsafe { GetModuleHandleW(None)? };
+        FILE_TRANS_INIT_ERROR.with(|slot| {
+            slot.borrow_mut().take();
+        });
+        FILE_TRANS_PENDING.with(|slot| {
+            *slot.borrow_mut() = Some(PendingFileTrans { config });
+        });
+
+        let result = unsafe {
+            CreateDialogParamW(
+                Some(instance.into()),
+                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
+                Some(parent),
+                Some(file_trans_dialog_proc),
+                LPARAM(0),
+            )
+        };
+
+        let hwnd = match result {
+            Ok(hwnd) => hwnd,
+            Err(error) => {
+                FILE_TRANS_PENDING.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                FILE_TRANS_INIT_ERROR.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                return Err(error);
+            }
+        };
+
+        if let Some(message) = FILE_TRANS_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+            return Err(Error::new(E_FAIL, message));
+        }
+
         unsafe {
-            let hinst = GetModuleHandleW(None)?;
-            let hfont = GetStockObject(DEFAULT_GUI_FONT);
-            let dpi = crate::dpi::dpi_for_window(self.hwnd);
-            let s = |v: i32| crate::dpi::scale(v, dpi);
+            center_dialog_on_monitor(hwnd, parent);
+            show_dialog_window(hwnd);
+        }
+        Ok(hwnd)
+    }
 
-            // ====== 입력 파일 그룹 ======
-            self.create_group_box(10, 5, 525, 70, "입력 파일")?;
+    fn initialize_controls(&mut self) -> Result<()> {
+        let get_control = |id| {
+            unsafe { GetDlgItem(Some(self.hwnd), id) }.map_err(|_| {
+                Error::new(
+                    E_FAIL,
+                    format!("파일 번역 컨트롤 ID {id}를 찾을 수 없습니다"),
+                )
+            })
+        };
 
-            self.create_label(20, 30, 50, 18, "파일:")?;
+        self.load_edit = get_control(ctrl_id::LOAD_EDIT as i32)?;
+        self.save_edit = get_control(ctrl_id::SAVE_EDIT as i32)?;
+        self.save_browser_btn = get_control(ctrl_id::SAVE_BROWSER as i32)?;
+        self.preview_edit = get_control(ctrl_id::PREVIEW_EDIT as i32)?;
+        self.engine_label = get_control(ctrl_id::ENGINE_LABEL as i32)?;
+        for id in [
+            ctrl_id::LOAD_BROWSER,
+            ctrl_id::OUTPUT_1,
+            ctrl_id::OUTPUT_2,
+            ctrl_id::OUTPUT_3,
+            ctrl_id::NO_TRANS_LINEFEED,
+            ctrl_id::BTN_TRANSLATE,
+            ctrl_id::BTN_CLOSE,
+        ] {
+            get_control(id as i32)?;
+        }
 
-            // 입력 파일 Edit
-            self.load_edit = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                w!("EDIT"),
-                w!(""),
-                WINDOW_STYLE(
-                    WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
-                ),
-                s(75),
-                s(26),
-                s(370),
-                s(26),
-                Some(self.hwnd),
-                Some(HMENU(ctrl_id::LOAD_EDIT as isize as *mut _)),
-                Some(hinst.into()),
-                None,
-            )?;
-            let _ = SendMessageW(
-                self.load_edit,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(0)),
-            );
-
-            self.create_button(455, 26, 70, 26, ctrl_id::LOAD_BROWSER, "찾아보기")?;
-
-            // ====== 출력 파일 그룹 ======
-            self.create_group_box(10, 80, 525, 70, "출력 파일")?;
-
-            self.create_label(20, 105, 50, 18, "파일:")?;
-
-            // 출력 파일 Edit
-            self.save_edit = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                w!("EDIT"),
-                w!(""),
-                WINDOW_STYLE(
-                    WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
-                ),
-                s(75),
-                s(101),
-                s(370),
-                s(26),
-                Some(self.hwnd),
-                Some(HMENU(ctrl_id::SAVE_EDIT as isize as *mut _)),
-                Some(hinst.into()),
-                None,
-            )?;
-            let _ = SendMessageW(
-                self.save_edit,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(0)),
-            );
-
-            self.save_browser_btn =
-                self.create_button(455, 101, 70, 26, ctrl_id::SAVE_BROWSER, "찾아보기")?;
+        unsafe {
             let _ = EnableWindow(self.save_browser_btn, false);
+            let _ = CheckDlgButton(self.hwnd, ctrl_id::OUTPUT_1 as i32, BST_CHECKED);
+        }
+        self.update_engine_label();
+        Ok(())
+    }
 
-            // ====== 미리보기 그룹 ======
-            self.create_group_box(10, 155, 525, 130, "미리보기 (처음 7줄)")?;
+    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
+        let new_dpi = (wparam.0 & 0xFFFF) as u32;
+        rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
+        self.applied_dpi = new_dpi;
 
-            self.preview_edit = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                w!("EDIT"),
-                w!(""),
-                WINDOW_STYLE(
-                    WS_CHILD.0
-                        | WS_VISIBLE.0
-                        | WS_VSCROLL.0
-                        | ES_MULTILINE as u32
-                        | ES_AUTOVSCROLL as u32
-                        | ES_READONLY as u32,
-                ),
-                s(20),
-                s(175),
-                s(505),
-                s(100),
-                Some(self.hwnd),
-                Some(HMENU(ctrl_id::PREVIEW_EDIT as isize as *mut _)),
-                Some(hinst.into()),
-                None,
-            )?;
-            let _ = SendMessageW(
-                self.preview_edit,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(0)),
-            );
-
-            // ====== 출력 형식 그룹 ======
-            self.create_group_box(10, 290, 350, 55, "출력 형식")?;
-
-            self.create_radio(
-                20,
-                310,
-                80,
-                20,
-                ctrl_id::OUTPUT_1,
-                "번역만",
-                self.write_type == WriteType::TranslationOnly,
-            )?;
-            self.create_radio(
-                105,
-                310,
-                90,
-                20,
-                ctrl_id::OUTPUT_2,
-                "원문+번역",
-                self.write_type == WriteType::OriginalAndTrans,
-            )?;
-            self.create_radio(
-                200,
-                310,
-                120,
-                20,
-                ctrl_id::OUTPUT_3,
-                "원문+번역+개행",
-                self.write_type == WriteType::OriginalTransNewline,
-            )?;
-
-            self.create_checkbox(
-                20,
-                332,
-                180,
-                20,
-                ctrl_id::NO_TRANS_LINEFEED,
-                "줄바꿈만 있는 라인 번역 안함",
-                self.no_trans_linefeed,
-            )?;
-
-            // ====== 버튼 그룹 ======
-            self.create_group_box(370, 290, 165, 55, "동작")?;
-            self.create_button(385, 310, 65, 28, ctrl_id::BTN_TRANSLATE, "번역 시작")?;
-            self.create_button(460, 310, 60, 28, ctrl_id::BTN_CLOSE, "닫기")?;
-
-            // ====== 엔진 안내 라벨 (다이얼로그 하단) ======
-            // 파일 번역은 별도의 엔진 선택 UI 를 두지 않고 전역 설정 (번역 다이얼로그/
-            // 설정 다이얼로그) 에서 선택된 엔진을 그대로 사용한다. 이용자가 현재
-            // 어떤 엔진/언어쌍으로 동작할지 헷갈리지 않도록 표시만 해 준다.
-            self.engine_label =
-                self.create_label_with_id(20, 355, 510, 36, ctrl_id::ENGINE_LABEL, "")?;
-            self.update_engine_label();
-
-            Ok(())
+        if lparam.0 != 0 {
+            unsafe {
+                let rect = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    None,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
         }
     }
 
-    /// 커스텀 메시지 핸들러 (없음)
-    fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
-        None
-    }
-
-    /// 명령 처리
     fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
         use ctrl_id::*;
 
@@ -311,16 +333,13 @@ impl Dialog for FileTransDialog {
             OUTPUT_3 => self.write_type = WriteType::OriginalTransNewline,
             NO_TRANS_LINEFEED => self.no_trans_linefeed = !self.no_trans_linefeed,
             BTN_TRANSLATE => self.start_translation(),
-            // SAFETY: self.hwnd is a valid dialog window handle.
             BTN_CLOSE => unsafe {
                 let _ = DestroyWindow(self.hwnd);
             },
             _ => {}
         }
     }
-}
 
-impl FileTransDialog {
     /// 엔진 안내 라벨 텍스트 갱신
     fn update_engine_label(&self) {
         use crate::translation::lang_utils::to_korean_name;
