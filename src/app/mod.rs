@@ -24,8 +24,7 @@ use crate::constants::{
     MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_DEFERRED_CLIPBOARD,
     WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
-use crate::d2d::D2DRenderer;
-use crate::d2d_composition::CompositionRenderer;
+use crate::d2d::{CompositionRenderer, D2DRenderer};
 use crate::dialogs::helpers::{Dialog, dispatch_resource_dialog_message};
 use crate::dialogs::{
     BacklogDialog, FileTransDialog, HookSettingsDialog, LogEntry, SettingsDialog, TranslateDialog,

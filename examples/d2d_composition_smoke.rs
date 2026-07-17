@@ -12,17 +12,11 @@
 //! - 리사이즈해도 그림이 깨지지 않는다 → `resize()` 경로 OK
 //! - ESC 또는 X 로 종료 시 크래시 없음 → COM 해제 순서 OK
 //!
-//! 메인 앱의 paint 경로 (`d2d` 모듈 + layered window) 는 **건드리지 않는다**.
-//! 본 예제는 `src/d2d_composition.rs` 만 `#[path]` 로 직접 포함해 binary crate
-//! 와 격리된다.
+//! 본 예제는 `src/d2d/mod.rs` 를 `#[path]` 로 직접 포함해 binary crate 와
+//! 격리된다.
 
 #![cfg(windows)]
 
-// d2d_composition 의 일부 API (flush 등) 는 메인 binary 만 사용하므로
-// example 격리 컴파일 시 dead_code 로 잡힌다 — 모듈 단위로 봉합.
-#[allow(dead_code)]
-#[path = "../src/d2d_composition.rs"]
-mod d2d_composition;
 // bench 모듈에는 메인 binary 만 사용하는 phase 측정 인프라가 들어있다.
 // example 격리 컴파일이라 일부 항목이 dead_code 로 잡혀 모듈 단위로 봉합.
 #[allow(dead_code)]
@@ -63,8 +57,7 @@ mod window {
 mod d2d;
 
 use bench::{BenchAccumulator, paint_bench_iters};
-use d2d::{D2DRenderer, TextBox};
-use d2d_composition::CompositionRenderer;
+use d2d::{CompositionRenderer, D2DRenderer, TextBox};
 use std::cell::RefCell;
 use window::TextRenderStyle;
 use windows::{

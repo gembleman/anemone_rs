@@ -7,7 +7,6 @@ mod clipboard;
 mod config;
 mod constants;
 mod d2d;
-mod d2d_composition;
 mod dialogs;
 mod dpi;
 mod hotkey;

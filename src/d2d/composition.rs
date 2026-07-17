@@ -1,6 +1,6 @@
 //! Direct2D + DirectComposition 합성 경로 프로토타입 (경로 B)
 //!
-//! 현재 렌더 경로 (`d2d.rs` + `window.rs::DoubleBuffer`/`update_layered_window`)
+//! 현재 렌더 경로 (`d2d` + `window.rs::DoubleBuffer`/`update_layered_window`)
 //! 를 다음 단계에서 GPU 합성 경로로 교체하기 위한 **스케치**.
 //!
 //! # 배경
@@ -38,7 +38,7 @@
 //! - `resize(w, h)` — `ResizeBuffers` + bitmap 재바인딩
 //!
 //! 본 작업 (경로 교체) 시:
-//! 1. `d2d.rs::D2DRenderer` 의 그리기 메서드들을 `&ID2D1DeviceContext`
+//! 1. `d2d::D2DRenderer` 의 그리기 메서드들을 `&ID2D1DeviceContext`
 //!    대상으로 일반화 (현재는 `ID2D1DCRenderTarget`).
 //! 2. `app.rs::paint` 에서 `DoubleBuffer` + `update_layered_window` 경로
 //!    제거하고 `CompositionRenderer` 사용.
