@@ -2,19 +2,21 @@
 //!
 //! 파일 읽기/쓰기, 번역 처리, 진행률 업데이트.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
+    Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
     System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState},
     UI::WindowsAndMessaging::PostMessageW,
 };
 
-use super::file_trans::{FileTransJobData, WriteType};
+use super::file_trans::{FileTransJobData, WriteType, validate_job_paths};
 use crate::constants::{
     WM_PROGRESS_COMPLETE, WM_PROGRESS_CURRENT, WM_PROGRESS_ERROR, WM_PROGRESS_INDEX,
     WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
@@ -34,6 +36,122 @@ use crate::util::to_wide;
 /// `ES_DISPLAY_REQUIRED` 는 일부러 빼서 모니터 절전은 허용한다 — 사용자가
 /// 자리를 비웠을 때까지 화면 켜두는 건 과한 동작이라 판단.
 struct SleepBlocker;
+
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// 최종 경로와 같은 디렉터리의 임시 출력 파일.
+///
+/// `persist` 전까지는 Drop 시 임시 파일을 제거하므로 번역 오류와 취소가 기존
+/// 결과 파일에 영향을 주지 않는다.
+struct PendingOutput {
+    final_path: PathBuf,
+    temp_path: PathBuf,
+    writer: Option<BufWriter<File>>,
+}
+
+impl PendingOutput {
+    fn create(final_path: &Path) -> Result<Self, String> {
+        let parent = final_path.parent().unwrap_or(Path::new(""));
+        let name = final_path.file_name().unwrap_or_default().to_string_lossy();
+
+        for _ in 0..100 {
+            let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let temp_path = parent.join(format!(
+                ".{name}.anemone-{}-{sequence}.tmp",
+                std::process::id()
+            ));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)
+            {
+                Ok(file) => {
+                    return Ok(Self {
+                        final_path: final_path.to_path_buf(),
+                        temp_path,
+                        writer: Some(BufWriter::new(file)),
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "임시 출력 파일을 생성할 수 없습니다: {}\n{error}",
+                        temp_path.display()
+                    ));
+                }
+            }
+        }
+
+        Err(format!(
+            "고유한 임시 출력 파일을 생성할 수 없습니다: {}",
+            final_path.display()
+        ))
+    }
+
+    fn writer(&mut self) -> &mut BufWriter<File> {
+        self.writer.as_mut().expect("writer exists until persist")
+    }
+
+    fn persist(mut self) -> Result<(), String> {
+        let mut writer = self.writer.take().expect("writer exists until persist");
+        writer.flush().map_err(|error| {
+            format!(
+                "임시 출력 파일을 저장할 수 없습니다: {}\n{error}",
+                self.temp_path.display()
+            )
+        })?;
+        writer.get_ref().sync_all().map_err(|error| {
+            format!(
+                "임시 출력 파일을 디스크에 반영할 수 없습니다: {}\n{error}",
+                self.temp_path.display()
+            )
+        })?;
+        drop(writer);
+
+        let source: Vec<u16> = self
+            .temp_path
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let destination: Vec<u16> = self
+            .final_path
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        unsafe {
+            MoveFileExW(
+                windows::core::PCWSTR(source.as_ptr()),
+                windows::core::PCWSTR(destination.as_ptr()),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        }
+        .map_err(|error| {
+            format!(
+                "완성된 출력 파일을 최종 경로로 옮길 수 없습니다: {}\n{error}",
+                self.final_path.display()
+            )
+        })?;
+
+        self.temp_path.clear();
+        Ok(())
+    }
+}
+
+impl Drop for PendingOutput {
+    fn drop(&mut self) {
+        if !self.temp_path.as_os_str().is_empty()
+            && let Err(error) = std::fs::remove_file(&self.temp_path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                "임시 출력 파일 삭제 실패 ({}): {error}",
+                self.temp_path.display()
+            );
+        }
+    }
+}
 
 impl SleepBlocker {
     fn new() -> Self {
@@ -68,6 +186,11 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
             progress_hwnd,
             "입력 파일과 출력 파일 수가 일치하지 않습니다.",
         );
+        return;
+    }
+
+    if let Err(message) = validate_job_paths(&job_data.input_files, &job_data.output_files) {
+        send_error(progress_hwnd, &message);
         return;
     }
 
@@ -226,18 +349,12 @@ fn process_single_file(
     })?;
     let reader = BufReader::new(input_file);
 
-    // 출력 파일 생성
-    let output_file = File::create(output_path).map_err(|e| {
-        format!(
-            "출력 파일을 생성할 수 없습니다: {}\n{}",
-            output_path.display(),
-            e
-        )
-    })?;
-    let mut writer = BufWriter::new(output_file);
+    // 최종 파일은 전체 번역과 flush가 성공한 뒤에만 교체한다.
+    let mut pending_output = PendingOutput::create(output_path)?;
 
     // UTF-8 BOM 쓰기
-    writer
+    pending_output
+        .writer()
         .write_all(&[0xEF, 0xBB, 0xBF])
         .map_err(|e| e.to_string())?;
 
@@ -276,7 +393,13 @@ fn process_single_file(
 
         let line = prev.take().expect("prev primed above");
         let translated = translate_line(&line, job_data, rt, http_client);
-        write_output(&mut writer, &line, &translated, job_data.write_type, false)?;
+        write_output(
+            pending_output.writer(),
+            &line,
+            &translated,
+            job_data.write_type,
+            false,
+        )?;
 
         idx += 1;
         *global_current += 1;
@@ -297,7 +420,13 @@ fn process_single_file(
             return Err("사용자가 취소했습니다.".to_string());
         }
         let translated = translate_line(&line, job_data, rt, http_client);
-        write_output(&mut writer, &line, &translated, job_data.write_type, true)?;
+        write_output(
+            pending_output.writer(),
+            &line,
+            &translated,
+            job_data.write_type,
+            true,
+        )?;
 
         idx += 1;
         *global_current += 1;
@@ -310,10 +439,7 @@ fn process_single_file(
         );
     }
 
-    // 버퍼 플러시
-    writer.flush().map_err(|e| e.to_string())?;
-
-    Ok(())
+    pending_output.persist()
 }
 
 /// 라인 번역.
@@ -443,5 +569,64 @@ fn post_wide_string(hwnd: HWND, msg: u32, s: &str) {
         // SAFETY: raw is still valid; we just leaked it via into_raw above.
         let _ = unsafe { Box::from_raw(raw) };
         tracing::warn!("PostMessageW failed for msg {msg:#x}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PendingOutput;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let sequence = TEST_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "anemone-file-output-test-{}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn dropped_pending_output_preserves_existing_file() {
+        let directory = TestDirectory::new();
+        let output = directory.0.join("result.txt");
+        std::fs::write(&output, "기존 결과").unwrap();
+
+        {
+            let mut pending = PendingOutput::create(&output).unwrap();
+            pending.writer().write_all(b"incomplete").unwrap();
+        }
+
+        assert_eq!(std::fs::read_to_string(output).unwrap(), "기존 결과");
+        assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn persisted_output_replaces_existing_file() {
+        let directory = TestDirectory::new();
+        let output = directory.0.join("result.txt");
+        std::fs::write(&output, "기존 결과").unwrap();
+
+        let mut pending = PendingOutput::create(&output).unwrap();
+        pending.writer().write_all("완성 결과".as_bytes()).unwrap();
+        pending.persist().unwrap();
+
+        assert_eq!(std::fs::read_to_string(output).unwrap(), "완성 결과");
+        assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
     }
 }

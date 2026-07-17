@@ -4,6 +4,8 @@
 //! Common Item Dialog (IFileOpenDialog / IFileSaveDialog) 사용.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -80,6 +82,91 @@ pub struct FileTransJobData {
 // WriteType, bool, Arc<AtomicBool>) are inherently Send+Sync.
 unsafe impl Send for FileTransJobData {}
 unsafe impl Sync for FileTransJobData {}
+
+/// Windows 파일 시스템의 대소문자 비구분 규칙에 맞춰 비교할 절대 경로 키를 만든다.
+fn normalized_path_key(path: &Path) -> std::result::Result<String, String> {
+    let absolute = std::path::absolute(path).map_err(|e| {
+        format!(
+            "경로를 절대 경로로 변환할 수 없습니다: {}\n{e}",
+            path.display()
+        )
+    })?;
+    let normalized = fs::canonicalize(&absolute).unwrap_or(absolute);
+    let text = normalized.to_string_lossy();
+    let text = text
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| text.strip_prefix(r"\\?\").map(str::to_owned))
+        .unwrap_or_else(|| text.into_owned());
+    Ok(text.to_lowercase())
+}
+
+/// 입력과 출력 경로가 서로 겹치거나 출력 경로끼리 중복되는지 검사한다.
+pub(crate) fn validate_job_paths(
+    inputs: &[PathBuf],
+    outputs: &[PathBuf],
+) -> std::result::Result<(), String> {
+    if inputs.len() != outputs.len() {
+        return Err("입력 파일과 출력 파일 수가 일치하지 않습니다.".to_string());
+    }
+
+    let input_keys = inputs
+        .iter()
+        .map(|path| normalized_path_key(path).map(|key| (key, path)))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut output_keys = HashSet::with_capacity(outputs.len());
+
+    for output in outputs {
+        let output_key = normalized_path_key(output)?;
+        if let Some((_, input)) = input_keys.iter().find(|(key, _)| key == &output_key) {
+            return Err(format!(
+                "출력 파일이 입력 파일과 같습니다.\n입력: {}\n출력: {}",
+                input.display(),
+                output.display()
+            ));
+        }
+        if !output_keys.insert(output_key) {
+            return Err(format!(
+                "출력 파일 경로가 중복됩니다.\n{}",
+                output.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// 입력 순서대로 충돌하지 않는 기본 출력 경로를 만든다.
+fn default_output_paths(inputs: &[PathBuf]) -> std::result::Result<Vec<PathBuf>, String> {
+    let input_keys = inputs
+        .iter()
+        .map(|path| normalized_path_key(path))
+        .collect::<std::result::Result<HashSet<_>, _>>()?;
+    let mut output_keys = HashSet::with_capacity(inputs.len());
+    let mut outputs = Vec::with_capacity(inputs.len());
+
+    for input in inputs {
+        let stem = input.file_stem().unwrap_or_default().to_string_lossy();
+        let parent = input.parent().unwrap_or(Path::new(""));
+        let mut suffix = 1usize;
+        loop {
+            let filename = if suffix == 1 {
+                format!("{stem}_번역.txt")
+            } else {
+                format!("{stem}_번역_{suffix}.txt")
+            };
+            let candidate = parent.join(filename);
+            let key = normalized_path_key(&candidate)?;
+            if !input_keys.contains(&key) && output_keys.insert(key) {
+                outputs.push(candidate);
+                break;
+            }
+            suffix += 1;
+        }
+    }
+
+    Ok(outputs)
+}
 
 /// 파일 번역 대화상자
 pub struct FileTransDialog {
@@ -400,14 +487,22 @@ impl FileTransDialog {
         }
 
         self.input_files = picked;
-        self.output_files.clear();
-
-        for input in &self.input_files {
-            let stem = input.file_stem().unwrap_or_default().to_string_lossy();
-            let parent = input.parent().unwrap_or(std::path::Path::new(""));
-            let output = parent.join(format!("{}_번역.txt", stem));
-            self.output_files.push(output);
-        }
+        self.output_files = match default_output_paths(&self.input_files) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                self.input_files.clear();
+                unsafe {
+                    let message = to_wide(&error);
+                    let _ = MessageBoxW(
+                        Some(self.hwnd),
+                        PCWSTR(message.as_ptr()),
+                        w!("경로 오류"),
+                        MB_ICONERROR,
+                    );
+                }
+                return;
+            }
+        };
 
         let input_display: Vec<String> = self
             .input_files
@@ -501,6 +596,19 @@ impl FileTransDialog {
             return;
         }
 
+        if let Err(error) = validate_job_paths(&self.input_files, &self.output_files) {
+            unsafe {
+                let message = to_wide(&error);
+                let _ = MessageBoxW(
+                    Some(self.hwnd),
+                    PCWSTR(message.as_ptr()),
+                    w!("경로 오류"),
+                    MB_ICONERROR,
+                );
+            }
+            return;
+        }
+
         // 현재 config 의 엔진 설정을 그대로 사용해 자격증명을 빌드.
         // 번역 다이얼로그(translate.rs)와 동일한 패턴.
         let (engine, source_lang, target_lang, credentials, dll, dat) = {
@@ -577,5 +685,47 @@ impl FileTransDialog {
         std::thread::spawn(move || {
             super::file_trans_thread::file_trans_thread(job_data);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_output_paths, validate_job_paths};
+    use std::path::PathBuf;
+
+    #[test]
+    fn rejects_output_matching_input_after_normalization() {
+        let input = PathBuf::from(r"C:\work\text\input.txt");
+        let output = PathBuf::from(r"c:\WORK\text\.\input.txt");
+
+        assert!(validate_job_paths(&[input], &[output]).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_outputs_after_normalization() {
+        let inputs = [
+            PathBuf::from(r"C:\work\a.txt"),
+            PathBuf::from(r"C:\work\b.txt"),
+        ];
+        let outputs = [
+            PathBuf::from(r"C:\work\result.txt"),
+            PathBuf::from(r"c:\WORK\.\result.txt"),
+        ];
+
+        assert!(validate_job_paths(&inputs, &outputs).is_err());
+    }
+
+    #[test]
+    fn makes_distinct_defaults_for_equal_stems() {
+        let inputs = [
+            PathBuf::from(r"C:\work\a.txt"),
+            PathBuf::from(r"C:\work\a.log"),
+        ];
+
+        let outputs = default_output_paths(&inputs).unwrap();
+
+        assert_eq!(outputs[0], PathBuf::from(r"C:\work\a_번역.txt"));
+        assert_eq!(outputs[1], PathBuf::from(r"C:\work\a_번역_2.txt"));
+        validate_job_paths(&inputs, &outputs).unwrap();
     }
 }
