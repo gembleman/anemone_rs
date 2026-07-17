@@ -10,10 +10,69 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{self, Receiver};
+use std::thread::JoinHandle;
 
 use crate::translation::{EngineCredentials, Language, TranslationEngine};
 
 pub(crate) use worker::run;
+
+/// 파일 번역 작업을 취소하는 스레드 안전한 핸들.
+#[derive(Clone)]
+pub(crate) struct CancelHandle(Arc<AtomicBool>);
+
+impl CancelHandle {
+    pub(crate) fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// 워커 수명과 진행 이벤트 수신기를 소유하는 파일 번역 작업.
+pub(crate) struct FileTransTask {
+    cancel: CancelHandle,
+    events: Receiver<ProgressEvent>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl FileTransTask {
+    pub(crate) fn cancel(&self) {
+        self.cancel.cancel();
+    }
+    pub(crate) fn drain_events(&self) -> Vec<ProgressEvent> {
+        self.events.try_iter().collect()
+    }
+}
+
+impl Drop for FileTransTask {
+    fn drop(&mut self) {
+        self.cancel();
+        // UI 스레드를 막지 않도록 완료 대기는 하지 않는다. JoinHandle은 작업 객체가
+        // 소유하며 drop 시 분리되고, 취소 토큰은 워커가 임시 파일을 정리하게 한다.
+        self.worker.take();
+    }
+}
+
+/// UI와 CLI가 공유하는 파일 번역 실행자.
+pub(crate) struct FileTransRunner;
+
+impl FileTransRunner {
+    pub(crate) fn start(mut job: FileTransJobData) -> FileTransTask {
+        let (sender, events) = mpsc::channel();
+        let cancel = CancelHandle(Arc::new(AtomicBool::new(false)));
+        job.cancel_token = cancel.0.clone();
+        let worker = std::thread::spawn(move || {
+            run(&job, |event| {
+                let _ = sender.send(event);
+            })
+        });
+        FileTransTask {
+            cancel,
+            events,
+            worker: Some(worker),
+        }
+    }
+}
 
 /// 출력 형식.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -141,8 +200,10 @@ pub(crate) fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, S
 
 #[cfg(test)]
 mod tests {
-    use super::{default_output_paths, validate_job_paths};
+    use super::{CancelHandle, FileTransTask, default_output_paths, validate_job_paths};
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, mpsc};
 
     #[test]
     fn rejects_output_matching_input_after_normalization() {
@@ -178,5 +239,18 @@ mod tests {
         assert_eq!(outputs[0], PathBuf::from(r"C:\work\a_번역.txt"));
         assert_eq!(outputs[1], PathBuf::from(r"C:\work\a_번역_2.txt"));
         validate_job_paths(&inputs, &outputs).unwrap();
+    }
+
+    #[test]
+    fn dropping_task_requests_cancellation_without_joining() {
+        let token = Arc::new(AtomicBool::new(false));
+        let (_sender, receiver) = mpsc::channel();
+        let task = FileTransTask {
+            cancel: CancelHandle(token.clone()),
+            events: receiver,
+            worker: None,
+        };
+        drop(task);
+        assert!(token.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

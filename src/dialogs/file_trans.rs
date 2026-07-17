@@ -6,8 +6,6 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use windows::{
     Win32::{
@@ -21,14 +19,16 @@ use windows::{
 };
 
 use super::file_dialog::{FileFilter, open_files_multi, save_file};
-use super::file_trans_progress::{FileTransProgressDialog, ProgressEventQueue, ProgressReporter};
+use super::file_trans_progress::FileTransProgressDialog;
 use super::helpers::{
     center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
     set_window_text, show_dialog_window, unregister_resource_dialog,
 };
 use crate::config::Config;
 use crate::define_dialog_instance;
-use crate::file_trans::{FileTransJobData, WriteType, default_output_paths, validate_job_paths};
+use crate::file_trans::{
+    FileTransJobData, FileTransRunner, WriteType, default_output_paths, validate_job_paths,
+};
 use crate::translation::{TranslationEngine, TranslationJobSpec};
 use crate::util::to_wide;
 
@@ -526,27 +526,13 @@ impl FileTransDialog {
             return;
         }
 
-        let cancel_token = Arc::new(AtomicBool::new(false));
-        let progress_events = Arc::new(ProgressEventQueue::default());
-        let progress_hwnd = match FileTransProgressDialog::show(
-            self.hwnd,
-            cancel_token.clone(),
-            progress_events.clone(),
-        ) {
-            Ok(hwnd) => hwnd,
-            Err(e) => {
-                tracing::error!("Failed to create progress dialog: {:?}", e);
-                return;
-            }
-        };
-
-        let progress = ProgressReporter::new(progress_hwnd, progress_events);
         let job_data = FileTransJobData {
             input_files: self.input_files.clone(),
             output_files: self.output_files.clone(),
             write_type: self.write_type,
             no_trans_linefeed: self.no_trans_linefeed,
-            cancel_token,
+            // runner가 작업별 취소 토큰을 설정한다.
+            cancel_token: Default::default(),
             engine: spec.engine(),
             source_lang: spec.source_lang(),
             target_lang: spec.target_lang(),
@@ -554,10 +540,9 @@ impl FileTransDialog {
             eztrans_dll_path: spec.eztrans_dll_path().to_owned(),
             eztrans_dat_path: spec.eztrans_dat_path().to_owned(),
         };
-
-        let worker = std::thread::spawn(move || {
-            crate::file_trans::run(&job_data, |event| progress.send(event));
-        });
-        FileTransProgressDialog::attach_worker(worker);
+        let task = FileTransRunner::start(job_data);
+        if let Err(e) = FileTransProgressDialog::show(self.hwnd, task) {
+            tracing::error!("Failed to create progress dialog: {:?}", e);
+        }
     }
 }

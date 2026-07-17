@@ -15,7 +15,6 @@ use windows::Win32::{
 
 use super::{FileTransJobData, ProgressEvent, WriteType, validate_job_paths};
 use crate::translation::{
-    TranslationEngine, get_eztrans_manager,
     http_common::shared_client,
     worker::{TranslationDispatch, TranslationRequest},
 };
@@ -182,20 +181,6 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     if let Err(message) = validate_job_paths(&job_data.input_files, &job_data.output_files) {
         report(ProgressEvent::Error(message));
         return;
-    }
-
-    // EzTrans 는 최초 한 번 dll/dat 을 매니저에 적재해야 한다. 실패하면 전체 작업
-    // 중단 — 라인마다 같은 에러로 실패하는 것보다 사전에 끊는 편이 친절하다.
-    if job_data.engine == TranslationEngine::EzTrans {
-        let manager = get_eztrans_manager();
-        let init_result = match manager.lock() {
-            Ok(mut mgr) => mgr.init(&job_data.eztrans_dll_path, &job_data.eztrans_dat_path),
-            Err(_) => Err("EzTrans 매니저 잠금 실패".to_string()),
-        };
-        if let Err(e) = init_result {
-            report(ProgressEvent::Error(format!("EzTrans 초기화 실패: {e}")));
-            return;
-        }
     }
 
     // 비동기 HTTP 엔진 호출용 자체 tokio runtime. 디스패치 워커를 거치지 않고

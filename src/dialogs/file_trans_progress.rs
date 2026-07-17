@@ -3,11 +3,7 @@
 //! 번역 진행 상황 표시 및 취소 기능.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 
 use windows::{
     Win32::{
@@ -28,9 +24,8 @@ use super::helpers::{
     register_resource_dialog, rescale_dialog_children_for_dpi, set_window_text, show_dialog_window,
     unregister_resource_dialog,
 };
-use crate::constants::WM_PROGRESS_EVENT;
 use crate::define_dialog_instance;
-use crate::file_trans::ProgressEvent;
+use crate::file_trans::{FileTransTask, ProgressEvent};
 use crate::util::to_wide;
 
 // 컨트롤 ID
@@ -54,50 +49,7 @@ struct ProgressState {
     list_size: i32,
 }
 
-#[derive(Default)]
-pub(crate) struct ProgressEventQueue {
-    events: Mutex<VecDeque<ProgressEvent>>,
-}
-
-impl ProgressEventQueue {
-    fn push(&self, event: ProgressEvent) {
-        self.events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push_back(event);
-    }
-
-    fn drain(&self) -> Vec<ProgressEvent> {
-        self.events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .drain(..)
-            .collect()
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct ProgressReporter {
-    hwnd: isize,
-    queue: Arc<ProgressEventQueue>,
-}
-
-impl ProgressReporter {
-    pub(crate) fn new(hwnd: HWND, queue: Arc<ProgressEventQueue>) -> Self {
-        Self {
-            hwnd: hwnd.0 as isize,
-            queue,
-        }
-    }
-
-    pub(crate) fn send(&self, event: ProgressEvent) {
-        self.queue.push(event);
-        let hwnd = HWND(self.hwnd as *mut std::ffi::c_void);
-        if unsafe { PostMessageW(Some(hwnd), WM_PROGRESS_EVENT, WPARAM(0), LPARAM(0)) }.is_err() {
-            tracing::warn!("진행률 이벤트 알림 전송 실패");
-        }
-    }
-}
+const PROGRESS_POLL_TIMER: usize = 1;
 
 impl ProgressState {
     fn apply(&mut self, event: &ProgressEvent) {
@@ -113,31 +65,11 @@ impl ProgressState {
     }
 }
 
-struct FileTransTask {
-    cancel_token: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
-}
-
-impl FileTransTask {
-    fn cancel(&self) {
-        self.cancel_token.store(true, Ordering::SeqCst);
-    }
-}
-
-impl Drop for FileTransTask {
-    fn drop(&mut self) {
-        self.cancel();
-        // UI 스레드를 막지 않도록 JoinHandle은 join하지 않고 분리한다.
-        self.worker.take();
-    }
-}
-
 /// 파일 번역 진행률 대화상자
 pub struct FileTransProgressDialog {
     hwnd: HWND,
     parent_hwnd: HWND,
     task: FileTransTask,
-    event_queue: Arc<ProgressEventQueue>,
     applied_dpi: u32,
     name_text: HWND,
     progress_bar: HWND,
@@ -154,8 +86,7 @@ define_dialog_instance!(PROGRESS_INSTANCE: FileTransProgressDialog);
 
 struct PendingProgress {
     parent: HWND,
-    cancel_token: Arc<AtomicBool>,
-    event_queue: Arc<ProgressEventQueue>,
+    task: FileTransTask,
 }
 
 thread_local! {
@@ -172,12 +103,7 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
 ) -> isize {
     if msg == WM_INITDIALOG {
         let pending = PROGRESS_PENDING.with(|slot| slot.borrow_mut().take());
-        let Some(PendingProgress {
-            parent,
-            cancel_token,
-            event_queue,
-        }) = pending
-        else {
+        let Some(PendingProgress { parent, task }) = pending else {
             PROGRESS_INIT_ERROR.with(|slot| {
                 *slot.borrow_mut() = Some("파일 번역 진행률 창 초기화 인자가 없습니다".into());
             });
@@ -185,10 +111,7 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
         };
 
         let dialog = Rc::new(RefCell::new(FileTransProgressDialog::new(
-            hwnd,
-            parent,
-            cancel_token,
-            event_queue,
+            hwnd, parent, task,
         )));
         PROGRESS_INSTANCE.with(|slot| {
             *slot.borrow_mut() = Some(dialog.clone());
@@ -219,7 +142,7 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
         return 0;
     };
 
-    if msg == WM_PROGRESS_EVENT {
+    if msg == WM_TIMER && wparam.0 == PROGRESS_POLL_TIMER {
         if let Ok(mut dialog) = dialog.try_borrow_mut() {
             dialog.drain_progress_events();
         }
@@ -242,11 +165,19 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
             }
             1
         }
-        // 닫기 버튼은 무시한다. 취소 버튼/Esc 또는 워커 완료·에러로만 닫힌다.
-        WM_CLOSE => 1,
+        // 닫기 요청도 취소와 동일하게 처리해 워커가 임시 파일을 정리하게 한다.
+        WM_CLOSE => {
+            if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                dialog.handle_cancel();
+            }
+            1
+        }
         WM_DESTROY => {
             if let Ok(dialog) = dialog.try_borrow() {
                 dialog.clear_taskbar_progress();
+            }
+            unsafe {
+                let _ = KillTimer(Some(hwnd), PROGRESS_POLL_TIMER);
             }
             unregister_resource_dialog(hwnd);
             PROGRESS_INSTANCE.with(|slot| {
@@ -261,12 +192,7 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
 }
 
 impl FileTransProgressDialog {
-    fn new(
-        hwnd: HWND,
-        parent: HWND,
-        cancel_token: Arc<AtomicBool>,
-        event_queue: Arc<ProgressEventQueue>,
-    ) -> Self {
+    fn new(hwnd: HWND, parent: HWND, task: FileTransTask) -> Self {
         // UI 스레드는 main()에서 STA로 초기화된다. 작업 표시줄 초기화 실패는
         // 진행률 창 자체의 실패로 취급하지 않는다.
         let taskbar = unsafe {
@@ -291,11 +217,7 @@ impl FileTransProgressDialog {
         Self {
             hwnd,
             parent_hwnd: parent,
-            task: FileTransTask {
-                cancel_token,
-                worker: None,
-            },
-            event_queue,
+            task,
             applied_dpi: crate::dpi::dpi_for_window(hwnd),
             name_text: HWND::default(),
             progress_bar: HWND::default(),
@@ -309,11 +231,7 @@ impl FileTransProgressDialog {
     }
 
     /// `resources/file_trans_progress.rc`의 모델리스 DIALOGEX 리소스를 연다.
-    pub(crate) fn show(
-        parent: HWND,
-        cancel_token: Arc<AtomicBool>,
-        event_queue: Arc<ProgressEventQueue>,
-    ) -> Result<HWND> {
+    pub(crate) fn show(parent: HWND, task: FileTransTask) -> Result<HWND> {
         let existing = PROGRESS_INSTANCE
             .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
         if let Some(hwnd) = existing
@@ -333,11 +251,7 @@ impl FileTransProgressDialog {
             slot.borrow_mut().take();
         });
         PROGRESS_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingProgress {
-                parent,
-                cancel_token,
-                event_queue,
-            });
+            *slot.borrow_mut() = Some(PendingProgress { parent, task });
         });
 
         let result = unsafe {
@@ -377,16 +291,6 @@ impl FileTransProgressDialog {
         Ok(hwnd)
     }
 
-    pub(crate) fn attach_worker(worker: JoinHandle<()>) {
-        PROGRESS_INSTANCE.with(|slot| {
-            if let Some(dialog) = slot.borrow().as_ref()
-                && let Ok(mut dialog) = dialog.try_borrow_mut()
-            {
-                dialog.task.worker = Some(worker);
-            }
-        });
-    }
-
     fn initialize_controls(&mut self) -> Result<()> {
         let get_control = |id| {
             unsafe { GetDlgItem(Some(self.hwnd), id) }.map_err(|_| {
@@ -403,6 +307,9 @@ impl FileTransProgressDialog {
         self.index_text = get_control(ctrl_id::INDEX_TEXT as i32)?;
         self.total_text = get_control(ctrl_id::TOTAL_TEXT as i32)?;
         self.cancel_btn = get_control(ctrl_id::BTN_CANCEL as i32)?;
+        unsafe {
+            SetTimer(Some(self.hwnd), PROGRESS_POLL_TIMER, 50, None);
+        }
         Ok(())
     }
 
@@ -461,7 +368,7 @@ impl FileTransProgressDialog {
     }
 
     fn drain_progress_events(&mut self) {
-        let events = self.event_queue.drain();
+        let events = self.task.drain_events();
         for event in events {
             self.handle_progress_event(event);
         }
@@ -610,9 +517,7 @@ impl FileTransProgressDialog {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileTransTask, ProgressEvent, ProgressEventQueue, ProgressState};
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use super::{ProgressEvent, ProgressState};
 
     #[test]
     fn progress_events_update_model_state() {
@@ -637,34 +542,5 @@ mod tests {
                 list_size: 40,
             }
         );
-    }
-
-    #[test]
-    fn event_queue_preserves_order_and_owns_strings() {
-        let queue = ProgressEventQueue::default();
-        queue.push(ProgressEvent::FileName("첫 파일.txt".to_string()));
-        queue.push(ProgressEvent::Error("오류".to_string()));
-
-        assert_eq!(
-            queue.drain(),
-            vec![
-                ProgressEvent::FileName("첫 파일.txt".to_string()),
-                ProgressEvent::Error("오류".to_string()),
-            ]
-        );
-        assert!(queue.drain().is_empty());
-    }
-
-    #[test]
-    fn dropping_task_requests_cancellation_without_joining() {
-        let cancel_token = Arc::new(AtomicBool::new(false));
-        let task = FileTransTask {
-            cancel_token: cancel_token.clone(),
-            worker: None,
-        };
-
-        drop(task);
-
-        assert!(cancel_token.load(Ordering::SeqCst));
     }
 }
