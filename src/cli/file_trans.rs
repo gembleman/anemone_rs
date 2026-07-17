@@ -9,9 +9,10 @@ use crate::config::Config;
 use crate::file_trans::{
     FileTransJobData, ProgressEvent, WriteType as CoreWriteType, run as run_file_trans,
 };
+use crate::translation::TranslationJobSpec;
 
 use super::helpers::{JsonVal, json_object};
-use super::translate::{build_credentials, resolve_engine, resolve_languages};
+use super::translate::{resolve_engine, resolve_languages};
 
 #[derive(clap::Args)]
 pub(super) struct Args {
@@ -51,20 +52,16 @@ pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
 
     let config = Config::load_or_default();
     let engine = resolve_engine(engine, &config);
-    let (source_lang, target_lang) = resolve_languages(&source, &target, &config, engine)?;
+    let (source_lang, target_lang) = resolve_languages(&source, &target, &config)?;
 
-    let credentials = build_credentials(engine, &config)?;
-    let defaults = crate::config::TranslationConfig::default();
-    let dll = if config.translation.eztrans_dll_path.is_empty() {
-        defaults.eztrans_dll_path
-    } else {
-        config.translation.eztrans_dll_path.clone()
-    };
-    let dat = if config.translation.eztrans_dat_path.is_empty() {
-        defaults.eztrans_dat_path
-    } else {
-        config.translation.eztrans_dat_path.clone()
-    };
+    let spec = TranslationJobSpec::with_engine_languages(
+        &config.translation,
+        engine,
+        source_lang,
+        target_lang,
+    )
+    .map_err(|error| error.to_string())?;
+    spec.prepare().map_err(|error| error.to_string())?;
 
     let job = FileTransJobData {
         input_files: vec![input],
@@ -72,12 +69,12 @@ pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
         write_type: write_type.into(),
         no_trans_linefeed,
         cancel_token: Arc::new(AtomicBool::new(false)),
-        engine,
-        source_lang,
-        target_lang,
-        credentials,
-        eztrans_dll_path: dll,
-        eztrans_dat_path: dat,
+        engine: spec.engine(),
+        source_lang: spec.source_lang(),
+        target_lang: spec.target_lang(),
+        credentials: spec.credentials(),
+        eztrans_dll_path: spec.eztrans_dll_path().to_owned(),
+        eztrans_dat_path: spec.eztrans_dat_path().to_owned(),
     };
     let total = Cell::new(0usize);
     let error = RefCell::new(None);

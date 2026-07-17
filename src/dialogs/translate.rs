@@ -34,7 +34,7 @@ use crate::clipboard::{ClipboardGuard, OwnedGlobalMemory};
 use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::{
-    Language, LlmProvider, TranslationEngine, get_eztrans_manager, request_translation,
+    Language, LlmProvider, TranslationEngine, TranslationJobSpec, request_translation,
     take_response, unregister_translation_hwnd,
 };
 
@@ -101,7 +101,6 @@ pub struct TranslateDialog {
     one_go: bool,
     no_linefeed: bool,
     output_format: OutputFormat,
-    engine_initialized: bool,
     /// 번역 진행 중 여부
     translating: bool,
 }
@@ -228,7 +227,6 @@ impl TranslateDialog {
             one_go: false,
             no_linefeed: false,
             output_format: OutputFormat::Normal,
-            engine_initialized: false,
             translating: false,
         }
     }
@@ -440,13 +438,11 @@ impl TranslateDialog {
                     let engine = TranslationEngine::from_u8(engine_idx);
                     self.populate_language_combos(engine);
                     self.update_llm_group_visibility(engine);
-                    self.engine_initialized = false;
                 }
                 self.apply_current_settings();
             }
             COMBO_LLM_PROVIDER if notify_code == 1 => {
                 self.apply_llm_provider();
-                self.engine_initialized = false;
             }
             EDIT_LLM_MODEL if notify_code == EN_CHANGE => {
                 self.apply_llm_model();
@@ -574,41 +570,6 @@ impl TranslateDialog {
         let _ = set_window_text(self.dest_edit, text);
     }
 
-    /// 번역 엔진 초기화
-    fn init_translation_engine(&mut self) -> std::result::Result<(), String> {
-        if self.engine_initialized {
-            return Ok(());
-        }
-
-        let config = self.config.borrow();
-        let engine = config.translation.get_engine();
-
-        if engine == TranslationEngine::EzTrans {
-            if config.translation.eztrans_dll_path.is_empty()
-                || config.translation.eztrans_dat_path.is_empty()
-            {
-                return Err(
-                    "EzTrans 경로가 설정되지 않았습니다. 번역 설정에서 경로를 지정하세요."
-                        .to_string(),
-                );
-            }
-            let manager = get_eztrans_manager();
-            if let Ok(mut mgr) = manager.lock() {
-                if let Err(e) = mgr.init(
-                    &config.translation.eztrans_dll_path,
-                    &config.translation.eztrans_dat_path,
-                ) {
-                    return Err(format!("EzTrans 초기화 실패: {}", e));
-                }
-            } else {
-                return Err("EzTrans 매니저 잠금 실패".to_string());
-            }
-        }
-
-        self.engine_initialized = true;
-        Ok(())
-    }
-
     /// 현재 선택된 엔진/언어를 매니저에 적용
     fn apply_current_settings(&self) {
         // SAFETY: combo handles are valid controls from the resource template. SendMessageW with
@@ -650,11 +611,6 @@ impl TranslateDialog {
             return;
         }
 
-        if let Err(e) = self.init_translation_engine() {
-            self.set_dest_text(&format!("[오류] {}", e));
-            return;
-        }
-
         self.apply_current_settings();
 
         let text = if self.no_linefeed {
@@ -663,28 +619,21 @@ impl TranslateDialog {
             source
         };
 
-        let (engine, source_lang, target_lang, credentials) = {
-            use crate::translation::EngineCredentials;
+        let spec = {
             let config = self.config.borrow();
-            let engine = config.translation.get_engine();
-            let source_lang = config.translation.get_source_language();
-            let target_lang = config.translation.get_target_language();
-            let credentials = match engine {
-                TranslationEngine::DeepL => EngineCredentials::DeepL {
-                    keys: config.translation.deepl_effective_keys(),
-                    strategy: config.translation.deepl_strategy(),
-                },
-                TranslationEngine::Papago => EngineCredentials::Papago {
-                    client_id: config.translation.papago_client_id.clone(),
-                    client_secret: config.translation.papago_client_secret.clone(),
-                },
-                TranslationEngine::Llm => {
-                    EngineCredentials::Llm(config.translation.llm.to_call_params())
-                }
-                _ => EngineCredentials::None,
-            };
-            (engine, source_lang, target_lang, credentials)
+            TranslationJobSpec::from_config(&config.translation)
         };
+        let spec = match spec {
+            Ok(spec) => spec,
+            Err(error) => {
+                self.set_dest_text(&format!("[오류] {error}"));
+                return;
+            }
+        };
+        if let Err(error) = spec.prepare() {
+            self.set_dest_text(&format!("[오류] {error}"));
+            return;
+        }
 
         self.set_dest_text("[번역 중...]");
         self.translating = true;
@@ -692,10 +641,10 @@ impl TranslateDialog {
         request_translation(
             self.hwnd,
             text,
-            engine,
-            source_lang,
-            target_lang,
-            credentials,
+            spec.engine(),
+            spec.source_lang(),
+            spec.target_lang(),
+            spec.credentials(),
         );
     }
 

@@ -4,10 +4,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::translation::http_common::shared_client;
 use crate::translation::worker::{TranslationDispatch, TranslationRequest};
-use crate::translation::{
-    EngineCredentials, Language, TranslationEngine, get_eztrans_manager, lang_utils,
-    translate_with_eztrans,
-};
+use crate::translation::{Language, TranslationEngine, TranslationJobSpec, lang_utils};
 
 use super::helpers::{JsonVal, json_object};
 
@@ -44,10 +41,16 @@ pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
 
     let config = Config::load_or_default();
     let engine = resolve_engine(args.engine, &config);
-    let (source_lang, target_lang) =
-        resolve_languages(&args.source, &args.target, &config, engine)?;
+    let (source_lang, target_lang) = resolve_languages(&args.source, &args.target, &config)?;
 
-    let translated = run_translation(&config, engine, source_lang, target_lang, &text)?;
+    let spec = TranslationJobSpec::with_engine_languages(
+        &config.translation,
+        engine,
+        source_lang,
+        target_lang,
+    )
+    .map_err(|error| error.to_string())?;
+    let translated = run_translation(&spec, &text)?;
 
     if json {
         println!(
@@ -68,58 +71,8 @@ pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
 
 /// 엔진/언어를 받아 실제 번역을 수행. HTTP 엔진은 별도 tokio 런타임에서
 /// `translate_async` 를 `block_on` 한다 (디스패치 큐 우회).
-fn run_translation(
-    config: &Config,
-    engine: TranslationEngine,
-    source: Language,
-    target: Language,
-    text: &str,
-) -> Result<String, String> {
-    match engine {
-        TranslationEngine::EzTrans => translate_via_eztrans(config, source, target, text),
-        _ => translate_via_http(config, engine, source, target, text),
-    }
-}
-
-fn translate_via_eztrans(
-    config: &Config,
-    source: Language,
-    target: Language,
-    text: &str,
-) -> Result<String, String> {
-    let defaults = crate::config::TranslationConfig::default();
-    let dll = if config.translation.eztrans_dll_path.is_empty() {
-        defaults.eztrans_dll_path.as_str()
-    } else {
-        config.translation.eztrans_dll_path.as_str()
-    };
-    let dat = if config.translation.eztrans_dat_path.is_empty() {
-        defaults.eztrans_dat_path.as_str()
-    } else {
-        config.translation.eztrans_dat_path.as_str()
-    };
-    if dll.is_empty() || dat.is_empty() {
-        return Err("eztrans 경로를 확인할 수 없습니다. config.toml 의 eztrans_dll_path/eztrans_dat_path 를 설정하세요.".to_string());
-    }
-    {
-        let manager = get_eztrans_manager();
-        let mut mgr = manager
-            .lock()
-            .map_err(|_| "EzTrans 매니저 잠금 실패".to_string())?;
-        mgr.init(dll, dat)
-            .map_err(|e| format!("EzTrans 초기화 실패: {e}"))?;
-    }
-    translate_with_eztrans(text, source, target).map_err(|e| format!("번역 실패: {e}"))
-}
-
-fn translate_via_http(
-    config: &Config,
-    engine: TranslationEngine,
-    source: Language,
-    target: Language,
-    text: &str,
-) -> Result<String, String> {
-    let credentials = build_credentials(engine, config)?;
+fn run_translation(spec: &TranslationJobSpec, text: &str) -> Result<String, String> {
+    spec.prepare().map_err(|error| error.to_string())?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -128,49 +81,13 @@ fn translate_via_http(
     let req = TranslationRequest {
         id: 0,
         text: Arc::from(text),
-        engine,
-        source_lang: source,
-        target_lang: target,
-        credentials,
+        engine: spec.engine(),
+        source_lang: spec.source_lang(),
+        target_lang: spec.target_lang(),
+        credentials: spec.credentials(),
     };
     rt.block_on(TranslationDispatch::translate_async(&req, &client))
         .map_err(|e| format!("번역 실패: {e}"))
-}
-
-pub(super) fn build_credentials(
-    engine: TranslationEngine,
-    config: &Config,
-) -> Result<EngineCredentials, String> {
-    Ok(match engine {
-        TranslationEngine::EzTrans | TranslationEngine::Google => EngineCredentials::None,
-        TranslationEngine::DeepL => {
-            let keys = config.translation.deepl_effective_keys();
-            if keys.is_empty() {
-                return Err("DeepL API 키가 설정되지 않았습니다. config set translation.deepl_api_key <KEY>".to_string());
-            }
-            EngineCredentials::DeepL {
-                keys,
-                strategy: config.translation.deepl_strategy(),
-            }
-        }
-        TranslationEngine::Papago => {
-            if config.translation.papago_client_id.is_empty()
-                || config.translation.papago_client_secret.is_empty()
-            {
-                return Err("Papago client_id/client_secret 가 설정되지 않았습니다.".to_string());
-            }
-            EngineCredentials::Papago {
-                client_id: config.translation.papago_client_id.clone(),
-                client_secret: config.translation.papago_client_secret.clone(),
-            }
-        }
-        TranslationEngine::Llm => {
-            if config.translation.llm.api_key.is_empty() {
-                return Err("LLM api_key 가 설정되지 않았습니다.".to_string());
-            }
-            EngineCredentials::Llm(config.translation.llm.to_call_params())
-        }
-    })
 }
 
 pub(super) fn resolve_engine(
@@ -187,7 +104,6 @@ pub(super) fn resolve_languages(
     from: &Option<String>,
     to: &Option<String>,
     config: &Config,
-    engine: TranslationEngine,
 ) -> Result<(Language, Language), String> {
     let source = match from {
         Some(s) => {
@@ -201,11 +117,6 @@ pub(super) fn resolve_languages(
         }
         None => config.translation.get_target_language(),
     };
-    // EzTrans 는 JP->KR 만 — 다른 조합이면 명확히 거부.
-    if engine == TranslationEngine::EzTrans && (source != Language::Jpn || target != Language::Kor)
-    {
-        return Err("EzTrans 는 일본어(ja) → 한국어(ko) 만 지원합니다.".to_string());
-    }
     Ok((source, target))
 }
 

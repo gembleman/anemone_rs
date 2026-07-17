@@ -29,7 +29,7 @@ use super::helpers::{
 use crate::config::Config;
 use crate::define_dialog_instance;
 use crate::file_trans::{FileTransJobData, WriteType, default_output_paths, validate_job_paths};
-use crate::translation::{EngineCredentials, TranslationEngine};
+use crate::translation::{TranslationEngine, TranslationJobSpec};
 use crate::util::to_wide;
 
 // 컨트롤 ID
@@ -493,48 +493,34 @@ impl FileTransDialog {
             return;
         }
 
-        // 현재 config 의 엔진 설정을 그대로 사용해 자격증명을 빌드.
-        // 번역 다이얼로그(translate.rs)와 동일한 패턴.
-        let (engine, source_lang, target_lang, credentials, dll, dat) = {
+        let spec = {
             let config = self.config.borrow();
-            let engine = config.translation.get_engine();
-            let source_lang = config.translation.get_source_language();
-            let target_lang = config.translation.get_target_language();
-            let credentials = match engine {
-                TranslationEngine::DeepL => EngineCredentials::DeepL {
-                    keys: config.translation.deepl_effective_keys(),
-                    strategy: config.translation.deepl_strategy(),
-                },
-                TranslationEngine::Papago => EngineCredentials::Papago {
-                    client_id: config.translation.papago_client_id.clone(),
-                    client_secret: config.translation.papago_client_secret.clone(),
-                },
-                TranslationEngine::Llm => {
-                    EngineCredentials::Llm(config.translation.llm.to_call_params())
-                }
-                _ => EngineCredentials::None,
-            };
-            (
-                engine,
-                source_lang,
-                target_lang,
-                credentials,
-                config.translation.eztrans_dll_path.clone(),
-                config.translation.eztrans_dat_path.clone(),
-            )
+            TranslationJobSpec::from_config(&config.translation)
         };
-
-        // EzTrans 선택 시 경로 미설정이면 즉시 안내하고 중단.
-        if engine == TranslationEngine::EzTrans && (dll.is_empty() || dat.is_empty()) {
+        let spec = match spec {
+            Ok(spec) => spec,
+            Err(error) => {
+                unsafe {
+                    let message = to_wide(&error.to_string());
+                    let _ = MessageBoxW(
+                        Some(self.hwnd),
+                        PCWSTR(message.as_ptr()),
+                        w!("번역 설정 오류"),
+                        MB_ICONERROR,
+                    );
+                }
+                return;
+            }
+        };
+        if let Err(error) = spec.prepare() {
             // SAFETY: self.hwnd is a valid dialog window handle used as the message box owner.
             unsafe {
+                let message = to_wide(&error.to_string());
                 let _ = MessageBoxW(
                     Some(self.hwnd),
-                    w!(
-                        "EzTrans 경로가 설정되지 않았습니다. 번역 설정에서 DLL/DAT 경로를 지정하세요."
-                    ),
-                    w!("알림"),
-                    MB_ICONINFORMATION,
+                    PCWSTR(message.as_ptr()),
+                    w!("번역 엔진 오류"),
+                    MB_ICONERROR,
                 );
             }
             return;
@@ -561,12 +547,12 @@ impl FileTransDialog {
             write_type: self.write_type,
             no_trans_linefeed: self.no_trans_linefeed,
             cancel_token,
-            engine,
-            source_lang,
-            target_lang,
-            credentials,
-            eztrans_dll_path: dll,
-            eztrans_dat_path: dat,
+            engine: spec.engine(),
+            source_lang: spec.source_lang(),
+            target_lang: spec.target_lang(),
+            credentials: spec.credentials(),
+            eztrans_dll_path: spec.eztrans_dll_path().to_owned(),
+            eztrans_dat_path: spec.eztrans_dat_path().to_owned(),
         };
 
         let worker = std::thread::spawn(move || {

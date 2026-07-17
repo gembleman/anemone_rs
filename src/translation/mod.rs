@@ -14,12 +14,14 @@ pub mod deepl;
 mod eztrans;
 pub mod google;
 pub(crate) mod http_common;
+mod job;
 pub mod llm;
 pub mod papago;
 pub mod worker;
 
 pub use eztrans::EzTransTranslator;
 pub use isolang::Language;
+pub use job::TranslationJobSpec;
 pub use llm::LlmProvider;
 pub use worker::{
     EngineCredentials, shutdown, take_response, translate as request_translation,

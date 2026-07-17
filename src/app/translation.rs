@@ -26,38 +26,19 @@ impl App {
 
     /// 비동기 번역 요청
     fn request_translation_async(&mut self, text: &str) {
-        use crate::translation::{EngineCredentials, TranslationEngine, get_eztrans_manager};
+        use crate::translation::TranslationJobSpec;
 
         let config = self.config.borrow();
-        let engine = config.translation.get_engine();
-        let source_lang = config.translation.get_source_language();
-        let target_lang = config.translation.get_target_language();
-        let credentials = match engine {
-            TranslationEngine::DeepL => EngineCredentials::DeepL {
-                keys: config.translation.deepl_effective_keys(),
-                strategy: config.translation.deepl_strategy(),
-            },
-            TranslationEngine::Papago => EngineCredentials::Papago {
-                client_id: config.translation.papago_client_id.clone(),
-                client_secret: config.translation.papago_client_secret.clone(),
-            },
-            TranslationEngine::Llm => {
-                EngineCredentials::Llm(config.translation.llm.to_call_params())
+        let spec = match TranslationJobSpec::from_config(&config.translation) {
+            Ok(spec) => spec,
+            Err(error) => {
+                tracing::warn!("자동 번역 요청을 구성할 수 없습니다: {error}");
+                return;
             }
-            _ => EngineCredentials::None,
         };
-
-        // EzTrans 초기화 (필요시)
-        if engine == TranslationEngine::EzTrans && !config.translation.eztrans_dll_path.is_empty() {
-            let manager = get_eztrans_manager();
-            if let Ok(mut mgr) = manager.lock()
-                && let Err(e) = mgr.init(
-                    &config.translation.eztrans_dll_path,
-                    &config.translation.eztrans_dat_path,
-                )
-            {
-                tracing::warn!("EzTrans init failed: {e}");
-            }
+        if let Err(error) = spec.prepare() {
+            tracing::warn!("자동 번역 엔진을 준비할 수 없습니다: {error}");
+            return;
         }
 
         drop(config);
@@ -75,10 +56,10 @@ impl App {
         request_translation(
             self.hwnd,
             text.to_string(),
-            engine,
-            source_lang,
-            target_lang,
-            credentials,
+            spec.engine(),
+            spec.source_lang(),
+            spec.target_lang(),
+            spec.credentials(),
         );
     }
 
