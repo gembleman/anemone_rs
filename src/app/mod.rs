@@ -27,8 +27,8 @@ use crate::constants::{
 use crate::d2d::{CompositionRenderer, D2DRenderer};
 use crate::dialogs::helpers::{Dialog, dispatch_resource_dialog_message};
 use crate::dialogs::{
-    BacklogDialog, FileTransDialog, HookSettingsDialog, LogEntry, SettingsDialog, TranslateDialog,
-    add_to_backlog,
+    BacklogDialog, BacklogStore, FileTransDialog, HookSettingsDialog, LogEntry, SettingsDialog,
+    TranslateDialog, add_to_backlog,
 };
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
@@ -67,6 +67,7 @@ pub struct App {
     settings_hwnd: Option<HWND>,
     translate_hwnd: Option<HWND>,
     backlog_hwnd: Option<HWND>,
+    backlog_store: Rc<RefCell<BacklogStore>>,
     file_trans_hwnd: Option<HWND>,
     hook_settings_hwnd: Option<HWND>,
     magnetic: Option<MagneticManager>,

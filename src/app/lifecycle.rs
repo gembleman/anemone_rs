@@ -72,6 +72,7 @@ impl App {
                 settings_hwnd: None,
                 translate_hwnd: None,
                 backlog_hwnd: None,
+                backlog_store: Rc::new(RefCell::new(BacklogStore::new())),
                 file_trans_hwnd: None,
                 hook_settings_hwnd: None,
                 magnetic: None,

@@ -112,7 +112,7 @@ impl App {
             if let Some(trans) = translation {
                 entry = entry.with_translation(trans);
             }
-            add_to_backlog(entry);
+            add_to_backlog(&self.backlog_store, entry);
         }
 
         if let Err(e) = self.paint() {
