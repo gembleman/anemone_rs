@@ -10,7 +10,6 @@ use std::rc::Rc;
 use windows::{
     Win32::{
         Foundation::*,
-        Graphics::Gdi::*,
         System::DataExchange::*,
         System::LibraryLoader::GetModuleHandleW,
         System::Memory::*,
@@ -23,7 +22,10 @@ use windows::{
     core::*,
 };
 
-use super::helpers::{Dialog, DialogControls};
+use super::helpers::{
+    center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
+    show_dialog_window, unregister_resource_dialog,
+};
 use crate::define_dialog_instance;
 use crate::util::to_wide;
 
@@ -36,6 +38,7 @@ use crate::translation::{
 
 // 컨트롤 ID
 mod ctrl_id {
+    pub const DIALOG: u16 = 105;
     pub const SOURCE_EDIT: u16 = 2001;
     pub const DEST_EDIT: u16 = 2002;
     pub const BTN_TRANSLATE: u16 = 2003;
@@ -54,6 +57,10 @@ mod ctrl_id {
     pub const COMBO_LLM_PROVIDER: u16 = 2030;
     pub const EDIT_LLM_MODEL: u16 = 2031;
     pub const EDIT_LLM_API_KEY: u16 = 2032;
+    pub const LLM_GROUP: u16 = 2040;
+    pub const LLM_PROVIDER_LABEL: u16 = 2041;
+    pub const LLM_MODEL_LABEL: u16 = 2042;
+    pub const LLM_API_KEY_LABEL: u16 = 2043;
 }
 
 // 서브클래스 ID (uIdSubclass): 컨트롤별로 구분
@@ -75,6 +82,7 @@ pub enum OutputFormat {
 pub struct TranslateDialog {
     hwnd: HWND,
     config: Rc<RefCell<Config>>,
+    applied_dpi: u32,
     source_edit: HWND,
     dest_edit: HWND,
     engine_combo: HWND,
@@ -96,35 +104,113 @@ pub struct TranslateDialog {
     translating: bool,
 }
 
-impl DialogControls for TranslateDialog {
-    fn dialog_hwnd(&self) -> HWND {
-        self.hwnd
+define_dialog_instance!(TRANSLATE_INSTANCE: TranslateDialog);
+
+struct PendingTranslate {
+    config: Rc<RefCell<Config>>,
+}
+
+thread_local! {
+    static TRANSLATE_PENDING: RefCell<Option<PendingTranslate>> = const { RefCell::new(None) };
+    static TRANSLATE_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// `resources/translate.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
+unsafe extern "system" fn translate_dialog_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> isize {
+    unsafe {
+        if msg == WM_INITDIALOG {
+            let pending = TRANSLATE_PENDING.with(|slot| slot.borrow_mut().take());
+            let Some(PendingTranslate { config }) = pending else {
+                TRANSLATE_INIT_ERROR.with(|slot| {
+                    *slot.borrow_mut() = Some("번역 창 초기화 인자가 없습니다".into());
+                });
+                return 0;
+            };
+
+            let dialog = Rc::new(RefCell::new(TranslateDialog::new(hwnd, config)));
+            TRANSLATE_INSTANCE.with(|slot| {
+                *slot.borrow_mut() = Some(dialog.clone());
+            });
+
+            if let Err(error) = dialog.borrow_mut().initialize_controls() {
+                TRANSLATE_INSTANCE.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                TRANSLATE_INIT_ERROR.with(|slot| {
+                    *slot.borrow_mut() = Some(error.to_string());
+                });
+                return 0;
+            }
+            register_resource_dialog(hwnd);
+            return 1;
+        }
+
+        let instance = TRANSLATE_INSTANCE.with(|slot| {
+            let Ok(guard) = slot.try_borrow() else {
+                return None;
+            };
+            guard.clone()
+        });
+        let Some(dialog) = instance else {
+            return 0;
+        };
+
+        match msg {
+            WM_TRANSLATION_COMPLETE => {
+                if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                    dialog.handle_translation_complete(wparam.0 as u64);
+                }
+                1
+            }
+            WM_DPICHANGED => {
+                if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                    dialog.handle_dpi_changed(wparam, lparam);
+                }
+                1
+            }
+            WM_COMMAND => {
+                let id = (wparam.0 & 0xFFFF) as u16;
+                let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                if id == IDCANCEL.0 as u16 {
+                    let _ = DestroyWindow(hwnd);
+                } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                    if id == ctrl_id::SOURCE_EDIT && notify_code == EN_CHANGE && dialog.one_go {
+                        dialog.do_translate();
+                    }
+                    dialog.handle_command(id, notify_code);
+                }
+                1
+            }
+            WM_CLOSE => {
+                let _ = DestroyWindow(hwnd);
+                1
+            }
+            WM_DESTROY => {
+                unregister_translation_hwnd(hwnd);
+                unregister_resource_dialog(hwnd);
+                TRANSLATE_INSTANCE.with(|slot| {
+                    if let Ok(mut guard) = slot.try_borrow_mut() {
+                        *guard = None;
+                    }
+                });
+                1
+            }
+            _ => 0,
+        }
     }
 }
 
-define_dialog_instance!(TRANSLATE_INSTANCE: TranslateDialog);
-
-impl Dialog for TranslateDialog {
-    type Params = Rc<RefCell<Config>>;
-
-    const CLASS_NAME: PCWSTR = w!("AnemoneTranslateClass");
-    const TITLE: PCWSTR = w!("번역");
-    const WIDTH: i32 = 510;
-    // LLM 그룹(엔진이 LLM일 때만 노출) 자리를 옵션/동작 아래에 확보. 비-LLM 엔진에서도
-    // 다이얼로그 높이는 동일하지만 LLM 그룹 컨트롤은 hide 처리한다.
-    const HEIGHT: i32 = 540;
-    const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
-
-    fn instance_slot() -> &'static std::thread::LocalKey<
-        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-    > {
-        &TRANSLATE_INSTANCE
-    }
-
-    fn init(hwnd: HWND, _parent: HWND, config: Self::Params) -> Self {
-        TranslateDialog {
+impl TranslateDialog {
+    fn new(hwnd: HWND, config: Rc<RefCell<Config>>) -> Self {
+        Self {
             hwnd,
             config,
+            applied_dpi: crate::dpi::dpi_for_window(hwnd),
             source_edit: HWND::default(),
             dest_edit: HWND::default(),
             engine_combo: HWND::default(),
@@ -145,307 +231,188 @@ impl Dialog for TranslateDialog {
         }
     }
 
-    fn create_controls(&mut self) -> Result<()> {
-        // SAFETY: self.hwnd is a valid window handle from show_impl. All CreateWindowExW
-        // and SendMessageW calls use valid handles. SetWindowSubclass installs a Comctl32
-        // subclass for the edit controls and is auto-cleaned up on control destruction.
-        unsafe {
-            let hinst = GetModuleHandleW(None)?;
-            let hfont = GetStockObject(DEFAULT_GUI_FONT);
-            let dpi = crate::dpi::dpi_for_window(self.hwnd);
-            let s = |v: i32| crate::dpi::scale(v, dpi);
-
-            // ====== 번역 엔진 선택 그룹 ======
-            self.create_group_box(10, 5, 475, 55, "번역 설정")?;
-
-            self.create_label(20, 28, 40, 18, "엔진:")?;
-            self.engine_combo = DialogControls::create_combobox(
-                self,
-                65,
-                25,
-                100,
-                150,
-                ctrl_id::COMBO_ENGINE,
-                &[],
-                0,
-            )?;
-            self.add_combobox_item(self.engine_combo, "EzTrans");
-            self.add_combobox_item(self.engine_combo, "Google");
-            self.add_combobox_item(self.engine_combo, "DeepL");
-            self.add_combobox_item(self.engine_combo, "Papago");
-            self.add_combobox_item(self.engine_combo, "LLM");
-
-            self.create_label(180, 28, 40, 18, "소스:")?;
-            self.source_lang_combo = DialogControls::create_combobox(
-                self,
-                220,
-                25,
-                100,
-                150,
-                ctrl_id::COMBO_SOURCE_LANG,
-                &[],
-                0,
-            )?;
-
-            self.create_label(335, 28, 40, 18, "타겟:")?;
-            self.target_lang_combo = DialogControls::create_combobox(
-                self,
-                375,
-                25,
-                100,
-                150,
-                ctrl_id::COMBO_TARGET_LANG,
-                &[],
-                0,
-            )?;
-
-            // 설정에서 초기값 로드
-            {
-                let config = self.config.borrow();
-                let engine = config.translation.get_engine();
-                let _ = SendMessageW(
-                    self.engine_combo,
-                    CB_SETCURSEL,
-                    Some(WPARAM(config.translation.engine_as_u8() as usize)),
-                    None,
-                );
-                self.populate_language_combos(engine);
-                let _ = SendMessageW(
-                    self.source_lang_combo,
-                    CB_SETCURSEL,
-                    Some(WPARAM(config.translation.source_lang_index(engine))),
-                    None,
-                );
-                let _ = SendMessageW(
-                    self.target_lang_combo,
-                    CB_SETCURSEL,
-                    Some(WPARAM(config.translation.target_lang_index(engine))),
-                    None,
-                );
+    /// `resources/translate.rc`의 모델리스 DIALOGEX 리소스를 연다.
+    pub fn show(parent: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> {
+        let existing = TRANSLATE_INSTANCE
+            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
+        if let Some(hwnd) = existing
+            && unsafe { IsWindow(Some(hwnd)).as_bool() }
+        {
+            unsafe {
+                let _ = SetForegroundWindow(hwnd);
             }
+            return Ok(hwnd);
+        }
 
-            // ====== 원문 입력 그룹 ======
-            self.create_group_box(10, 65, 475, 130, "원문 입력")?;
+        let instance = unsafe { GetModuleHandleW(None)? };
+        TRANSLATE_INIT_ERROR.with(|slot| {
+            slot.borrow_mut().take();
+        });
+        TRANSLATE_PENDING.with(|slot| {
+            *slot.borrow_mut() = Some(PendingTranslate { config });
+        });
 
-            self.source_edit = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                w!("EDIT"),
-                w!(""),
-                WINDOW_STYLE(
-                    WS_CHILD.0
-                        | WS_VISIBLE.0
-                        | WS_VSCROLL.0
-                        | ES_MULTILINE as u32
-                        | ES_AUTOVSCROLL as u32
-                        | ES_WANTRETURN as u32,
-                ),
-                s(20),
-                s(85),
-                s(455),
-                s(100),
-                Some(self.hwnd),
-                Some(HMENU(ctrl_id::SOURCE_EDIT as isize as *mut _)),
-                Some(hinst.into()),
-                None,
-            )?;
-            let _ = SendMessageW(
-                self.source_edit,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(0)),
-            );
-            let _ = SendMessageW(
-                self.source_edit,
-                EM_SETLIMITTEXT,
-                Some(WPARAM(0)),
-                Some(LPARAM(0)),
-            );
+        let result = unsafe {
+            CreateDialogParamW(
+                Some(instance.into()),
+                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
+                Some(parent),
+                Some(translate_dialog_proc),
+                LPARAM(0),
+            )
+        };
 
-            // 서브클래싱 (Comctl32 v6 SetWindowSubclass)
+        let hwnd = match result {
+            Ok(hwnd) => hwnd,
+            Err(error) => {
+                TRANSLATE_PENDING.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                TRANSLATE_INIT_ERROR.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                return Err(error);
+            }
+        };
+
+        if let Some(message) = TRANSLATE_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+            return Err(Error::new(E_FAIL, message));
+        }
+
+        unsafe {
+            center_dialog_on_monitor(hwnd, parent);
+            show_dialog_window(hwnd);
+        }
+        Ok(hwnd)
+    }
+
+    fn initialize_controls(&mut self) -> Result<()> {
+        let get_control = |id| {
+            unsafe { GetDlgItem(Some(self.hwnd), id) }
+                .map_err(|_| Error::new(E_FAIL, format!("번역 컨트롤 ID {id}를 찾을 수 없습니다")))
+        };
+
+        self.source_edit = get_control(ctrl_id::SOURCE_EDIT as i32)?;
+        self.dest_edit = get_control(ctrl_id::DEST_EDIT as i32)?;
+        self.engine_combo = get_control(ctrl_id::COMBO_ENGINE as i32)?;
+        self.source_lang_combo = get_control(ctrl_id::COMBO_SOURCE_LANG as i32)?;
+        self.target_lang_combo = get_control(ctrl_id::COMBO_TARGET_LANG as i32)?;
+        self.llm_group = get_control(ctrl_id::LLM_GROUP as i32)?;
+        self.llm_provider_label = get_control(ctrl_id::LLM_PROVIDER_LABEL as i32)?;
+        self.llm_provider_combo = get_control(ctrl_id::COMBO_LLM_PROVIDER as i32)?;
+        self.llm_model_label = get_control(ctrl_id::LLM_MODEL_LABEL as i32)?;
+        self.llm_model_edit = get_control(ctrl_id::EDIT_LLM_MODEL as i32)?;
+        self.llm_api_key_label = get_control(ctrl_id::LLM_API_KEY_LABEL as i32)?;
+        self.llm_api_key_edit = get_control(ctrl_id::EDIT_LLM_API_KEY as i32)?;
+        for id in [
+            ctrl_id::BTN_TRANSLATE,
+            ctrl_id::BTN_COPY,
+            ctrl_id::BTN_CLEAR,
+            ctrl_id::CHK_ONE_GO,
+            ctrl_id::CHK_NO_LINEFEED,
+            ctrl_id::RADIO_OUTPUT_1,
+            ctrl_id::RADIO_OUTPUT_2,
+            ctrl_id::RADIO_OUTPUT_3,
+        ] {
+            get_control(id as i32)?;
+        }
+
+        unsafe {
+            let _ = SendMessageW(self.source_edit, EM_SETLIMITTEXT, Some(WPARAM(0)), None);
+            let _ = SendMessageW(self.dest_edit, EM_SETLIMITTEXT, Some(WPARAM(0)), None);
             let _ = SetWindowSubclass(
                 self.source_edit,
                 Some(Self::edit_subclass_proc),
                 subclass_id::SOURCE_EDIT,
                 0,
             );
-
-            // ====== 번역 결과 그룹 ======
-            self.create_group_box(10, 200, 475, 130, "번역 결과")?;
-
-            self.dest_edit = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                w!("EDIT"),
-                w!(""),
-                WINDOW_STYLE(
-                    WS_CHILD.0
-                        | WS_VISIBLE.0
-                        | WS_VSCROLL.0
-                        | ES_MULTILINE as u32
-                        | ES_AUTOVSCROLL as u32
-                        | ES_READONLY as u32,
-                ),
-                s(20),
-                s(220),
-                s(455),
-                s(100),
-                Some(self.hwnd),
-                Some(HMENU(ctrl_id::DEST_EDIT as isize as *mut _)),
-                Some(hinst.into()),
-                None,
-            )?;
-            let _ = SendMessageW(
-                self.dest_edit,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(0)),
-            );
-            let _ = SendMessageW(
-                self.dest_edit,
-                EM_SETLIMITTEXT,
-                Some(WPARAM(0)),
-                Some(LPARAM(0)),
-            );
-
-            // 서브클래싱 (Comctl32 v6 SetWindowSubclass)
             let _ = SetWindowSubclass(
                 self.dest_edit,
                 Some(Self::edit_subclass_proc),
                 subclass_id::DEST_EDIT,
                 0,
             );
+            let _ = CheckDlgButton(self.hwnd, ctrl_id::RADIO_OUTPUT_1 as i32, BST_CHECKED);
+        }
 
-            // ====== 옵션 그룹 ======
-            self.create_group_box(10, 335, 230, 90, "옵션")?;
+        for name in ["EzTrans", "Google", "DeepL", "Papago", "LLM"] {
+            self.add_combobox_item(self.engine_combo, name);
+        }
+        for provider in LlmProvider::ALL {
+            self.add_combobox_item(self.llm_provider_combo, provider.display_name());
+        }
 
-            self.create_checkbox(
-                20,
-                355,
-                100,
-                20,
-                ctrl_id::CHK_ONE_GO,
-                "자동 번역",
-                self.one_go,
-            )?;
-            self.create_checkbox(
-                125,
-                355,
-                110,
-                20,
-                ctrl_id::CHK_NO_LINEFEED,
-                "줄바꿈 제거",
-                self.no_linefeed,
-            )?;
+        let (engine, engine_index, source_index, target_index, provider_index, model, api_key) = {
+            let config = self.config.borrow();
+            let engine = config.translation.get_engine();
+            (
+                engine,
+                config.translation.engine_as_u8() as usize,
+                config.translation.source_lang_index(engine),
+                config.translation.target_lang_index(engine),
+                config.translation.llm.get_provider() as u8 as usize,
+                config.translation.llm.model.clone(),
+                config.translation.llm.api_key.clone(),
+            )
+        };
 
-            self.create_label(20, 380, 70, 18, "출력 형식:")?;
-            self.create_radio(
-                95,
-                378,
-                50,
-                20,
-                ctrl_id::RADIO_OUTPUT_1,
-                "일반",
-                self.output_format == OutputFormat::Normal,
-            )?;
-            self.create_radio(
-                150,
-                378,
-                50,
-                20,
-                ctrl_id::RADIO_OUTPUT_2,
-                "괄호",
-                self.output_format == OutputFormat::Brackets,
-            )?;
-            self.create_radio(
-                205,
-                378,
-                50,
-                20,
-                ctrl_id::RADIO_OUTPUT_3,
-                "분리",
-                self.output_format == OutputFormat::NameSplit,
-            )?;
-
-            // ====== 버튼 그룹 ======
-            self.create_group_box(250, 335, 235, 90, "동작")?;
-
-            self.create_button(265, 360, 65, 28, ctrl_id::BTN_TRANSLATE, "번역")?;
-            self.create_button(340, 360, 65, 28, ctrl_id::BTN_COPY, "복사")?;
-            self.create_button(415, 360, 60, 28, ctrl_id::BTN_CLEAR, "초기화")?;
-
-            // ====== LLM 하위 설정 그룹 (엔진이 LLM일 때만 노출) ======
-            // 옵션/동작 그룹 아래(y=430)에 한 줄로 배치. 줄1: 제공자 + 모델, 줄2: API 키.
-            self.llm_group = self.create_group_box(10, 430, 475, 100, "LLM 설정")?;
-
-            // A-1: mnemonic 추가. 라벨 폭 +20, 인접 콤보/Edit X 도 +20 시프트해 우측 끝(185/475) 유지.
-            self.llm_provider_label = self.create_label(20, 453, 70, 18, "제공자(&P):")?;
-            self.llm_provider_combo = DialogControls::create_combobox(
-                self,
-                95,
-                450,
-                90,
-                180,
-                ctrl_id::COMBO_LLM_PROVIDER,
-                &[],
-                0,
-            )?;
-            for p in LlmProvider::ALL {
-                self.add_combobox_item(self.llm_provider_combo, p.display_name());
-            }
-
-            self.llm_model_label = self.create_label(200, 453, 60, 18, "모델(&M):")?;
-            let model_text = self.config.borrow().translation.llm.model.clone();
-            self.llm_model_edit =
-                self.create_edit(260, 450, 215, 22, ctrl_id::EDIT_LLM_MODEL, &model_text)?;
-
-            self.llm_api_key_label = self.create_label(20, 488, 80, 18, "API 키(&K):")?;
-            let api_key_text = self.config.borrow().translation.llm.api_key.clone();
-            self.llm_api_key_edit =
-                self.create_edit(105, 485, 370, 22, ctrl_id::EDIT_LLM_API_KEY, &api_key_text)?;
-
-            // 제공자 콤보 초기 선택
-            let provider_sel = self.config.borrow().translation.llm.get_provider() as u8 as usize;
+        unsafe {
+            let _ = SendMessageW(
+                self.engine_combo,
+                CB_SETCURSEL,
+                Some(WPARAM(engine_index)),
+                None,
+            );
+        }
+        self.populate_language_combos(engine);
+        unsafe {
+            let _ = SendMessageW(
+                self.source_lang_combo,
+                CB_SETCURSEL,
+                Some(WPARAM(source_index)),
+                None,
+            );
+            let _ = SendMessageW(
+                self.target_lang_combo,
+                CB_SETCURSEL,
+                Some(WPARAM(target_index)),
+                None,
+            );
             let _ = SendMessageW(
                 self.llm_provider_combo,
                 CB_SETCURSEL,
-                Some(WPARAM(provider_sel)),
+                Some(WPARAM(provider_index)),
                 None,
             );
-
-            // 엔진 상태에 맞춰 초기 표시/숨김
-            let engine = self.config.borrow().translation.get_engine();
-            self.update_llm_group_visibility(engine);
-
-            Ok(())
+            Self::set_edit_text(self.llm_model_edit, &model);
+            Self::set_edit_text(self.llm_api_key_edit, &api_key);
         }
+        self.update_llm_group_visibility(engine);
+        Ok(())
     }
 
-    /// 커스텀 메시지 핸들러
-    fn handle_message(&mut self, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
-        if msg == WM_TRANSLATION_COMPLETE {
-            self.handle_translation_complete(wparam.0 as u64);
-            return Some(LRESULT(0));
-        }
+    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
+        let new_dpi = (wparam.0 & 0xFFFF) as u32;
+        rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
+        self.applied_dpi = new_dpi;
 
-        // 다이얼로그가 사라질 때 전역 번역 디스패치의 라우팅/대기 응답 정리.
-        // None 을 반환해 매크로 본체의 WM_DESTROY 처리( $INSTANCE 해제 )가 이어 실행되도록 한다.
-        if msg == WM_DESTROY {
-            unregister_translation_hwnd(self.hwnd);
-            return None;
-        }
-
-        // WM_COMMAND에서 EN_CHANGE 자동번역 처리
-        if msg == WM_COMMAND {
-            let id = (wparam.0 & 0xFFFF) as u16;
-            let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-            if notify_code == EN_CHANGE && id == ctrl_id::SOURCE_EDIT {
-                if self.one_go {
-                    self.do_translate();
-                }
-                return Some(LRESULT(0));
+        if lparam.0 != 0 {
+            unsafe {
+                let rect = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    None,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
             }
         }
-
-        None
     }
 
     /// 명령 처리
@@ -494,7 +461,7 @@ impl TranslateDialog {
     /// 엔진에 맞게 언어 콤보박스 항목 갱신
     fn populate_language_combos(&self, engine: TranslationEngine) {
         use crate::translation::lang_utils;
-        // SAFETY: combo handles are valid controls from create_controls.
+        // SAFETY: combo handles are valid controls obtained during initialization.
         unsafe {
             let _ = SendMessageW(self.source_lang_combo, CB_RESETCONTENT, None, None);
             for &lang in engine.supported_source_languages() {
@@ -517,7 +484,7 @@ impl TranslateDialog {
         } else {
             SW_HIDE
         };
-        // SAFETY: 모든 LLM 그룹 HWND는 create_controls에서 생성된 유효한 핸들.
+        // SAFETY: 모든 LLM 그룹 HWND는 리소스 템플릿에서 얻은 유효한 핸들.
         unsafe {
             let _ = ShowWindow(self.llm_group, show);
             let _ = ShowWindow(self.llm_provider_label, show);
@@ -530,7 +497,7 @@ impl TranslateDialog {
     }
 
     fn apply_llm_provider(&self) {
-        // SAFETY: 콤보 핸들은 create_controls에서 만든 유효한 핸들.
+        // SAFETY: 콤보 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
         let sel =
             unsafe { SendMessageW(self.llm_provider_combo, CB_GETCURSEL, None, None).0 as u8 };
         let provider = LlmProvider::from_u8(sel);
@@ -542,13 +509,13 @@ impl TranslateDialog {
     }
 
     fn apply_llm_model(&self) {
-        // SAFETY: edit 핸들은 create_controls에서 만든 유효한 핸들.
+        // SAFETY: edit 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
         let text = unsafe { Self::get_edit_text(self.llm_model_edit) };
         self.config.borrow_mut().translation.llm.model = text;
     }
 
     fn apply_llm_api_key(&self) {
-        // SAFETY: edit 핸들은 create_controls에서 만든 유효한 핸들.
+        // SAFETY: edit 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
         let text = unsafe { Self::get_edit_text(self.llm_api_key_edit) };
         self.config.borrow_mut().translation.llm.api_key = text;
     }
@@ -595,7 +562,7 @@ impl TranslateDialog {
 
     /// 원문 텍스트 가져오기
     fn get_source_text(&self) -> String {
-        // SAFETY: self.source_edit is a valid edit control handle from create_controls.
+        // SAFETY: self.source_edit is a valid edit control handle from the resource template.
         unsafe { Self::get_edit_text(self.source_edit) }
     }
 
@@ -625,7 +592,7 @@ impl TranslateDialog {
 
     /// 번역 결과 설정
     fn set_dest_text(&self, text: &str) {
-        // SAFETY: self.dest_edit is a valid edit control handle from create_controls.
+        // SAFETY: self.dest_edit is a valid edit control handle from the resource template.
         unsafe { Self::set_edit_text(self.dest_edit, text) }
     }
 
@@ -666,7 +633,7 @@ impl TranslateDialog {
 
     /// 현재 선택된 엔진/언어를 매니저에 적용
     fn apply_current_settings(&self) {
-        // SAFETY: combo handles are valid controls from create_controls. SendMessageW with
+        // SAFETY: combo handles are valid controls from the resource template. SendMessageW with
         // CB_GETCURSEL returns the current selection index.
         unsafe {
             let engine_idx = SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as usize;
@@ -781,7 +748,7 @@ impl TranslateDialog {
 
     /// 번역 결과를 클립보드에 복사
     fn copy_to_clipboard(&self) {
-        // SAFETY: self.dest_edit and self.hwnd are valid handles from create_controls.
+        // SAFETY: self.dest_edit and self.hwnd are valid resource dialog handles.
         unsafe {
             let text = Self::get_edit_text(self.dest_edit);
             if text.is_empty() {

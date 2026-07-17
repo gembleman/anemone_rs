@@ -551,31 +551,6 @@ pub unsafe fn create_group_box(
     }
 }
 
-/// 라벨(STATIC) 생성
-// SAFETY: Caller must provide a valid parent HWND.
-pub unsafe fn create_label(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    text: &str,
-) -> Result<HWND> {
-    let text_wide = to_wide(text);
-    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
-    unsafe {
-        create_child(
-            parent,
-            w!("STATIC"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
-            WINDOW_EX_STYLE::default(),
-            ChildSpec { x, y, w, h, id },
-        )
-    }
-}
-
 /// 푸시 버튼 생성
 // SAFETY: Caller must provide a valid parent HWND.
 pub unsafe fn create_button(
@@ -678,78 +653,6 @@ pub unsafe fn create_radio(
     }
 }
 
-/// 콤보박스 생성 (아이템 + 초기 선택)
-// SAFETY: Caller must provide a valid parent HWND.
-#[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/아이템/선택은 의도된 시그니처.
-pub unsafe fn create_combobox(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    items: &[&str],
-    selected: usize,
-) -> Result<HWND> {
-    // SAFETY: parent is valid. Item strings are converted to valid null-terminated UTF-16.
-    // SendMessageW with CB_ADDSTRING/CB_SETCURSEL uses valid control handle and string pointers.
-    unsafe {
-        let hwnd = create_child(
-            parent,
-            w!("COMBOBOX"),
-            w!(""),
-            WINDOW_STYLE(
-                CBS_DROPDOWNLIST as u32
-                    | CBS_HASSTRINGS as u32
-                    | WS_CHILD.0
-                    | WS_VISIBLE.0
-                    | WS_VSCROLL.0,
-            ),
-            WINDOW_EX_STYLE::default(),
-            ChildSpec { x, y, w, h, id },
-        )?;
-
-        for item in items {
-            let item_wide = to_wide(item);
-            let _ = SendMessageW(
-                hwnd,
-                CB_ADDSTRING,
-                Some(WPARAM(0)),
-                Some(LPARAM(item_wide.as_ptr() as isize)),
-            );
-        }
-
-        let _ = SendMessageW(hwnd, CB_SETCURSEL, Some(WPARAM(selected)), Some(LPARAM(0)));
-
-        Ok(hwnd)
-    }
-}
-
-/// 에디트 컨트롤 생성
-// SAFETY: Caller must provide a valid parent HWND.
-pub unsafe fn create_edit(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-    text: &str,
-) -> Result<HWND> {
-    let text_wide = to_wide(text);
-    // SAFETY: parent is valid; text_wide is a valid null-terminated UTF-16 string.
-    unsafe {
-        create_child(
-            parent,
-            w!("EDIT"),
-            PCWSTR(text_wide.as_ptr()),
-            WINDOW_STYLE(ES_AUTOHSCROLL as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0),
-            WS_EX_CLIENTEDGE,
-            ChildSpec { x, y, w, h, id },
-        )
-    }
-}
-
 // ============================================================
 // DialogControls 트레이트
 // ============================================================
@@ -760,10 +663,6 @@ pub trait DialogControls {
 
     unsafe fn create_group_box(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
         unsafe { create_group_box(self.dialog_hwnd(), x, y, w, h, text) }
-    }
-
-    unsafe fn create_label(&self, x: i32, y: i32, w: i32, h: i32, text: &str) -> Result<HWND> {
-        unsafe { create_label(self.dialog_hwnd(), x, y, w, h, 0, text) }
     }
 
     unsafe fn create_button(
@@ -804,32 +703,6 @@ pub trait DialogControls {
         checked: bool,
     ) -> Result<HWND> {
         unsafe { create_radio(self.dialog_hwnd(), x, y, w, h, id, text, checked) }
-    }
-
-    #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/아이템/선택은 의도된 시그니처.
-    unsafe fn create_combobox(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        items: &[&str],
-        selected: usize,
-    ) -> Result<HWND> {
-        unsafe { create_combobox(self.dialog_hwnd(), x, y, w, h, id, items, selected) }
-    }
-
-    unsafe fn create_edit(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        id: u16,
-        text: &str,
-    ) -> Result<HWND> {
-        unsafe { create_edit(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 }
 
