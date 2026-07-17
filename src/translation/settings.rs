@@ -84,7 +84,12 @@ impl TranslationSettingsEditor {
                 }
             }
             TranslationSettingChange::RemoveDeepLKey(index) => {
-                if index >= config.deepl_keys.len() { false } else { config.deepl_keys.remove(index); true }
+                if index >= config.deepl_keys.len() {
+                    false
+                } else {
+                    config.deepl_keys.remove(index);
+                    true
+                }
             }
             TranslationSettingChange::PapagoClientId(value) => {
                 set_if_changed(&mut config.papago_client_id, value)
@@ -204,10 +209,28 @@ mod tests {
     #[test]
     fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
         let mut config = TranslationConfig::default();
-        assert!(TranslationSettingsEditor::apply(&mut config, TranslationSettingChange::AddDeepLKey(" key ".into())).changed);
+        assert!(
+            TranslationSettingsEditor::apply(
+                &mut config,
+                TranslationSettingChange::AddDeepLKey(" key ".into())
+            )
+            .changed
+        );
         assert_eq!(config.deepl_keys, ["key"]);
-        assert!(!TranslationSettingsEditor::apply(&mut config, TranslationSettingChange::AddDeepLKey("key".into())).changed);
-        assert!(TranslationSettingsEditor::apply(&mut config, TranslationSettingChange::RemoveDeepLKey(0)).changed);
+        assert!(
+            !TranslationSettingsEditor::apply(
+                &mut config,
+                TranslationSettingChange::AddDeepLKey("key".into())
+            )
+            .changed
+        );
+        assert!(
+            TranslationSettingsEditor::apply(
+                &mut config,
+                TranslationSettingChange::RemoveDeepLKey(0)
+            )
+            .changed
+        );
         assert!(config.deepl_keys.is_empty());
     }
 }
