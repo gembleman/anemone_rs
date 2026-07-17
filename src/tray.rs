@@ -75,7 +75,6 @@ impl TrayIcon {
             }
         }
     }
-
 }
 
 /// `NOTIFYICONDATAW.szTip` ([u16; 128]) 채우기. 항상 null 종결을 보장한다.

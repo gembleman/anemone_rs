@@ -119,7 +119,9 @@ impl ColorDialog {
             });
 
             let mut custom_colors = CUSTOM_COLORS.with(|c| {
-                c.try_borrow().map(|g| *g).unwrap_or([COLORREF(0xFFFFFF); 16])
+                c.try_borrow()
+                    .map(|g| *g)
+                    .unwrap_or([COLORREF(0xFFFFFF); 16])
             });
 
             let mut cc: CHOOSECOLORW = zeroed();
@@ -237,13 +239,7 @@ impl ColorDialog {
                         WINDOW_EX_STYLE::default(),
                         w!("msctls_trackbar32"),
                         w!(""),
-                        WINDOW_STYLE(
-                            TBS_VERT
-                                | TBS_BOTH
-                                | TBS_NOTICKS
-                                | WS_CHILD.0
-                                | WS_VISIBLE.0,
-                        ),
+                        WINDOW_STYLE(TBS_VERT | TBS_BOTH | TBS_NOTICKS | WS_CHILD.0 | WS_VISIBLE.0),
                         Self::scale_for_dpi(540, hdlg),
                         Self::scale_for_dpi(2, hdlg),
                         Self::scale_for_dpi(25, hdlg),
@@ -296,12 +292,12 @@ impl ColorDialog {
                     );
 
                     // lCustData에서 초기 알파값 가져오기
-                    let initial_alpha = HOOK_CONTEXT
-                        .with(|ctx| {
-                            ctx.try_borrow().ok()
-                                .and_then(|g| g.as_ref().map(|c| c.alpha))
-                                .unwrap_or(255)
-                        });
+                    let initial_alpha = HOOK_CONTEXT.with(|ctx| {
+                        ctx.try_borrow()
+                            .ok()
+                            .and_then(|g| g.as_ref().map(|c| c.alpha))
+                            .unwrap_or(255)
+                    });
 
                     // 트랙바 범위 설정 (0-255)
                     let _ = SendDlgItemMessageW(
@@ -323,7 +319,9 @@ impl ColorDialog {
 
                     // 에디트 초기값
                     let alpha_str = to_wide(&format!("{}", initial_alpha));
-                    if let Err(e) = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, PCWSTR(alpha_str.as_ptr())) {
+                    if let Err(e) =
+                        SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, PCWSTR(alpha_str.as_ptr()))
+                    {
                         tracing::warn!("SetDlgItemTextW failed: {e}");
                     }
 
@@ -354,12 +352,12 @@ impl ColorDialog {
                     }
 
                     // WS_EX_NOACTIVATE 설정
-                    let no_activate = HOOK_CONTEXT
-                        .with(|ctx| {
-                            ctx.try_borrow().ok()
-                                .and_then(|g| g.as_ref().map(|c| c.no_activate))
-                                .unwrap_or(true)
-                        });
+                    let no_activate = HOOK_CONTEXT.with(|ctx| {
+                        ctx.try_borrow()
+                            .ok()
+                            .and_then(|g| g.as_ref().map(|c| c.no_activate))
+                            .unwrap_or(true)
+                    });
 
                     if no_activate {
                         let ex_style = GetWindowLongW(hdlg, GWL_EXSTYLE);

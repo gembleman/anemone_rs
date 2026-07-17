@@ -262,7 +262,12 @@ struct LayoutKeyRef<'a> {
 }
 
 impl<'a> LayoutKeyRef<'a> {
-    fn from_style(text: &'a str, style: &'a TextRenderStyle, max_width: f32, max_height: f32) -> Self {
+    fn from_style(
+        text: &'a str,
+        style: &'a TextRenderStyle,
+        max_width: f32,
+        max_height: f32,
+    ) -> Self {
         Self {
             text,
             font_face: &style.font_face,
@@ -710,12 +715,8 @@ impl D2DRenderer {
             )?;
 
             let text_wide: Vec<u16> = text.encode_utf16().collect();
-            self.dwrite_factory.CreateTextLayout(
-                &text_wide,
-                &text_format,
-                max_width,
-                max_height,
-            )
+            self.dwrite_factory
+                .CreateTextLayout(&text_wide, &text_format, max_width, max_height)
         }
     }
 
@@ -789,22 +790,42 @@ impl D2DRenderer {
 
             // 상단
             target.FillRectangle(
-                &D2D_RECT_F { left: 0.0, top: 0.0, right: w, bottom: t },
+                &D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: w,
+                    bottom: t,
+                },
                 &brush,
             );
             // 하단
             target.FillRectangle(
-                &D2D_RECT_F { left: 0.0, top: h - t, right: w, bottom: h },
+                &D2D_RECT_F {
+                    left: 0.0,
+                    top: h - t,
+                    right: w,
+                    bottom: h,
+                },
                 &brush,
             );
             // 좌측
             target.FillRectangle(
-                &D2D_RECT_F { left: 0.0, top: 0.0, right: t, bottom: h },
+                &D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: t,
+                    bottom: h,
+                },
                 &brush,
             );
             // 우측
             target.FillRectangle(
-                &D2D_RECT_F { left: w - t, top: 0.0, right: w, bottom: h },
+                &D2D_RECT_F {
+                    left: w - t,
+                    top: 0.0,
+                    right: w,
+                    bottom: h,
+                },
                 &brush,
             );
         }
@@ -832,7 +853,12 @@ impl D2DRenderer {
         bbox: TextBox,
         style: &TextRenderStyle,
     ) -> Result<()> {
-        let TextBox { x, y, max_width, max_height } = bbox;
+        let TextBox {
+            x,
+            y,
+            max_width,
+            max_height,
+        } = bbox;
         let outline_total = style.outline1_size + style.outline2_size;
         let has_shadow =
             style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0);
@@ -960,7 +986,12 @@ impl D2DRenderer {
         bbox: TextBox,
         style: &TextRenderStyle,
     ) -> Result<()> {
-        let TextBox { x, y, max_width, max_height } = bbox;
+        let TextBox {
+            x,
+            y,
+            max_width,
+            max_height,
+        } = bbox;
         let outline_total = (style.outline1_size + style.outline2_size).max(0);
         let has_shadow =
             style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0);
@@ -1126,7 +1157,9 @@ impl D2DRenderer {
         let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
         let mut tm = DWRITE_TEXT_METRICS::default();
         // SAFETY: layout 은 위에서 막 확보. tm 은 out 파라미터.
-        unsafe { layout.GetMetrics(&mut tm)?; }
+        unsafe {
+            layout.GetMetrics(&mut tm)?;
+        }
         let text_w = tm.widthIncludingTrailingWhitespace.max(0.0);
         let text_h = tm.height.max(0.0);
 
@@ -1138,7 +1171,10 @@ impl D2DRenderer {
         // CreateCompatibleRenderTarget 은 그 target 의 디바이스 위에 새 RT 를
         // 만들고, 같은 픽셀 포맷 + premultiplied alpha 를 자동 적용한다.
         unsafe {
-            let size = D2D_SIZE_F { width: bm_w, height: bm_h };
+            let size = D2D_SIZE_F {
+                width: bm_w,
+                height: bm_h,
+            };
             let bm_rt = target.CreateCompatibleRenderTarget(
                 Some(&size),
                 None,
@@ -1165,15 +1201,11 @@ impl D2DRenderer {
             // miss 시에만 발생.
 
             // 1. 그림자
-            if style.shadow_enabled
-                && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0)
-            {
+            if style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0) {
                 let sx = origin_x + shadow_dx;
                 let sy = origin_y + shadow_dy;
-                let shadow_brush = inner_rt.CreateSolidColorBrush(
-                    &argb_to_color_f(style.shadow_color),
-                    None,
-                )?;
+                let shadow_brush =
+                    inner_rt.CreateSolidColorBrush(&argb_to_color_f(style.shadow_color), None)?;
 
                 if outline_total > 0.0 {
                     self.draw_outline_only(
@@ -1198,10 +1230,8 @@ impl D2DRenderer {
 
             // 2. 외곽선2 (OutlineOut)
             if style.outline2_size > 0 && outline_total > 0.0 {
-                let brush = inner_rt.CreateSolidColorBrush(
-                    &argb_to_color_f(style.outline2_color),
-                    None,
-                )?;
+                let brush =
+                    inner_rt.CreateSolidColorBrush(&argb_to_color_f(style.outline2_color), None)?;
                 self.draw_outline_only(
                     inner_rt,
                     text,
@@ -1217,10 +1247,8 @@ impl D2DRenderer {
 
             // 3. 외곽선1 (OutlineIn)
             if style.outline1_size > 0 {
-                let brush = inner_rt.CreateSolidColorBrush(
-                    &argb_to_color_f(style.outline1_color),
-                    None,
-                )?;
+                let brush =
+                    inner_rt.CreateSolidColorBrush(&argb_to_color_f(style.outline1_color), None)?;
                 self.draw_outline_only(
                     inner_rt,
                     text,
@@ -1312,7 +1340,12 @@ impl D2DRenderer {
             return Ok(Vec::new());
         }
 
-        let TextBox { x: origin_x, y: origin_y, max_width, max_height } = bbox;
+        let TextBox {
+            x: origin_x,
+            y: origin_y,
+            max_width,
+            max_height,
+        } = bbox;
         let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
         let text_len: u32 = text.encode_utf16().count() as u32;
         if text_len == 0 {
@@ -1353,7 +1386,12 @@ impl D2DRenderer {
                 let top = (origin_y + m.top).floor() as i32 - inflate_i;
                 let right = (origin_x + m.left + m.width).ceil() as i32 + inflate_i;
                 let bottom = (origin_y + m.top + m.height).ceil() as i32 + inflate_i;
-                RECT { left, top, right, bottom }
+                RECT {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                }
             })
             .collect();
         Ok(rects)

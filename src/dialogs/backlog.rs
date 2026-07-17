@@ -9,25 +9,23 @@ use std::rc::Rc;
 use windows::{
     Win32::{
         Foundation::*,
-        System::LibraryLoader::{
-            GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-        },
-        UI::Controls::*,
+        System::LibraryLoader::{GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
         UI::Controls::RichEdit::{
             CFE_BOLD, CFE_ITALIC, CFM_BOLD, CFM_COLOR, CFM_FACE, CFM_ITALIC, CFM_SIZE,
             CHARFORMAT2W, EM_SETBKGNDCOLOR, EM_SETCHARFORMAT, SCF_SELECTION,
         },
+        UI::Controls::*,
         UI::WindowsAndMessaging::*,
     },
     core::*,
 };
 
-use crate::config::Config;
-use crate::define_dialog_instance;
-use crate::util::to_wide;
 use super::file_dialog::{FileFilter, save_file};
 use super::font::{FontDialog, FontDialogConfig, FontStyle};
 use super::helpers::{Dialog, DialogControls};
+use crate::config::Config;
+use crate::define_dialog_instance;
+use crate::util::to_wide;
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -97,7 +95,9 @@ pub struct BacklogDialog {
 }
 
 impl DialogControls for BacklogDialog {
-    fn dialog_hwnd(&self) -> HWND { self.hwnd }
+    fn dialog_hwnd(&self) -> HWND {
+        self.hwnd
+    }
 }
 
 thread_local! {
@@ -115,10 +115,9 @@ impl Dialog for BacklogDialog {
     const HEIGHT: i32 = BACKLOG_HEIGHT;
     const EXTRA_STYLE: WINDOW_STYLE = WS_SIZEBOX;
 
-    fn instance_slot()
-        -> &'static std::thread::LocalKey<
-            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-        > {
+    fn instance_slot() -> &'static std::thread::LocalKey<
+        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+    > {
         &BACKLOG_INSTANCE
     }
 
@@ -130,11 +129,7 @@ impl Dialog for BacklogDialog {
             if !*loaded.borrow() {
                 // SAFETY: System32 한정 검색 플래그를 쓰는 정적 DLL 이름 로드.
                 let load_result = unsafe {
-                    LoadLibraryExW(
-                        w!("Msftedit.dll"),
-                        None,
-                        LOAD_LIBRARY_SEARCH_SYSTEM32,
-                    )
+                    LoadLibraryExW(w!("Msftedit.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)
                 };
                 if let Err(e) = load_result {
                     tracing::error!("Failed to load Msftedit.dll: {e}");
@@ -170,11 +165,19 @@ impl Dialog for BacklogDialog {
                 w!("RICHEDIT50W"),
                 w!(""),
                 WINDOW_STYLE(
-                    WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0 | WS_HSCROLL.0
-                        | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32
-                        | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
+                    WS_CHILD.0
+                        | WS_VISIBLE.0
+                        | WS_VSCROLL.0
+                        | WS_HSCROLL.0
+                        | ES_MULTILINE as u32
+                        | ES_AUTOVSCROLL as u32
+                        | ES_AUTOHSCROLL as u32
+                        | ES_READONLY as u32,
                 ),
-                s(10), s(10), s(BACKLOG_WIDTH - 30), s(BACKLOG_HEIGHT - 120),
+                s(10),
+                s(10),
+                s(BACKLOG_WIDTH - 30),
+                s(BACKLOG_HEIGHT - 120),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::RICHEDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -191,24 +194,58 @@ impl Dialog for BacklogDialog {
             );
 
             // ====== 옵션 그룹 ======
-            self.group_filter =
-                self.create_group_box(10, BACKLOG_HEIGHT - 100, 350, 60, "필터")?;
+            self.group_filter = self.create_group_box(10, BACKLOG_HEIGHT - 100, 350, 60, "필터")?;
 
-            self.create_radio(20, BACKLOG_HEIGHT - 80, 80, 20,
-                ctrl_id::RADIO_ORIGINAL, "원문만", self.filter == BacklogFilter::Original)?;
-            self.create_radio(105, BACKLOG_HEIGHT - 80, 80, 20,
-                ctrl_id::RADIO_TRANSLATION, "번역만", self.filter == BacklogFilter::Translation)?;
-            self.create_radio(190, BACKLOG_HEIGHT - 80, 60, 20,
-                ctrl_id::RADIO_ALL, "전체", self.filter == BacklogFilter::All)?;
+            self.create_radio(
+                20,
+                BACKLOG_HEIGHT - 80,
+                80,
+                20,
+                ctrl_id::RADIO_ORIGINAL,
+                "원문만",
+                self.filter == BacklogFilter::Original,
+            )?;
+            self.create_radio(
+                105,
+                BACKLOG_HEIGHT - 80,
+                80,
+                20,
+                ctrl_id::RADIO_TRANSLATION,
+                "번역만",
+                self.filter == BacklogFilter::Translation,
+            )?;
+            self.create_radio(
+                190,
+                BACKLOG_HEIGHT - 80,
+                60,
+                20,
+                ctrl_id::RADIO_ALL,
+                "전체",
+                self.filter == BacklogFilter::All,
+            )?;
 
-            self.create_checkbox(260, BACKLOG_HEIGHT - 80, 90, 20,
-                ctrl_id::CHK_LINEFEED, "줄바꿈 추가", self.add_linefeed)?;
+            self.create_checkbox(
+                260,
+                BACKLOG_HEIGHT - 80,
+                90,
+                20,
+                ctrl_id::CHK_LINEFEED,
+                "줄바꿈 추가",
+                self.add_linefeed,
+            )?;
 
             // ====== 버튼 그룹 ======
             self.group_action =
                 self.create_group_box(370, BACKLOG_HEIGHT - 100, 200, 60, "동작")?;
 
-            self.create_button(380, BACKLOG_HEIGHT - 78, 55, 28, ctrl_id::BTN_CLEAR, "초기화")?;
+            self.create_button(
+                380,
+                BACKLOG_HEIGHT - 78,
+                55,
+                28,
+                ctrl_id::BTN_CLEAR,
+                "초기화",
+            )?;
             self.create_button(445, BACKLOG_HEIGHT - 78, 55, 28, ctrl_id::BTN_SAVE, "저장")?;
             self.create_button(510, BACKLOG_HEIGHT - 78, 55, 28, ctrl_id::BTN_FONT, "폰트")?;
 
@@ -234,10 +271,22 @@ impl Dialog for BacklogDialog {
         use ctrl_id::*;
 
         match cmd {
-            CHK_LINEFEED => { self.add_linefeed = !self.add_linefeed; self.refresh_richedit(); }
-            RADIO_ORIGINAL => { self.filter = BacklogFilter::Original; self.refresh_richedit(); }
-            RADIO_TRANSLATION => { self.filter = BacklogFilter::Translation; self.refresh_richedit(); }
-            RADIO_ALL => { self.filter = BacklogFilter::All; self.refresh_richedit(); }
+            CHK_LINEFEED => {
+                self.add_linefeed = !self.add_linefeed;
+                self.refresh_richedit();
+            }
+            RADIO_ORIGINAL => {
+                self.filter = BacklogFilter::Original;
+                self.refresh_richedit();
+            }
+            RADIO_TRANSLATION => {
+                self.filter = BacklogFilter::Translation;
+                self.refresh_richedit();
+            }
+            RADIO_ALL => {
+                self.filter = BacklogFilter::All;
+                self.refresh_richedit();
+            }
             BTN_CLEAR => self.clear_richedit(),
             BTN_SAVE => self.save_to_file(),
             BTN_FONT => self.choose_font(),
@@ -259,13 +308,15 @@ impl BacklogDialog {
         // SendMessageW and append_styled_text use valid control handles.
         unsafe {
             let _ = SendMessageW(
-                self.richedit, EM_SETSEL,
-                Some(WPARAM(usize::MAX)), Some(LPARAM(-1)),
+                self.richedit,
+                EM_SETSEL,
+                Some(WPARAM(usize::MAX)),
+                Some(LPARAM(-1)),
             );
 
             // COLORREF 는 0x00BBGGRR 순서.
-            const COLOR_NAME: u32      = 0x00A00000; // #0000A0 진청색 ([name])
-            const COLOR_ORIGINAL: u32  = 0x00000000; // #000000 검정 (원문)
+            const COLOR_NAME: u32 = 0x00A00000; // #0000A0 진청색 ([name])
+            const COLOR_ORIGINAL: u32 = 0x00000000; // #000000 검정 (원문)
             const COLOR_TRANSLATE: u32 = 0x00008000; // #008000 진녹색 (번역)
 
             if let Some(ref name) = entry.name
@@ -295,8 +346,10 @@ impl BacklogDialog {
             }
 
             let _ = SendMessageW(
-                self.richedit, EM_SCROLLCARET,
-                Some(WPARAM(0)), Some(LPARAM(0)),
+                self.richedit,
+                EM_SCROLLCARET,
+                Some(WPARAM(0)),
+                Some(LPARAM(0)),
             );
         }
     }
@@ -328,14 +381,16 @@ impl BacklogDialog {
             }
 
             let _ = SendMessageW(
-                self.richedit, EM_SETCHARFORMAT,
+                self.richedit,
+                EM_SETCHARFORMAT,
                 Some(WPARAM(SCF_SELECTION as usize)),
                 Some(LPARAM(&cf as *const _ as isize)),
             );
 
             let wide = to_wide(text);
             let _ = SendMessageW(
-                self.richedit, EM_REPLACESEL,
+                self.richedit,
+                EM_REPLACESEL,
                 Some(WPARAM(0)),
                 Some(LPARAM(wide.as_ptr() as isize)),
             );
@@ -346,13 +401,17 @@ impl BacklogDialog {
     fn clear_richedit(&mut self) {
         self.entries.clear();
         // SAFETY: self.richedit is a valid RichEdit control handle.
-        unsafe { let _ = SetWindowTextW(self.richedit, w!("")); }
+        unsafe {
+            let _ = SetWindowTextW(self.richedit, w!(""));
+        }
     }
 
     /// RichEdit 다시 그리기 (필터 변경 시)
     fn refresh_richedit(&self) {
         // SAFETY: self.richedit is a valid RichEdit control handle.
-        unsafe { let _ = SetWindowTextW(self.richedit, w!("")); }
+        unsafe {
+            let _ = SetWindowTextW(self.richedit, w!(""));
+        }
         for entry in &self.entries.clone() {
             self.append_entry_to_richedit(entry);
         }
@@ -362,12 +421,17 @@ impl BacklogDialog {
     fn choose_font(&mut self) {
         let cfg = FontDialogConfig {
             initial_face: self.font_face.clone(),
-            initial_style: FontStyle { bold: false, italic: self.font_italic },
+            initial_style: FontStyle {
+                bold: false,
+                italic: self.font_italic,
+            },
             initial_point_size: self.font_point_size,
             no_activate: false,
         };
 
-        let Some(result) = FontDialog::show(self.hwnd, cfg) else { return; };
+        let Some(result) = FontDialog::show(self.hwnd, cfg) else {
+            return;
+        };
 
         self.font_face = Some(result.face_name);
         self.font_italic = result.style.italic;
@@ -382,10 +446,17 @@ impl BacklogDialog {
         use std::io::Write;
 
         let filters = [
-            FileFilter { name: "텍스트 파일 (*.txt)", spec: "*.txt" },
-            FileFilter { name: "모든 파일 (*.*)", spec: "*.*" },
+            FileFilter {
+                name: "텍스트 파일 (*.txt)",
+                spec: "*.txt",
+            },
+            FileFilter {
+                name: "모든 파일 (*.*)",
+                spec: "*.*",
+            },
         ];
-        let Some(path) = save_file(self.hwnd, "백로그 저장", &filters, Some("txt"), None) else {
+        let Some(path) = save_file(self.hwnd, "백로그 저장", &filters, Some("txt"), None)
+        else {
             return;
         };
 
@@ -405,7 +476,8 @@ impl BacklogDialog {
 
         match std::fs::File::create(&path) {
             Ok(mut file) => {
-                if let Err(e) = file.write_all(&[0xEF, 0xBB, 0xBF])
+                if let Err(e) = file
+                    .write_all(&[0xEF, 0xBB, 0xBF])
                     .and_then(|_| file.write_all(content.as_bytes()))
                 {
                     tracing::error!("backlog save write failed: {e}");
@@ -432,8 +504,12 @@ impl BacklogDialog {
             let s = |v: i32| crate::dpi::scale(v, dpi);
 
             let _ = SetWindowPos(
-                self.richedit, None,
-                s(10), s(10), width - s(30), height - s(120),
+                self.richedit,
+                None,
+                s(10),
+                s(10),
+                width - s(30),
+                height - s(120),
                 SWP_NOZORDER,
             );
 
@@ -442,11 +518,7 @@ impl BacklogDialog {
             // 비율이 아니라 height - design_height 차분 (dy) 으로 환산.
             let dy = height - s(BACKLOG_HEIGHT);
             let move_to = |ctrl: HWND, x: i32, y: i32, w: i32, h: i32| {
-                let _ = SetWindowPos(
-                    ctrl, None,
-                    s(x), s(y) + dy, s(w), s(h),
-                    SWP_NOZORDER,
-                );
+                let _ = SetWindowPos(ctrl, None, s(x), s(y) + dy, s(w), s(h), SWP_NOZORDER);
             };
             let move_ctrl = |id: u16, x: i32, y: i32, w: i32, h: i32| {
                 if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), id as i32) {
@@ -459,13 +531,13 @@ impl BacklogDialog {
             move_to(self.group_action, 370, BACKLOG_HEIGHT - 100, 200, 60);
 
             use ctrl_id::*;
-            move_ctrl(RADIO_ORIGINAL,    20, BACKLOG_HEIGHT - 80, 80, 20);
+            move_ctrl(RADIO_ORIGINAL, 20, BACKLOG_HEIGHT - 80, 80, 20);
             move_ctrl(RADIO_TRANSLATION, 105, BACKLOG_HEIGHT - 80, 80, 20);
-            move_ctrl(RADIO_ALL,         190, BACKLOG_HEIGHT - 80, 60, 20);
-            move_ctrl(CHK_LINEFEED,      260, BACKLOG_HEIGHT - 80, 90, 20);
-            move_ctrl(BTN_CLEAR,         380, BACKLOG_HEIGHT - 78, 55, 28);
-            move_ctrl(BTN_SAVE,          445, BACKLOG_HEIGHT - 78, 55, 28);
-            move_ctrl(BTN_FONT,          510, BACKLOG_HEIGHT - 78, 55, 28);
+            move_ctrl(RADIO_ALL, 190, BACKLOG_HEIGHT - 80, 60, 20);
+            move_ctrl(CHK_LINEFEED, 260, BACKLOG_HEIGHT - 80, 90, 20);
+            move_ctrl(BTN_CLEAR, 380, BACKLOG_HEIGHT - 78, 55, 28);
+            move_ctrl(BTN_SAVE, 445, BACKLOG_HEIGHT - 78, 55, 28);
+            move_ctrl(BTN_FONT, 510, BACKLOG_HEIGHT - 78, 55, 28);
         }
     }
 }
@@ -473,7 +545,9 @@ impl BacklogDialog {
 /// 공개 인터페이스: 기존 백로그에 항목 추가
 pub fn add_to_backlog(entry: LogEntry) {
     BACKLOG_INSTANCE.with(|cell| {
-        let Ok(guard) = cell.try_borrow() else { return; };
+        let Ok(guard) = cell.try_borrow() else {
+            return;
+        };
         if let Some(ref dialog) = *guard
             && let Ok(mut d) = dialog.try_borrow_mut()
         {

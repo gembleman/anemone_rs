@@ -20,7 +20,9 @@ impl QpcTimer {
         unsafe {
             let _ = QueryPerformanceFrequency(&mut freq);
         }
-        Self { frequency: freq.max(1) }
+        Self {
+            frequency: freq.max(1),
+        }
     }
 
     #[inline]
@@ -301,7 +303,8 @@ impl PhasedBenchAccumulator {
     pub fn report(&mut self) {
         self.total.report("paint_detailed_total");
         self.lazy_init.report("paint_detailed_lazy_init");
-        self.swap_chain_wait.report("paint_detailed_swap_chain_wait");
+        self.swap_chain_wait
+            .report("paint_detailed_swap_chain_wait");
         self.setup.report("paint_detailed_setup");
         self.begin_clear.report("paint_detailed_begin_clear");
         self.border.report("paint_detailed_border");

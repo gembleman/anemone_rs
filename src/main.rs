@@ -31,9 +31,9 @@ fn harden_dll_search_path() {
     // SAFETY: SetDefaultDllDirectories 는 부수효과 없는 kernel32 호출이며
     // 두 플래그 조합은 Windows 10 에서 항상 유효하다.
     unsafe {
-        if let Err(e) = SetDefaultDllDirectories(
-            LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS,
-        ) {
+        if let Err(e) =
+            SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS)
+        {
             // 실패해도 치명적이지 않으므로 경고만 남기고 진행한다.
             eprintln!("SetDefaultDllDirectories failed: {e}");
         }

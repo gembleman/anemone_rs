@@ -57,7 +57,6 @@ pub fn run() -> CliOutcome {
             Ok(())
         }
         "translate" => cmd_translate(&args, json),
-        "detect" => cmd_detect(&args, json),
         "file-trans" => cmd_file_trans(&args, json),
         "list-engines" => cmd_list_engines(json),
         "list-langs" => cmd_list_langs(&args, json),
@@ -84,15 +83,18 @@ pub fn print_usage() {
     println!();
     println!("COMMANDS:");
     println!("    translate <TEXT> [--engine E] [--from L] [--to L] [--stdin]");
-    println!("                                  텍스트 번역. config.toml 의 키/엔진을 기본값으로 사용");
-    println!("    detect <TEXT> [--stdin]       텍스트의 언어 감지");
+    println!(
+        "                                  텍스트 번역. config.toml 의 키/엔진을 기본값으로 사용"
+    );
     println!("    file-trans --in <FILE> --out <FILE> [--engine E] [--from L] [--to L]");
     println!("               [--format only|both|both-nl] [--no-trans-linefeed]");
     println!("                                  파일을 한 줄씩 번역해 출력 파일에 기록");
     println!("    list-engines                  지원하는 번역 엔진 출력");
     println!("    list-langs [--engine E]       엔진이 지원하는 언어 출력");
     println!("    config show                   현재 config.toml 내용 출력");
-    println!("    config get <KEY>              config 값을 점 경로로 조회 (예: translation.engine)");
+    println!(
+        "    config get <KEY>              config 값을 점 경로로 조회 (예: translation.engine)"
+    );
     println!("    config set <KEY> <VALUE>      config 값 변경 후 저장");
     println!("    config-path                   config.toml 의 절대 경로 출력");
     println!();
@@ -107,9 +109,11 @@ pub fn print_usage() {
     println!("    translation.engine, translation.source_lang, translation.target_lang");
     println!("    translation.eztrans_dll_path, translation.eztrans_dat_path");
     println!("    translation.deepl_api_key, translation.papago_client_id,");
-    println!("    translation.papago_client_secret, translation.auto_detect");
+    println!("    translation.papago_client_secret");
     println!("    translation.llm.provider, translation.llm.model, translation.llm.api_key");
-    println!("    translation.llm.base_url, translation.llm.temperature, translation.llm.max_tokens");
+    println!(
+        "    translation.llm.base_url, translation.llm.temperature, translation.llm.max_tokens"
+    );
     println!("    clipboard_watch, click_through, magnetic_mode, background_visible,");
     println!("    border_visible, window_topmost, window_visible");
 }
@@ -222,10 +226,7 @@ fn translate_via_eztrans(
         config.translation.eztrans_dat_path.as_str()
     };
     if dll.is_empty() || dat.is_empty() {
-        return Err(
-            "eztrans 경로를 확인할 수 없습니다. config.toml 의 eztrans_dll_path/eztrans_dat_path 를 설정하세요."
-                .to_string(),
-        );
+        return Err("eztrans 경로를 확인할 수 없습니다. config.toml 의 eztrans_dll_path/eztrans_dat_path 를 설정하세요.".to_string());
     }
     {
         let manager = get_eztrans_manager();
@@ -272,10 +273,7 @@ fn build_credentials(
         TranslationEngine::DeepL => {
             let keys = config.translation.deepl_effective_keys();
             if keys.is_empty() {
-                return Err(
-                    "DeepL API 키가 설정되지 않았습니다. config set translation.deepl_api_key <KEY>"
-                        .to_string(),
-                );
+                return Err("DeepL API 키가 설정되지 않았습니다. config set translation.deepl_api_key <KEY>".to_string());
             }
             EngineCredentials::DeepL {
                 keys,
@@ -286,9 +284,7 @@ fn build_credentials(
             if config.translation.papago_client_id.is_empty()
                 || config.translation.papago_client_secret.is_empty()
             {
-                return Err(
-                    "Papago client_id/client_secret 가 설정되지 않았습니다.".to_string(),
-                );
+                return Err("Papago client_id/client_secret 가 설정되지 않았습니다.".to_string());
             }
             EngineCredentials::Papago {
                 client_id: config.translation.papago_client_id.clone(),
@@ -321,80 +317,23 @@ fn resolve_languages(
     engine: TranslationEngine,
 ) -> Result<(Language, Language), String> {
     let source = match from {
-        Some(s) => lang_utils::from_code(s)
-            .ok_or_else(|| format!("알 수 없는 소스 언어 코드: {s}"))?,
+        Some(s) => {
+            lang_utils::from_code(s).ok_or_else(|| format!("알 수 없는 소스 언어 코드: {s}"))?
+        }
         None => config.translation.get_source_language(),
     };
     let target = match to {
-        Some(s) => lang_utils::from_code(s)
-            .ok_or_else(|| format!("알 수 없는 타겟 언어 코드: {s}"))?,
+        Some(s) => {
+            lang_utils::from_code(s).ok_or_else(|| format!("알 수 없는 타겟 언어 코드: {s}"))?
+        }
         None => config.translation.get_target_language(),
     };
     // EzTrans 는 JP->KR 만 — 다른 조합이면 명확히 거부.
-    if engine == TranslationEngine::EzTrans
-        && (source != Language::Jpn || target != Language::Kor)
+    if engine == TranslationEngine::EzTrans && (source != Language::Jpn || target != Language::Kor)
     {
         return Err("EzTrans 는 일본어(ja) → 한국어(ko) 만 지원합니다.".to_string());
     }
     Ok((source, target))
-}
-
-// ---------------------------------------------------------------------------
-// detect
-// ---------------------------------------------------------------------------
-
-fn cmd_detect(args: &[String], json: bool) -> Result<(), String> {
-    let mut text: Option<String> = None;
-    let mut use_stdin = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--stdin" => {
-                use_stdin = true;
-                i += 1;
-            }
-            a if a.starts_with("--") => return Err(format!("알 수 없는 옵션: {a}")),
-            _ => {
-                if text.is_none() {
-                    text = Some(args[i].clone());
-                    i += 1;
-                } else {
-                    return Err("detect 는 위치 인자로 텍스트를 하나만 받습니다.".to_string());
-                }
-            }
-        }
-    }
-
-    let text = if use_stdin {
-        read_stdin_to_string()?
-    } else {
-        text.ok_or_else(|| "감지할 텍스트가 필요합니다. (텍스트 인자 또는 --stdin)".to_string())?
-    };
-
-    let detected = crate::translation::detect::detect_language(&text);
-    if json {
-        match detected {
-            Some(lang) => println!(
-                "{}",
-                json_object(&[
-                    ("detected", JsonVal::Bool(true)),
-                    ("code", JsonVal::Str(lang_utils::to_code(lang))),
-                    ("name_ko", JsonVal::Str(lang_utils::to_korean_name(lang))),
-                ])
-            ),
-            None => println!("{}", json_object(&[("detected", JsonVal::Bool(false))])),
-        }
-    } else {
-        match detected {
-            Some(lang) => println!(
-                "{} ({})",
-                lang_utils::to_code(lang),
-                lang_utils::to_korean_name(lang)
-            ),
-            None => println!("(감지 실패)"),
-        }
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -450,8 +389,11 @@ fn cmd_file_trans(args: &[String], json: bool) -> Result<(), String> {
             config.translation.eztrans_dat_path.clone()
         };
         let manager = get_eztrans_manager();
-        let mut mgr = manager.lock().map_err(|_| "EzTrans 매니저 잠금 실패".to_string())?;
-        mgr.init(&dll, &dat).map_err(|e| format!("EzTrans 초기화 실패: {e}"))?;
+        let mut mgr = manager
+            .lock()
+            .map_err(|_| "EzTrans 매니저 잠금 실패".to_string())?;
+        mgr.init(&dll, &dat)
+            .map_err(|e| format!("EzTrans 초기화 실패: {e}"))?;
     }
 
     let credentials = build_credentials(engine, &config)?;
@@ -467,8 +409,13 @@ fn cmd_file_trans(args: &[String], json: bool) -> Result<(), String> {
     let body = crate::util::read_utf8_translation_input(&input)?;
     let reader = BufReader::new(std::io::Cursor::new(body));
 
-    let out_file = File::create(&output)
-        .map_err(|e| format!("출력 파일을 생성할 수 없습니다: {} ({})", output.display(), e))?;
+    let out_file = File::create(&output).map_err(|e| {
+        format!(
+            "출력 파일을 생성할 수 없습니다: {} ({})",
+            output.display(),
+            e
+        )
+    })?;
     let mut writer = BufWriter::new(out_file);
     writer
         .write_all(&[0xEF, 0xBB, 0xBF])
@@ -510,7 +457,12 @@ fn cmd_file_trans(args: &[String], json: bool) -> Result<(), String> {
             ])
         );
     } else {
-        println!("완료: {} → {} ({} 줄)", input.display(), output.display(), total);
+        println!(
+            "완료: {} → {} ({} 줄)",
+            input.display(),
+            output.display(),
+            total
+        );
     }
     Ok(())
 }
@@ -626,11 +578,19 @@ fn cmd_list_langs(args: &[String], json: bool) -> Result<(), String> {
         println!("engine: {}", engine.to_str());
         println!("source:");
         for l in source {
-            println!("  {} ({})", lang_utils::to_code(*l), lang_utils::to_korean_name(*l));
+            println!(
+                "  {} ({})",
+                lang_utils::to_code(*l),
+                lang_utils::to_korean_name(*l)
+            );
         }
         println!("target:");
         for l in target {
-            println!("  {} ({})", lang_utils::to_code(*l), lang_utils::to_korean_name(*l));
+            println!(
+                "  {} ({})",
+                lang_utils::to_code(*l),
+                lang_utils::to_korean_name(*l)
+            );
         }
     }
     Ok(())
@@ -647,11 +607,11 @@ fn cmd_config(args: &[String], json: bool) -> Result<(), String> {
     match sub.as_str() {
         "show" => {
             let config = Config::load_or_default();
-            let toml = toml::to_string_pretty(&config)
-                .map_err(|e| format!("TOML 직렬화 실패: {e}"))?;
+            let toml =
+                toml::to_string_pretty(&config).map_err(|e| format!("TOML 직렬화 실패: {e}"))?;
             if json {
-                let json_text = serde_json::to_string(&config)
-                    .map_err(|e| format!("JSON 직렬화 실패: {e}"))?;
+                let json_text =
+                    serde_json::to_string(&config).map_err(|e| format!("JSON 직렬화 실패: {e}"))?;
                 println!("{json_text}");
             } else {
                 print!("{toml}");
@@ -663,10 +623,12 @@ fn cmd_config(args: &[String], json: bool) -> Result<(), String> {
                 .get(1)
                 .ok_or_else(|| "config get <KEY> — 점 경로 키가 필요합니다.".to_string())?;
             let config = Config::load_or_default();
-            let value =
-                config_get(&config, key)?;
+            let value = config_get(&config, key)?;
             if json {
-                println!("{}", json_object(&[("key", JsonVal::Str(key)), ("value", JsonVal::Str(&value))]));
+                println!(
+                    "{}",
+                    json_object(&[("key", JsonVal::Str(key)), ("value", JsonVal::Str(&value))])
+                );
             } else {
                 println!("{value}");
             }
@@ -681,7 +643,9 @@ fn cmd_config(args: &[String], json: bool) -> Result<(), String> {
                 .ok_or_else(|| "config set <KEY> <VALUE> — 값이 필요합니다.".to_string())?;
             let mut config = Config::load_or_default();
             config_set(&mut config, key, value)?;
-            config.save().map_err(|e| format!("config 저장 실패: {e}"))?;
+            config
+                .save()
+                .map_err(|e| format!("config 저장 실패: {e}"))?;
             if json {
                 println!(
                     "{}",
@@ -766,8 +730,7 @@ fn config_set(config: &mut Config, key: &str, value: &str) -> Result<(), String>
         .ok_or_else(|| format!("키를 찾을 수 없습니다: {key} (segment: {last})"))?;
 
     // 기존 값의 타입을 보존해 파싱한다. (예: bool 필드에는 "true"/"false"만 허용)
-    let new_val = coerce_value(slot, value)
-        .map_err(|e| format!("값 변환 실패 ({key}): {e}"))?;
+    let new_val = coerce_value(slot, value).map_err(|e| format!("값 변환 실패 ({key}): {e}"))?;
     *slot = new_val;
 
     let new_config: Config =
@@ -813,7 +776,10 @@ fn coerce_value(existing: &serde_json::Value, raw: &str) -> Result<serde_json::V
 // ---------------------------------------------------------------------------
 
 fn get_value(args: &[String], i: &mut usize, name: &str) -> Result<String, String> {
-    let next = args.get(*i + 1).cloned().ok_or_else(|| format!("{name} 뒤에 값이 필요합니다."))?;
+    let next = args
+        .get(*i + 1)
+        .cloned()
+        .ok_or_else(|| format!("{name} 뒤에 값이 필요합니다."))?;
     *i += 2;
     Ok(next)
 }

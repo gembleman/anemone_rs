@@ -11,18 +11,18 @@ use std::rc::Rc;
 
 use windows::{
     Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
-        UI::Controls::*, UI::Input::KeyboardAndMouse::EnableWindow, UI::WindowsAndMessaging::*,
+        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW, UI::Controls::*,
+        UI::Input::KeyboardAndMouse::EnableWindow, UI::WindowsAndMessaging::*,
     },
     core::*,
 };
 
+use super::helpers::{Dialog, DialogControls};
 use crate::config::{Config, TextAlign};
 use crate::constants::TBM_GETPOS_VAL;
 use crate::define_dialog_instance;
 use crate::translation::{TranslationEngine, lang_utils};
 use crate::util::to_wide;
-use super::helpers::{Dialog, DialogControls};
 
 /// 설정 변경 콜백 타입
 pub type SettingsChangeCallback = Box<dyn Fn(&Config)>;
@@ -80,7 +80,9 @@ pub struct SettingsDialog {
 }
 
 impl DialogControls for SettingsDialog {
-    fn dialog_hwnd(&self) -> HWND { self.hwnd }
+    fn dialog_hwnd(&self) -> HWND {
+        self.hwnd
+    }
 }
 
 define_dialog_instance!(SETTINGS_INSTANCE: SettingsDialog);
@@ -95,17 +97,19 @@ impl Dialog for SettingsDialog {
     const HEIGHT: i32 = 780;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 
-    fn instance_slot()
-        -> &'static std::thread::LocalKey<
-            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-        > {
+    fn instance_slot() -> &'static std::thread::LocalKey<
+        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+    > {
         &SETTINGS_INSTANCE
     }
 
     fn init(hwnd: HWND, parent: HWND, params: Self::Params) -> Self {
         let (config, on_change) = params;
         SettingsDialog {
-            hwnd, config, main_hwnd: parent, on_change,
+            hwnd,
+            config,
+            main_hwnd: parent,
+            on_change,
             tab_controls: [Vec::new(), Vec::new(), Vec::new()],
             current_tab: TAB_APPEARANCE,
             engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
@@ -138,7 +142,15 @@ impl SettingsDialog {
 
 impl SettingsDialog {
     /// 오너드로우 색상 버튼 생성 (BS_OWNERDRAW)
-    unsafe fn create_color_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+    unsafe fn create_color_button(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+    ) -> Result<HWND> {
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         // SAFETY: dialog hwnd is valid; CreateWindowExW creates a child button.
         unsafe {
@@ -149,9 +161,7 @@ impl SettingsDialog {
                 WINDOW_EX_STYLE::default(),
                 w!("BUTTON"),
                 PCWSTR(text_wide.as_ptr()),
-                WINDOW_STYLE(
-                    BS_OWNERDRAW as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0,
-                ),
+                WINDOW_STYLE(BS_OWNERDRAW as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0),
                 crate::dpi::scale(x, dpi),
                 crate::dpi::scale(y, dpi),
                 crate::dpi::scale(w, dpi),
@@ -162,7 +172,12 @@ impl SettingsDialog {
                 None,
             )?;
             let hfont = super::helpers::dialog_font();
-            let _ = SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(hfont.0 as usize)),
+                Some(LPARAM(0)),
+            );
             Ok(hwnd)
         }
     }
@@ -183,9 +198,15 @@ impl SettingsDialog {
             ctrl_id::ORG_OUTLINE2 => cfg.get_text_color(TextType::Original, ColorType::Outline2),
             ctrl_id::ORG_SHADOW_COLOR => cfg.get_text_color(TextType::Original, ColorType::Shadow),
             ctrl_id::TRANS_COLOR => cfg.get_text_color(TextType::Translation, ColorType::Primary),
-            ctrl_id::TRANS_OUTLINE1 => cfg.get_text_color(TextType::Translation, ColorType::Outline1),
-            ctrl_id::TRANS_OUTLINE2 => cfg.get_text_color(TextType::Translation, ColorType::Outline2),
-            ctrl_id::TRANS_SHADOW_COLOR => cfg.get_text_color(TextType::Translation, ColorType::Shadow),
+            ctrl_id::TRANS_OUTLINE1 => {
+                cfg.get_text_color(TextType::Translation, ColorType::Outline1)
+            }
+            ctrl_id::TRANS_OUTLINE2 => {
+                cfg.get_text_color(TextType::Translation, ColorType::Outline2)
+            }
+            ctrl_id::TRANS_SHADOW_COLOR => {
+                cfg.get_text_color(TextType::Translation, ColorType::Shadow)
+            }
             _ => return None,
         };
         Some(argb)
@@ -194,7 +215,9 @@ impl SettingsDialog {
     /// WM_DRAWITEM 처리: 색상 버튼에 색상 스왓치 + 텍스트를 그린다
     fn draw_color_button(&self, dis: &DRAWITEMSTRUCT) {
         let id = dis.CtlID as u16;
-        let Some(argb) = self.color_for_button(id) else { return; };
+        let Some(argb) = self.color_for_button(id) else {
+            return;
+        };
         // SAFETY: hDC and rcItem are valid for the duration of WM_DRAWITEM.
         unsafe {
             let hdc = dis.hDC;
@@ -233,7 +256,13 @@ impl SettingsDialog {
             let pen = CreatePen(PS_SOLID, 1, pen_color);
             let old_pen = SelectObject(hdc, pen.into());
             let old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            let _ = Rectangle(hdc, swatch_rc.left, swatch_rc.top, swatch_rc.right, swatch_rc.bottom);
+            let _ = Rectangle(
+                hdc,
+                swatch_rc.left,
+                swatch_rc.top,
+                swatch_rc.right,
+                swatch_rc.bottom,
+            );
             SelectObject(hdc, old_pen);
             SelectObject(hdc, old_brush);
             let _ = DeleteObject(pen.into());
@@ -250,8 +279,12 @@ impl SettingsDialog {
             let len = GetWindowTextW(dis.hwndItem, &mut buf);
             if len > 0 {
                 let _ = SetBkMode(hdc, TRANSPARENT);
-                let _ = DrawTextW(hdc, &mut buf[..len as usize], &mut text_rc,
-                    DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                let _ = DrawTextW(
+                    hdc,
+                    &mut buf[..len as usize],
+                    &mut text_rc,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+                );
             }
 
             // 포커스 사각형
@@ -315,34 +348,42 @@ impl SettingsDialog {
             let s = |v: i32| crate::dpi::scale(v, dpi);
             // 디자인 좌표는 클라이언트 기준. SetWindowPos 는 윈도우 전체 크기를
             // 받으므로 타이틀/테두리만큼 더해 환산해야 닫기 버튼이 안 잘린다.
-            let (_, win_h) = super::helpers::design_to_window_size(
-                self.hwnd, Self::WIDTH, target_height,
-            );
+            let (_, win_h) =
+                super::helpers::design_to_window_size(self.hwnd, Self::WIDTH, target_height);
             let mut rect = RECT::default();
             let _ = GetWindowRect(self.hwnd, &mut rect);
             let cur_w = rect.right - rect.left;
             let _ = SetWindowPos(
-                self.hwnd, None,
-                0, 0,
-                cur_w, win_h,
+                self.hwnd,
+                None,
+                0,
+                0,
+                cur_w,
+                win_h,
                 SWP_NOMOVE | SWP_NOZORDER,
             );
             // 탭 컨트롤도 같이 늘리기 (탭 헤더 ~ 닫기 버튼 위까지).
             // 폭은 create_controls 와 동일하게 클라 폭 - 좌우 5px = 475.
             if let Ok(tab_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32) {
                 let _ = SetWindowPos(
-                    tab_hwnd, None,
-                    0, 0,
-                    s(475), s(target_height - 70),
+                    tab_hwnd,
+                    None,
+                    0,
+                    0,
+                    s(475),
+                    s(target_height - 70),
                     SWP_NOMOVE | SWP_NOZORDER,
                 );
             }
             // 닫기 버튼 재배치 (다이얼로그 하단). 클라 폭 485 → 우측 정렬 X=370.
             if let Ok(close_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
                 let _ = SetWindowPos(
-                    close_hwnd, None,
-                    s(370), s(target_height - 65),
-                    0, 0,
+                    close_hwnd,
+                    None,
+                    s(370),
+                    s(target_height - 65),
+                    0,
+                    0,
                     SWP_NOSIZE | SWP_NOZORDER,
                 );
             }
@@ -376,12 +417,19 @@ impl SettingsDialog {
         unsafe {
             let src_combo = GetDlgItem(Some(self.hwnd), ctrl_id::TRANS_SOURCE_LANG as i32);
             let tgt_combo = GetDlgItem(Some(self.hwnd), ctrl_id::TRANS_TARGET_LANG as i32);
-            let (Ok(src), Ok(tgt)) = (src_combo, tgt_combo) else { return; };
+            let (Ok(src), Ok(tgt)) = (src_combo, tgt_combo) else {
+                return;
+            };
 
             let _ = SendMessageW(src, CB_RESETCONTENT, Some(WPARAM(0)), Some(LPARAM(0)));
             for &lang in engine.supported_source_languages() {
                 let w = to_wide(lang_utils::to_korean_name(lang));
-                let _ = SendMessageW(src, CB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(w.as_ptr() as isize)));
+                let _ = SendMessageW(
+                    src,
+                    CB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(w.as_ptr() as isize)),
+                );
             }
             let src_sel = self.config.borrow().translation.source_lang_index(engine);
             let _ = SendMessageW(src, CB_SETCURSEL, Some(WPARAM(src_sel)), Some(LPARAM(0)));
@@ -389,7 +437,12 @@ impl SettingsDialog {
             let _ = SendMessageW(tgt, CB_RESETCONTENT, Some(WPARAM(0)), Some(LPARAM(0)));
             for &lang in engine.supported_target_languages() {
                 let w = to_wide(lang_utils::to_korean_name(lang));
-                let _ = SendMessageW(tgt, CB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(w.as_ptr() as isize)));
+                let _ = SendMessageW(
+                    tgt,
+                    CB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(w.as_ptr() as isize)),
+                );
             }
             let tgt_sel = self.config.borrow().translation.target_lang_index(engine);
             let _ = SendMessageW(tgt, CB_SETCURSEL, Some(WPARAM(tgt_sel)), Some(LPARAM(0)));
@@ -417,8 +470,8 @@ impl SettingsDialog {
             self.create_tab_control(5, 5, 475, 400, ctrl_id::TAB_CONTROL, &tabs)?;
 
             // 탭 내부 컨트롤 시작 오프셋 (탭 헤더 아래)
-            let tx = 15;  // 탭 영역 내부 x
-            let ty = 35;  // 탭 헤더 높이 이후 y
+            let tx = 15; // 탭 영역 내부 x
+            let ty = 35; // 탭 헤더 높이 이후 y
 
             // ════════════════════════════════════════════
             // 탭 0: 외관 설정
@@ -470,31 +523,79 @@ impl SettingsDialog {
 
             let h = self.create_label(tx + 10, ty + 20, 50, 18, "투명도:")?;
             self.register_control(tab, h);
-            let trackbar = self.create_trackbar(tx + 60, ty + 18, 150, 22, ctrl_id::BACKGROUND_TRACKBAR, 0, 255)?;
+            let trackbar = self.create_trackbar(
+                tx + 60,
+                ty + 18,
+                150,
+                22,
+                ctrl_id::BACKGROUND_TRACKBAR,
+                0,
+                255,
+            )?;
             self.register_control(tab, trackbar);
             let alpha = (self.config.borrow().background_color >> 24) & 0xFF;
-            let _ = SendMessageW(trackbar, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(alpha as isize)));
+            let _ = SendMessageW(
+                trackbar,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(alpha as isize)),
+            );
 
-            let h = self.create_color_button(tx + 10, ty + 45, 70, 24, ctrl_id::BACKGROUND_COLOR, "배경색")?;
+            let h = self.create_color_button(
+                tx + 10,
+                ty + 45,
+                70,
+                24,
+                ctrl_id::BACKGROUND_COLOR,
+                "배경색",
+            )?;
             self.register_control(tab, h);
             let bg_visible = self.config.borrow().background_visible;
-            let h = self.create_checkbox(tx + 90, ty + 47, 80, 20, ctrl_id::BACKGROUND_SWITCH, "표시", bg_visible)?;
+            let h = self.create_checkbox(
+                tx + 90,
+                ty + 47,
+                80,
+                20,
+                ctrl_id::BACKGROUND_SWITCH,
+                "표시",
+                bg_visible,
+            )?;
             self.register_control(tab, h);
 
             // ── 텍스트 크기 ──
             let h = self.create_group_box(tx + 230, ty, 230, 75, "텍스트 크기")?;
             self.register_control(tab, h);
 
-            let size_trackbar = self.create_trackbar(tx + 240, ty + 18, 210, 22, ctrl_id::TEXTSIZE_TRACKBAR, 6, 100)?;
+            let size_trackbar = self.create_trackbar(
+                tx + 240,
+                ty + 18,
+                210,
+                22,
+                ctrl_id::TEXTSIZE_TRACKBAR,
+                6,
+                100,
+            )?;
             self.register_control(tab, size_trackbar);
             let text_size = self.config.borrow().translation_style.size;
-            let _ = SendMessageW(size_trackbar, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(text_size as isize)));
+            let _ = SendMessageW(
+                size_trackbar,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(text_size as isize)),
+            );
 
             let h = self.create_button(tx + 240, ty + 45, 35, 24, ctrl_id::TEXTSIZE_MINUS, "-")?;
             self.register_control(tab, h);
             let h = self.create_button(tx + 280, ty + 45, 35, 24, ctrl_id::TEXTSIZE_PLUS, "+")?;
             self.register_control(tab, h);
-            let h = self.create_label_with_id(tx + 325, ty + 48, 100, 18, ctrl_id::TEXTSIZE_TEXT, &format!("크기: {}", text_size))?;
+            let h = self.create_label_with_id(
+                tx + 325,
+                ty + 48,
+                100,
+                18,
+                ctrl_id::TEXTSIZE_TEXT,
+                &format!("크기: {}", text_size),
+            )?;
             self.register_control(tab, h);
 
             // ── 외곽선 설정 ──
@@ -504,10 +605,16 @@ impl SettingsDialog {
 
             let h = self.create_label(tx + 10, oy + 18, 65, 18, "외곽선1:")?;
             self.register_control(tab, h);
-            let outline1_tb = self.create_trackbar(tx + 75, oy + 16, 90, 22, ctrl_id::OUTLINE1_TRACKBAR, 0, 20)?;
+            let outline1_tb =
+                self.create_trackbar(tx + 75, oy + 16, 90, 22, ctrl_id::OUTLINE1_TRACKBAR, 0, 20)?;
             self.register_control(tab, outline1_tb);
             let outline1_size = self.config.borrow().translation_style.outline1_size;
-            let _ = SendMessageW(outline1_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(outline1_size as isize)));
+            let _ = SendMessageW(
+                outline1_tb,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(outline1_size as isize)),
+            );
             let h = self.create_button(tx + 170, oy + 16, 25, 22, ctrl_id::OUTLINE1_MINUS, "-")?;
             self.register_control(tab, h);
             let h = self.create_button(tx + 198, oy + 16, 25, 22, ctrl_id::OUTLINE1_PLUS, "+")?;
@@ -515,10 +622,16 @@ impl SettingsDialog {
 
             let h = self.create_label(tx + 240, oy + 18, 65, 18, "외곽선2:")?;
             self.register_control(tab, h);
-            let outline2_tb = self.create_trackbar(tx + 305, oy + 16, 90, 22, ctrl_id::OUTLINE2_TRACKBAR, 0, 20)?;
+            let outline2_tb =
+                self.create_trackbar(tx + 305, oy + 16, 90, 22, ctrl_id::OUTLINE2_TRACKBAR, 0, 20)?;
             self.register_control(tab, outline2_tb);
             let outline2_size = self.config.borrow().translation_style.outline2_size;
-            let _ = SendMessageW(outline2_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(outline2_size as isize)));
+            let _ = SendMessageW(
+                outline2_tb,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(outline2_size as isize)),
+            );
             let h = self.create_button(tx + 400, oy + 16, 25, 22, ctrl_id::OUTLINE2_MINUS, "-")?;
             self.register_control(tab, h);
             let h = self.create_button(tx + 428, oy + 16, 25, 22, ctrl_id::OUTLINE2_PLUS, "+")?;
@@ -526,17 +639,36 @@ impl SettingsDialog {
 
             let h = self.create_label(tx + 10, oy + 46, 65, 18, "그림자 X:")?;
             self.register_control(tab, h);
-            let shadow_x_tb = self.create_trackbar(tx + 75, oy + 44, 100, 22, ctrl_id::SHADOW_X_TRACKBAR, 0, 20)?;
+            let shadow_x_tb =
+                self.create_trackbar(tx + 75, oy + 44, 100, 22, ctrl_id::SHADOW_X_TRACKBAR, 0, 20)?;
             self.register_control(tab, shadow_x_tb);
             let shadow_x = self.config.borrow().shadow_offset_x;
-            let _ = SendMessageW(shadow_x_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(shadow_x as isize)));
+            let _ = SendMessageW(
+                shadow_x_tb,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(shadow_x as isize)),
+            );
 
             let h = self.create_label(tx + 240, oy + 46, 65, 18, "그림자 Y:")?;
             self.register_control(tab, h);
-            let shadow_y_tb = self.create_trackbar(tx + 305, oy + 44, 100, 22, ctrl_id::SHADOW_Y_TRACKBAR, 0, 20)?;
+            let shadow_y_tb = self.create_trackbar(
+                tx + 305,
+                oy + 44,
+                100,
+                22,
+                ctrl_id::SHADOW_Y_TRACKBAR,
+                0,
+                20,
+            )?;
             self.register_control(tab, shadow_y_tb);
             let shadow_y = self.config.borrow().shadow_offset_y;
-            let _ = SendMessageW(shadow_y_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(shadow_y as isize)));
+            let _ = SendMessageW(
+                shadow_y_tb,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(shadow_y as isize)),
+            );
 
             // ── 이름/원문/번역문 색상 설정 ──
             let cy = ty + 160;
@@ -580,40 +712,100 @@ impl SettingsDialog {
 
             let h = self.create_label(tx + 10, my + 22, 35, 18, "좌우:")?;
             self.register_control(tab, h);
-            let margin_x_tb = self.create_trackbar(tx + 45, my + 20, 90, 22, ctrl_id::MARGIN_X_TRACKBAR, 0, 300)?;
+            let margin_x_tb =
+                self.create_trackbar(tx + 45, my + 20, 90, 22, ctrl_id::MARGIN_X_TRACKBAR, 0, 300)?;
             self.register_control(tab, margin_x_tb);
             let margin_x = self.config.borrow().text_margin_x;
-            let _ = SendMessageW(margin_x_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(margin_x as isize)));
+            let _ = SendMessageW(
+                margin_x_tb,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(margin_x as isize)),
+            );
 
             let h = self.create_label(tx + 155, my + 22, 35, 18, "상하:")?;
             self.register_control(tab, h);
-            let margin_y_tb = self.create_trackbar(tx + 190, my + 20, 90, 22, ctrl_id::MARGIN_Y_TRACKBAR, 0, 300)?;
+            let margin_y_tb = self.create_trackbar(
+                tx + 190,
+                my + 20,
+                90,
+                22,
+                ctrl_id::MARGIN_Y_TRACKBAR,
+                0,
+                300,
+            )?;
             self.register_control(tab, margin_y_tb);
             let margin_y = self.config.borrow().text_margin_y;
-            let _ = SendMessageW(margin_y_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(margin_y as isize)));
+            let _ = SendMessageW(
+                margin_y_tb,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(margin_y as isize)),
+            );
 
             let h = self.create_label(tx + 310, my + 22, 35, 18, "이름:")?;
             self.register_control(tab, h);
-            let margin_name_tb = self.create_trackbar(tx + 345, my + 20, 90, 22, ctrl_id::MARGIN_NAME_TRACKBAR, 0, 300)?;
+            let margin_name_tb = self.create_trackbar(
+                tx + 345,
+                my + 20,
+                90,
+                22,
+                ctrl_id::MARGIN_NAME_TRACKBAR,
+                0,
+                300,
+            )?;
             self.register_control(tab, margin_name_tb);
             let margin_name = self.config.borrow().name_margin;
-            let _ = SendMessageW(margin_name_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(margin_name as isize)));
+            let _ = SendMessageW(
+                margin_name_tb,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(margin_name as isize)),
+            );
 
             // ── 테두리 설정 ──
             let by = ty + 345;
             let h = self.create_group_box(tx, by, 460, 50, "테두리 설정")?;
             self.register_control(tab, h);
             let border_visible = self.config.borrow().border_visible;
-            let h = self.create_checkbox(tx + 10, by + 22, 60, 20, ctrl_id::BORDER_MODE, "표시", border_visible)?;
+            let h = self.create_checkbox(
+                tx + 10,
+                by + 22,
+                60,
+                20,
+                ctrl_id::BORDER_MODE,
+                "표시",
+                border_visible,
+            )?;
             self.register_control(tab, h);
-            let h = self.create_color_button(tx + 75, by + 20, 80, 24, ctrl_id::BORDER_COLOR, "테두리색")?;
+            let h = self.create_color_button(
+                tx + 75,
+                by + 20,
+                80,
+                24,
+                ctrl_id::BORDER_COLOR,
+                "테두리색",
+            )?;
             self.register_control(tab, h);
             let h = self.create_label(tx + 165, by + 22, 40, 18, "두께:")?;
             self.register_control(tab, h);
-            let border_tb = self.create_trackbar(tx + 205, by + 20, 150, 22, ctrl_id::BORDER_SIZE_TRACKBAR, 0, 10)?;
+            let border_tb = self.create_trackbar(
+                tx + 205,
+                by + 20,
+                150,
+                22,
+                ctrl_id::BORDER_SIZE_TRACKBAR,
+                0,
+                10,
+            )?;
             self.register_control(tab, border_tb);
             let border_size = self.config.borrow().border_width;
-            let _ = SendMessageW(border_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(border_size as isize)));
+            let _ = SendMessageW(
+                border_tb,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(border_size as isize)),
+            );
 
             Ok(())
         }
@@ -621,28 +813,43 @@ impl SettingsDialog {
 
     /// 텍스트 스타일 그룹 생성 (이름/원문/번역문 공통)
     fn create_text_style_group(
-        &mut self, tab: usize, x: i32, y: i32, w: i32, title: &str,
+        &mut self,
+        tab: usize,
+        x: i32,
+        y: i32,
+        w: i32,
+        title: &str,
         spec: TextStyleGroupSpec,
     ) -> Result<()> {
         unsafe {
             // 좌/우 마진 5/6 (1px 비대칭), 버튼 폭 (w-15)/2 = 67, 간격 5.
             // 기존 (w-20)/2=65 + 좌5/우10 비대칭을 좁힌 결과.
-            let bw = (w - 15) / 2;  // 버튼 너비
+            let bw = (w - 15) / 2; // 버튼 너비
 
             let h = self.create_group_box(x, y, w, 125, title)?;
             self.register_control(tab, h);
 
             let h = self.create_color_button(x + 5, y + 20, bw, 22, spec.color, "주색상")?;
             self.register_control(tab, h);
-            let h = self.create_color_button(x + 5 + bw + 5, y + 20, bw, 22, spec.outline1, "외곽1")?;
+            let h =
+                self.create_color_button(x + 5 + bw + 5, y + 20, bw, 22, spec.outline1, "외곽1")?;
             self.register_control(tab, h);
             let h = self.create_color_button(x + 5, y + 47, bw, 22, spec.outline2, "외곽2")?;
             self.register_control(tab, h);
-            let h = self.create_color_button(x + 5 + bw + 5, y + 47, bw, 22, spec.shadow, "그림자색")?;
+            let h =
+                self.create_color_button(x + 5 + bw + 5, y + 47, bw, 22, spec.shadow, "그림자색")?;
             self.register_control(tab, h);
             let h = self.create_button(x + 5, y + 74, w - 11, 22, spec.font, "폰트 선택")?;
             self.register_control(tab, h);
-            let h = self.create_checkbox(x + 5, y + 100, 110, 20, spec.shadow_check, "그림자 사용", spec.shadow_enabled)?;
+            let h = self.create_checkbox(
+                x + 5,
+                y + 100,
+                110,
+                20,
+                spec.shadow_check,
+                "그림자 사용",
+                spec.shadow_enabled,
+            )?;
             self.register_control(tab, h);
 
             Ok(())
@@ -659,28 +866,91 @@ impl SettingsDialog {
             self.register_control(tab, h);
 
             let show_org = self.config.borrow().show_original;
-            let h = self.create_checkbox(tx + 15, ty + 25, 100, 20, ctrl_id::PRINT_ORGTEXT, "원문 표시", show_org)?;
+            let h = self.create_checkbox(
+                tx + 15,
+                ty + 25,
+                100,
+                20,
+                ctrl_id::PRINT_ORGTEXT,
+                "원문 표시",
+                show_org,
+            )?;
             self.register_control(tab, h);
             let show_trans = self.config.borrow().show_translation;
-            let h = self.create_checkbox(tx + 130, ty + 25, 100, 20, ctrl_id::PRINT_TRANSTEXT, "번역 표시", show_trans)?;
+            let h = self.create_checkbox(
+                tx + 130,
+                ty + 25,
+                100,
+                20,
+                ctrl_id::PRINT_TRANSTEXT,
+                "번역 표시",
+                show_trans,
+            )?;
             self.register_control(tab, h);
             let show_name = self.config.borrow().show_name;
-            let h = self.create_checkbox(tx + 245, ty + 25, 100, 20, ctrl_id::PRINT_ORGNAME, "이름 표시", show_name)?;
+            let h = self.create_checkbox(
+                tx + 245,
+                ty + 25,
+                100,
+                20,
+                ctrl_id::PRINT_ORGNAME,
+                "이름 표시",
+                show_name,
+            )?;
             self.register_control(tab, h);
             let sep_name = self.config.borrow().separate_name;
-            let h = self.create_checkbox(tx + 360, ty + 25, 100, 20, ctrl_id::SEPERATE_NAME, "이름 줄바꿈", sep_name)?;
+            let h = self.create_checkbox(
+                tx + 360,
+                ty + 25,
+                100,
+                20,
+                ctrl_id::SEPERATE_NAME,
+                "이름 줄바꿈",
+                sep_name,
+            )?;
             self.register_control(tab, h);
 
             let repeat_mode = self.config.borrow().repeat_text_mode;
-            let h = self.create_button(tx + 15, ty + 55, 90, 24, ctrl_id::REPEAT_TEXT, &repeat_mode_label(repeat_mode))?;
+            let h = self.create_button(
+                tx + 15,
+                ty + 55,
+                90,
+                24,
+                ctrl_id::REPEAT_TEXT,
+                &repeat_mode_label(repeat_mode),
+            )?;
             self.register_control(tab, h);
 
             let align = self.config.borrow().text_align;
-            let h = self.create_radio(tx + 120, ty + 58, 55, 20, ctrl_id::TEXTALIGN_LEFT, "왼쪽", align == TextAlign::Left)?;
+            let h = self.create_radio(
+                tx + 120,
+                ty + 58,
+                55,
+                20,
+                ctrl_id::TEXTALIGN_LEFT,
+                "왼쪽",
+                align == TextAlign::Left,
+            )?;
             self.register_control(tab, h);
-            let h = self.create_radio(tx + 185, ty + 58, 55, 20, ctrl_id::TEXTALIGN_MID, "중앙", align == TextAlign::Center)?;
+            let h = self.create_radio(
+                tx + 185,
+                ty + 58,
+                55,
+                20,
+                ctrl_id::TEXTALIGN_MID,
+                "중앙",
+                align == TextAlign::Center,
+            )?;
             self.register_control(tab, h);
-            let h = self.create_radio(tx + 250, ty + 58, 65, 20, ctrl_id::TEXTALIGN_RIGHT, "오른쪽", align == TextAlign::Right)?;
+            let h = self.create_radio(
+                tx + 250,
+                ty + 58,
+                65,
+                20,
+                ctrl_id::TEXTALIGN_RIGHT,
+                "오른쪽",
+                align == TextAlign::Right,
+            )?;
             self.register_control(tab, h);
 
             // ── 윈도우 옵션 ──
@@ -689,23 +959,71 @@ impl SettingsDialog {
             self.register_control(tab, h);
 
             let topmost = self.config.borrow().window_topmost;
-            let h = self.create_checkbox(tx + 15, wy + 25, 80, 20, ctrl_id::TOPMOST, "항상 위", topmost)?;
+            let h = self.create_checkbox(
+                tx + 15,
+                wy + 25,
+                80,
+                20,
+                ctrl_id::TOPMOST,
+                "항상 위",
+                topmost,
+            )?;
             self.register_control(tab, h);
             let magnetic = self.config.borrow().magnetic_mode;
-            let h = self.create_checkbox(tx + 110, wy + 25, 70, 20, ctrl_id::USE_MAGNETIC, "자석", magnetic)?;
+            let h = self.create_checkbox(
+                tx + 110,
+                wy + 25,
+                70,
+                20,
+                ctrl_id::USE_MAGNETIC,
+                "자석",
+                magnetic,
+            )?;
             self.register_control(tab, h);
             let magnetic_min = self.config.borrow().magnetic_minimize;
-            let h = self.create_checkbox(tx + 195, wy + 25, 110, 20, ctrl_id::MAGNETIC_MINIMIZE, "자석 최소화", magnetic_min)?;
+            let h = self.create_checkbox(
+                tx + 195,
+                wy + 25,
+                110,
+                20,
+                ctrl_id::MAGNETIC_MINIMIZE,
+                "자석 최소화",
+                magnetic_min,
+            )?;
             self.register_control(tab, h);
 
             let hide_win = self.config.borrow().temp_window_hide;
-            let h = self.create_checkbox(tx + 15, wy + 50, 80, 20, ctrl_id::HIDEWIN, "숨기기", hide_win)?;
+            let h = self.create_checkbox(
+                tx + 15,
+                wy + 50,
+                80,
+                20,
+                ctrl_id::HIDEWIN,
+                "숨기기",
+                hide_win,
+            )?;
             self.register_control(tab, h);
             let clip_watch = self.config.borrow().clipboard_watch;
-            let h = self.create_checkbox(tx + 110, wy + 50, 80, 20, ctrl_id::CLIPBOARD_WATCH, "클립보드", clip_watch)?;
+            let h = self.create_checkbox(
+                tx + 110,
+                wy + 50,
+                80,
+                20,
+                ctrl_id::CLIPBOARD_WATCH,
+                "클립보드",
+                clip_watch,
+            )?;
             self.register_control(tab, h);
             let click_through = self.config.borrow().click_through;
-            let h = self.create_checkbox(tx + 205, wy + 50, 90, 20, ctrl_id::WNDCLICK_THROUGH, "클릭 통과", click_through)?;
+            let h = self.create_checkbox(
+                tx + 205,
+                wy + 50,
+                90,
+                20,
+                ctrl_id::WNDCLICK_THROUGH,
+                "클릭 통과",
+                click_through,
+            )?;
             self.register_control(tab, h);
 
             Ok(())
@@ -726,25 +1044,42 @@ impl SettingsDialog {
             self.register_control(tab, h);
             let engine_items = vec!["EzTrans", "Google", "DeepL", "Papago", "LLM"];
             let engine_sel = self.config.borrow().translation.engine_as_u8() as usize;
-            let h = self.create_combobox(tx + 55, ty + 23, 90, 120, ctrl_id::TRANS_ENGINE, &engine_items, engine_sel)?;
+            let h = self.create_combobox(
+                tx + 55,
+                ty + 23,
+                90,
+                120,
+                ctrl_id::TRANS_ENGINE,
+                &engine_items,
+                engine_sel,
+            )?;
             self.register_control(tab, h);
 
             // 소스/타겟 언어 — 항목은 엔진별로 다르므로 빈 콤보로 생성 후 apply_engine_state에서 채움
             let h = self.create_label(tx + 160, ty + 25, 40, 18, "소스:")?;
             self.register_control(tab, h);
-            let h = self.create_combobox(tx + 200, ty + 23, 80, 200, ctrl_id::TRANS_SOURCE_LANG, &[], 0)?;
+            let h = self.create_combobox(
+                tx + 200,
+                ty + 23,
+                80,
+                200,
+                ctrl_id::TRANS_SOURCE_LANG,
+                &[],
+                0,
+            )?;
             self.register_control(tab, h);
 
             let h = self.create_label(tx + 295, ty + 25, 40, 18, "타겟:")?;
             self.register_control(tab, h);
-            // 타겟 콤보 폭 80→70 으로 줄여 우측 "자동" 체크박스 공간 확보.
-            let h = self.create_combobox(tx + 335, ty + 23, 70, 200, ctrl_id::TRANS_TARGET_LANG, &[], 0)?;
-            self.register_control(tab, h);
-
-            let auto_detect = self.config.borrow().translation.auto_detect;
-            // 타겟 콤보 우측 끝 tx+405. 그룹박스 우측 끝 tx+460.
-            // x=tx+410, w=45 → 우측 끝 tx+455 → 그룹 안쪽 5px 여유.
-            let h = self.create_checkbox(tx + 410, ty + 25, 45, 18, ctrl_id::TRANS_AUTO_DETECT, "자동", auto_detect)?;
+            let h = self.create_combobox(
+                tx + 335,
+                ty + 23,
+                80,
+                200,
+                ctrl_id::TRANS_TARGET_LANG,
+                &[],
+                0,
+            )?;
             self.register_control(tab, h);
 
             // EzTrans 경로
@@ -752,10 +1087,24 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::EzTrans, h);
             let dll_path = self.config.borrow().translation.eztrans_dll_path.clone();
-            let h = self.create_edit(tx + 95, ty + 58, 280, 22, ctrl_id::EZTRANS_DLL_EDIT, &dll_path)?;
+            let h = self.create_edit(
+                tx + 95,
+                ty + 58,
+                280,
+                22,
+                ctrl_id::EZTRANS_DLL_EDIT,
+                &dll_path,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::EzTrans, h);
-            let h = self.create_button(tx + 380, ty + 58, 70, 22, ctrl_id::EZTRANS_DLL_BROWSE, "찾아보기")?;
+            let h = self.create_button(
+                tx + 380,
+                ty + 58,
+                70,
+                22,
+                ctrl_id::EZTRANS_DLL_BROWSE,
+                "찾아보기",
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::EzTrans, h);
 
@@ -763,10 +1112,24 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::EzTrans, h);
             let dat_path = self.config.borrow().translation.eztrans_dat_path.clone();
-            let h = self.create_edit(tx + 95, ty + 88, 280, 22, ctrl_id::EZTRANS_DAT_EDIT, &dat_path)?;
+            let h = self.create_edit(
+                tx + 95,
+                ty + 88,
+                280,
+                22,
+                ctrl_id::EZTRANS_DAT_EDIT,
+                &dat_path,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::EzTrans, h);
-            let h = self.create_button(tx + 380, ty + 88, 70, 22, ctrl_id::EZTRANS_DAT_BROWSE, "찾아보기")?;
+            let h = self.create_button(
+                tx + 380,
+                ty + 88,
+                70,
+                22,
+                ctrl_id::EZTRANS_DAT_BROWSE,
+                "찾아보기",
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::EzTrans, h);
 
@@ -781,12 +1144,25 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::DeepL, h);
             let api_key = self.config.borrow().translation.deepl_api_key.clone();
-            let h = self.create_edit(tx + 100, dy + 23, 345, 22, ctrl_id::DEEPL_API_KEY_EDIT, &api_key)?;
+            let h = self.create_edit(
+                tx + 100,
+                dy + 23,
+                345,
+                22,
+                ctrl_id::DEEPL_API_KEY_EDIT,
+                &api_key,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::DeepL, h);
 
             // 안내 문구: 단일 키 vs 보조 키 사용 규칙
-            let h = self.create_label(tx + 15, dy + 50, 430, 16, "* 보조 키 목록이 비어있을 때만 단일 키를 사용합니다.")?;
+            let h = self.create_label(
+                tx + 15,
+                dy + 50,
+                430,
+                16,
+                "* 보조 키 목록이 비어있을 때만 단일 키를 사용합니다.",
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::DeepL, h);
 
@@ -798,17 +1174,33 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::DeepL, h);
             let strategy_items = vec!["failover", "round-robin"];
-            let strategy_sel: usize = match self.config.borrow().translation.deepl_strategy.to_lowercase().as_str() {
+            let strategy_sel: usize = match self
+                .config
+                .borrow()
+                .translation
+                .deepl_strategy
+                .to_lowercase()
+                .as_str()
+            {
                 "round-robin" | "roundrobin" | "rr" => 1,
                 _ => 0,
             };
-            let h = self.create_combobox(tx + 345, dy + 68, 100, 120, ctrl_id::DEEPL_STRATEGY_COMBO, &strategy_items, strategy_sel)?;
+            let h = self.create_combobox(
+                tx + 345,
+                dy + 68,
+                100,
+                120,
+                ctrl_id::DEEPL_STRATEGY_COMBO,
+                &strategy_items,
+                strategy_sel,
+            )?;
             // 안전망: 일부 환경에서 생성 직후 CB_SETCURSEL이 무시되는 경우가 있어 한 번 더 적용
             let _ = SendMessageW(h, CB_SETCURSEL, Some(WPARAM(strategy_sel)), Some(LPARAM(0)));
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::DeepL, h);
 
-            let listbox = self.create_listbox(tx + 15, dy + 92, 285, 55, ctrl_id::DEEPL_KEYS_LIST)?;
+            let listbox =
+                self.create_listbox(tx + 15, dy + 92, 285, 55, ctrl_id::DEEPL_KEYS_LIST)?;
             self.register_control(tab, listbox);
             self.register_engine_control(EngineGroup::DeepL, listbox);
             // 초기 항목 채우기
@@ -816,17 +1208,37 @@ impl SettingsDialog {
                 let cfg = self.config.borrow();
                 for k in &cfg.translation.deepl_keys {
                     let kw = to_wide(k);
-                    let _ = SendMessageW(listbox, LB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(kw.as_ptr() as isize)));
+                    let _ = SendMessageW(
+                        listbox,
+                        LB_ADDSTRING,
+                        Some(WPARAM(0)),
+                        Some(LPARAM(kw.as_ptr() as isize)),
+                    );
                 }
             }
 
-            let h = self.create_edit(tx + 305, dy + 92, 140, 22, ctrl_id::DEEPL_KEY_ADD_EDIT, "")?;
+            let h =
+                self.create_edit(tx + 305, dy + 92, 140, 22, ctrl_id::DEEPL_KEY_ADD_EDIT, "")?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::DeepL, h);
-            let h = self.create_button(tx + 305, dy + 120, 65, 22, ctrl_id::DEEPL_KEY_ADD_BTN, "추가")?;
+            let h = self.create_button(
+                tx + 305,
+                dy + 120,
+                65,
+                22,
+                ctrl_id::DEEPL_KEY_ADD_BTN,
+                "추가",
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::DeepL, h);
-            let h = self.create_button(tx + 380, dy + 120, 65, 22, ctrl_id::DEEPL_KEY_REMOVE_BTN, "삭제")?;
+            let h = self.create_button(
+                tx + 380,
+                dy + 120,
+                65,
+                22,
+                ctrl_id::DEEPL_KEY_REMOVE_BTN,
+                "삭제",
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::DeepL, h);
 
@@ -840,15 +1252,34 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Papago, h);
             let papago_id = self.config.borrow().translation.papago_client_id.clone();
-            let h = self.create_edit(tx + 100, py + 20, 345, 22, ctrl_id::PAPAGO_ID_EDIT, &papago_id)?;
+            let h = self.create_edit(
+                tx + 100,
+                py + 20,
+                345,
+                22,
+                ctrl_id::PAPAGO_ID_EDIT,
+                &papago_id,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Papago, h);
 
             let h = self.create_label(tx + 15, py + 47, 80, 18, "Secret:")?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Papago, h);
-            let papago_secret = self.config.borrow().translation.papago_client_secret.clone();
-            let h = self.create_edit(tx + 100, py + 45, 345, 22, ctrl_id::PAPAGO_SECRET_EDIT, &papago_secret)?;
+            let papago_secret = self
+                .config
+                .borrow()
+                .translation
+                .papago_client_secret
+                .clone();
+            let h = self.create_edit(
+                tx + 100,
+                py + 45,
+                345,
+                22,
+                ctrl_id::PAPAGO_SECRET_EDIT,
+                &papago_secret,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Papago, h);
 
@@ -868,7 +1299,15 @@ impl SettingsDialog {
                 .map(|p| p.display_name())
                 .collect();
             let provider_sel = self.config.borrow().translation.llm.get_provider() as u8 as usize;
-            let h = self.create_combobox(tx + 65, ly + 23, 100, 150, ctrl_id::LLM_PROVIDER, &provider_items, provider_sel)?;
+            let h = self.create_combobox(
+                tx + 65,
+                ly + 23,
+                100,
+                150,
+                ctrl_id::LLM_PROVIDER,
+                &provider_items,
+                provider_sel,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
@@ -876,7 +1315,8 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
             let model = self.config.borrow().translation.llm.model.clone();
-            let h = self.create_edit(tx + 220, ly + 23, 230, 22, ctrl_id::LLM_MODEL_EDIT, &model)?;
+            let h =
+                self.create_edit(tx + 220, ly + 23, 230, 22, ctrl_id::LLM_MODEL_EDIT, &model)?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
@@ -885,7 +1325,14 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
             let api_key = self.config.borrow().translation.llm.api_key.clone();
-            let h = self.create_edit(tx + 65, ly + 53, 385, 22, ctrl_id::LLM_API_KEY_EDIT, &api_key)?;
+            let h = self.create_edit(
+                tx + 65,
+                ly + 53,
+                385,
+                22,
+                ctrl_id::LLM_API_KEY_EDIT,
+                &api_key,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
@@ -894,7 +1341,14 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
             let base_url = self.config.borrow().translation.llm.base_url.clone();
-            let h = self.create_edit(tx + 80, ly + 83, 370, 22, ctrl_id::LLM_BASE_URL_EDIT, &base_url)?;
+            let h = self.create_edit(
+                tx + 80,
+                ly + 83,
+                370,
+                22,
+                ctrl_id::LLM_BASE_URL_EDIT,
+                &base_url,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
@@ -903,7 +1357,14 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
             let system_prompt = self.config.borrow().translation.llm.system_prompt.clone();
-            let h = self.create_multiline_edit(tx + 15, ly + 135, 435, 110, ctrl_id::LLM_SYSTEM_PROMPT_EDIT, &system_prompt)?;
+            let h = self.create_multiline_edit(
+                tx + 15,
+                ly + 135,
+                435,
+                110,
+                ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
+                &system_prompt,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
@@ -912,12 +1373,27 @@ impl SettingsDialog {
             let h = self.create_label(tx + 15, ly + 255, 90, 18, "Temperature:")?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
-            let temp_tb = self.create_trackbar(tx + 105, ly + 253, 180, 22, ctrl_id::LLM_TEMPERATURE_TRACKBAR, 0, 200)?;
+            let temp_tb = self.create_trackbar(
+                tx + 105,
+                ly + 253,
+                180,
+                22,
+                ctrl_id::LLM_TEMPERATURE_TRACKBAR,
+                0,
+                200,
+            )?;
             self.register_control(tab, temp_tb);
             self.register_engine_control(EngineGroup::Llm, temp_tb);
             let temp_pos = (temperature_value * 100.0).clamp(0.0, 200.0) as isize;
             let _ = SendMessageW(temp_tb, TBM_SETPOS, Some(WPARAM(1)), Some(LPARAM(temp_pos)));
-            let h = self.create_label_with_id(tx + 290, ly + 257, 50, 18, ctrl_id::LLM_TEMPERATURE_LABEL, &format!("{:.2}", temperature_value))?;
+            let h = self.create_label_with_id(
+                tx + 290,
+                ly + 257,
+                50,
+                18,
+                ctrl_id::LLM_TEMPERATURE_LABEL,
+                &format!("{:.2}", temperature_value),
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
@@ -926,7 +1402,14 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
             let max_tokens = format!("{}", self.config.borrow().translation.llm.max_tokens);
-            let h = self.create_edit_numeric(tx + 390, ly + 255, 60, 22, ctrl_id::LLM_MAX_TOKENS_EDIT, &max_tokens)?;
+            let h = self.create_edit_numeric(
+                tx + 390,
+                ly + 255,
+                60,
+                22,
+                ctrl_id::LLM_MAX_TOKENS_EDIT,
+                &max_tokens,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
@@ -935,22 +1418,46 @@ impl SettingsDialog {
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
             let debounce = format!("{}", self.config.borrow().translation.llm.debounce_ms);
-            let h = self.create_edit_numeric(tx + 105, ly + 285, 70, 22, ctrl_id::LLM_DEBOUNCE_EDIT, &debounce)?;
+            let h = self.create_edit_numeric(
+                tx + 105,
+                ly + 285,
+                70,
+                22,
+                ctrl_id::LLM_DEBOUNCE_EDIT,
+                &debounce,
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
             let glossary_count = self.config.borrow().translation.llm.glossary.len();
-            let h = self.create_label_with_id(tx + 195, ly + 287, 120, 18, ctrl_id::LLM_GLOSSARY_COUNT_LABEL, &format!("사전 항목: {}", glossary_count))?;
+            let h = self.create_label_with_id(
+                tx + 195,
+                ly + 287,
+                120,
+                18,
+                ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
+                &format!("사전 항목: {}", glossary_count),
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
-            let h = self.create_button(tx + 325, ly + 285, 125, 22, ctrl_id::LLM_GLOSSARY_EDIT_BTN, "사전 편집...")?;
+            let h = self.create_button(
+                tx + 325,
+                ly + 285,
+                125,
+                22,
+                ctrl_id::LLM_GLOSSARY_EDIT_BTN,
+                "사전 편집...",
+            )?;
             self.register_control(tab, h);
             self.register_engine_control(EngineGroup::Llm, h);
 
             // 프라이버시 안내: 클립보드/원문이 외부 제공자 서버로 전송됨을 명시.
             // 마스킹 필터는 두지 않고 사용자 책임으로 둠.
             let h = self.create_label(
-                tx + 15, ly + 315, 435, 18,
+                tx + 15,
+                ly + 315,
+                435,
+                18,
                 "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.",
             )?;
             self.register_control(tab, h);
@@ -997,14 +1504,15 @@ impl SettingsDialog {
                     let id = GetDlgCtrlID(trackbar_hwnd) as u16;
                     let value = match code {
                         TB_THUMBTRACK => ((wparam.0 >> 16) & 0xFFFF) as i32,
-                        TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP
-                        | TB_BOTTOM | TB_ENDTRACK => {
+                        TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP | TB_BOTTOM
+                        | TB_ENDTRACK => {
                             SendMessageW(
                                 trackbar_hwnd,
                                 TBM_GETPOS_VAL,
                                 Some(WPARAM(0)),
                                 Some(LPARAM(0)),
-                            ).0 as i32
+                            )
+                            .0 as i32
                         }
                         _ => return Some(LRESULT(0)),
                     };
@@ -1018,14 +1526,12 @@ impl SettingsDialog {
                 unsafe {
                     let nmhdr = &*(lparam.0 as *const NMHDR);
                     if nmhdr.code == TCN_SELCHANGE
-                        && let Ok(tab_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32)
+                        && let Ok(tab_hwnd) =
+                            GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32)
                     {
-                        let sel = SendMessageW(
-                            tab_hwnd,
-                            TCM_GETCURSEL,
-                            Some(WPARAM(0)),
-                            Some(LPARAM(0)),
-                        ).0 as usize;
+                        let sel =
+                            SendMessageW(tab_hwnd, TCM_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0)))
+                                .0 as usize;
                         self.switch_tab(sel);
                     }
                 }

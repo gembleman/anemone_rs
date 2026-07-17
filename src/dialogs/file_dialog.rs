@@ -11,8 +11,8 @@ use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
     FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
-    FOS_PICKFOLDERS, FileOpenDialog, FileSaveDialog, IFileOpenDialog, IFileSaveDialog,
-    IShellItem, SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+    FOS_PICKFOLDERS, FileOpenDialog, FileSaveDialog, IFileOpenDialog, IFileSaveDialog, IShellItem,
+    SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
 };
 use windows::core::PCWSTR;
 
@@ -130,9 +130,7 @@ pub fn open_files_multi(hwnd: HWND, title: &str, filters: &[FileFilter]) -> Vec<
             let _ = dialog.SetFileTypes(&storage.specs);
         }
 
-        let _ = dialog.SetOptions(
-            FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST | FOS_ALLOWMULTISELECT,
-        );
+        let _ = dialog.SetOptions(FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST | FOS_ALLOWMULTISELECT);
 
         if dialog.Show(Some(hwnd)).is_err() {
             return Vec::new();

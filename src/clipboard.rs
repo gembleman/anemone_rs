@@ -120,7 +120,6 @@ impl ClipboardWatcher {
             result
         }
     }
-
 }
 
 impl Drop for ClipboardWatcher {

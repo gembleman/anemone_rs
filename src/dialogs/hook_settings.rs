@@ -11,10 +11,10 @@ use windows::{
     core::*,
 };
 
+use super::helpers::{Dialog, DialogControls};
 use crate::config::Config;
 use crate::define_dialog_instance;
 use crate::util::to_wide;
-use super::helpers::{Dialog, DialogControls};
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -39,7 +39,9 @@ pub struct HookSettingsDialog {
 }
 
 impl DialogControls for HookSettingsDialog {
-    fn dialog_hwnd(&self) -> HWND { self.hwnd }
+    fn dialog_hwnd(&self) -> HWND {
+        self.hwnd
+    }
 }
 
 define_dialog_instance!(HOOK_SETTINGS_INSTANCE: HookSettingsDialog);
@@ -53,19 +55,26 @@ impl Dialog for HookSettingsDialog {
     const HEIGHT: i32 = 350;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 
-    fn instance_slot()
-        -> &'static std::thread::LocalKey<
-            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-        > {
+    fn instance_slot() -> &'static std::thread::LocalKey<
+        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+    > {
         &HOOK_SETTINGS_INSTANCE
     }
 
     fn init(hwnd: HWND, _parent: HWND, config: Self::Params) -> Self {
         let (active, inactive) = {
             let cfg = config.borrow();
-            (cfg.hook.active_hooks.clone(), cfg.hook.inactive_hooks.clone())
+            (
+                cfg.hook.active_hooks.clone(),
+                cfg.hook.inactive_hooks.clone(),
+            )
         };
-        HookSettingsDialog { hwnd, config, active_hooks: active, inactive_hooks: inactive }
+        HookSettingsDialog {
+            hwnd,
+            config,
+            active_hooks: active,
+            inactive_hooks: inactive,
+        }
     }
 
     fn create_controls(&mut self) -> Result<()> {
@@ -95,7 +104,10 @@ impl Dialog for HookSettingsDialog {
             // A-2: 다이얼로그 동작 안내. 활성 후크만 순서가 의미 있어 위/아래
             // 버튼이 한쪽에만 있는 이유와 → / ← 의 방향을 한 줄로 설명.
             self.create_label(
-                10, 285, 430, 18,
+                10,
+                285,
+                430,
+                18,
                 "→/← 로 후크를 이동, 위/아래로 활성 후크 순서 조정. '적용' 으로 저장.",
             )?;
 
@@ -142,13 +154,17 @@ impl Dialog for HookSettingsDialog {
                 // valid handles with indices verified against LB_ERR before use.
                 unsafe {
                     let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
+                        Ok(h) => h,
+                        Err(_) => return,
                     };
                     let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
+                        Ok(h) => h,
+                        Err(_) => return,
                     };
                     let sel = self.listbox_get_sel(active_lb);
-                    if sel == LB_ERR { return; }
+                    if sel == LB_ERR {
+                        return;
+                    }
                     if let Some(text) = self.listbox_get_text(active_lb, sel) {
                         self.listbox_delete_item(active_lb, sel);
                         self.listbox_add_item(inactive_lb, &text);
@@ -167,13 +183,17 @@ impl Dialog for HookSettingsDialog {
                 // verified against LB_ERR before use.
                 unsafe {
                     let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
+                        Ok(h) => h,
+                        Err(_) => return,
                     };
                     let inactive_lb = match GetDlgItem(Some(self.hwnd), INACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
+                        Ok(h) => h,
+                        Err(_) => return,
                     };
                     let sel = self.listbox_get_sel(inactive_lb);
-                    if sel == LB_ERR { return; }
+                    if sel == LB_ERR {
+                        return;
+                    }
                     if let Some(text) = self.listbox_get_text(inactive_lb, sel) {
                         self.listbox_delete_item(inactive_lb, sel);
                         self.listbox_add_item(active_lb, &text);
@@ -191,10 +211,13 @@ impl Dialog for HookSettingsDialog {
                 // listbox handle. Selection index is verified > 0 before moving up.
                 unsafe {
                     let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
+                        Ok(h) => h,
+                        Err(_) => return,
                     };
                     let sel = self.listbox_get_sel(active_lb);
-                    if sel == LB_ERR || sel == 0 { return; }
+                    if sel == LB_ERR || sel == 0 {
+                        return;
+                    }
                     if let Some(text) = self.listbox_get_text(active_lb, sel) {
                         self.listbox_delete_item(active_lb, sel);
                         self.listbox_insert_item(active_lb, sel - 1, &text);
@@ -208,11 +231,14 @@ impl Dialog for HookSettingsDialog {
                 // listbox handle. Selection index is verified < count-1 before moving down.
                 unsafe {
                     let active_lb = match GetDlgItem(Some(self.hwnd), ACTIVE_LIST as i32) {
-                        Ok(h) => h, Err(_) => return,
+                        Ok(h) => h,
+                        Err(_) => return,
                     };
                     let sel = self.listbox_get_sel(active_lb);
                     let count = self.listbox_get_count(active_lb);
-                    if sel == LB_ERR || sel >= count - 1 { return; }
+                    if sel == LB_ERR || sel >= count - 1 {
+                        return;
+                    }
                     if let Some(text) = self.listbox_get_text(active_lb, sel) {
                         self.listbox_delete_item(active_lb, sel);
                         self.listbox_insert_item(active_lb, sel + 1, &text);

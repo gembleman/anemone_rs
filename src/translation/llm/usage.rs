@@ -9,8 +9,8 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -74,13 +74,7 @@ fn today_key() -> String {
 
 fn prune(file: &mut UsageFile) {
     if file.days.len() > RETAIN_DAYS {
-        let to_remove: Vec<String> = file
-            .days
-            .keys()
-            .rev()
-            .skip(RETAIN_DAYS)
-            .cloned()
-            .collect();
+        let to_remove: Vec<String> = file.days.keys().rev().skip(RETAIN_DAYS).cloned().collect();
         for k in to_remove {
             file.days.remove(&k);
         }
@@ -112,8 +106,8 @@ pub fn record(input_bytes: usize, output_bytes: usize) {
         entry.calls = entry.calls.saturating_add(1);
         entry.input_bytes = entry.input_bytes.saturating_add(input_bytes as u64);
         entry.output_bytes = entry.output_bytes.saturating_add(output_bytes as u64);
-        let crossed = prev_calls < DAILY_CALL_WARN_THRESHOLD
-            && entry.calls >= DAILY_CALL_WARN_THRESHOLD;
+        let crossed =
+            prev_calls < DAILY_CALL_WARN_THRESHOLD && entry.calls >= DAILY_CALL_WARN_THRESHOLD;
         let calls = entry.calls;
         prune(&mut g);
         save_locked(&g);

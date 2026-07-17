@@ -11,22 +11,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::{
     Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::LibraryLoader::GetModuleHandleW,
-        UI::Input::KeyboardAndMouse::EnableWindow,
-        UI::WindowsAndMessaging::*,
+        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
+        UI::Input::KeyboardAndMouse::EnableWindow, UI::WindowsAndMessaging::*,
     },
     core::*,
 };
 
+use super::file_dialog::{FileFilter, open_files_multi, save_file};
+use super::file_trans_progress::FileTransProgressDialog;
+use super::helpers::{Dialog, DialogControls};
 use crate::config::Config;
 use crate::define_dialog_instance;
 use crate::translation::{EngineCredentials, Language, TranslationEngine};
 use crate::util::to_wide;
-use super::file_dialog::{FileFilter, open_files_multi, save_file};
-use super::file_trans_progress::FileTransProgressDialog;
-use super::helpers::{Dialog, DialogControls};
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -94,7 +91,9 @@ pub struct FileTransDialog {
 }
 
 impl DialogControls for FileTransDialog {
-    fn dialog_hwnd(&self) -> HWND { self.hwnd }
+    fn dialog_hwnd(&self) -> HWND {
+        self.hwnd
+    }
 }
 
 define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
@@ -108,10 +107,9 @@ impl Dialog for FileTransDialog {
     const HEIGHT: i32 = 450;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 
-    fn instance_slot()
-        -> &'static std::thread::LocalKey<
-            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-        > {
+    fn instance_slot() -> &'static std::thread::LocalKey<
+        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+    > {
         &FILE_TRANS_INSTANCE
     }
 
@@ -156,7 +154,10 @@ impl Dialog for FileTransDialog {
                 WINDOW_STYLE(
                     WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
                 ),
-                s(75), s(26), s(370), s(26),
+                s(75),
+                s(26),
+                s(370),
+                s(26),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::LOAD_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -184,7 +185,10 @@ impl Dialog for FileTransDialog {
                 WINDOW_STYLE(
                     WS_CHILD.0 | WS_VISIBLE.0 | ES_AUTOHSCROLL as u32 | ES_READONLY as u32,
                 ),
-                s(75), s(101), s(370), s(26),
+                s(75),
+                s(101),
+                s(370),
+                s(26),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::SAVE_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -216,7 +220,10 @@ impl Dialog for FileTransDialog {
                         | ES_AUTOVSCROLL as u32
                         | ES_READONLY as u32,
                 ),
-                s(20), s(175), s(505), s(100),
+                s(20),
+                s(175),
+                s(505),
+                s(100),
                 Some(self.hwnd),
                 Some(HMENU(ctrl_id::PREVIEW_EDIT as isize as *mut _)),
                 Some(hinst.into()),
@@ -232,15 +239,43 @@ impl Dialog for FileTransDialog {
             // ====== 출력 형식 그룹 ======
             self.create_group_box(10, 290, 350, 55, "출력 형식")?;
 
-            self.create_radio(20, 310, 80, 20, ctrl_id::OUTPUT_1, "번역만",
-                self.write_type == WriteType::TranslationOnly)?;
-            self.create_radio(105, 310, 90, 20, ctrl_id::OUTPUT_2, "원문+번역",
-                self.write_type == WriteType::OriginalAndTrans)?;
-            self.create_radio(200, 310, 120, 20, ctrl_id::OUTPUT_3, "원문+번역+개행",
-                self.write_type == WriteType::OriginalTransNewline)?;
+            self.create_radio(
+                20,
+                310,
+                80,
+                20,
+                ctrl_id::OUTPUT_1,
+                "번역만",
+                self.write_type == WriteType::TranslationOnly,
+            )?;
+            self.create_radio(
+                105,
+                310,
+                90,
+                20,
+                ctrl_id::OUTPUT_2,
+                "원문+번역",
+                self.write_type == WriteType::OriginalAndTrans,
+            )?;
+            self.create_radio(
+                200,
+                310,
+                120,
+                20,
+                ctrl_id::OUTPUT_3,
+                "원문+번역+개행",
+                self.write_type == WriteType::OriginalTransNewline,
+            )?;
 
-            self.create_checkbox(20, 332, 180, 20, ctrl_id::NO_TRANS_LINEFEED,
-                "줄바꿈만 있는 라인 번역 안함", self.no_trans_linefeed)?;
+            self.create_checkbox(
+                20,
+                332,
+                180,
+                20,
+                ctrl_id::NO_TRANS_LINEFEED,
+                "줄바꿈만 있는 라인 번역 안함",
+                self.no_trans_linefeed,
+            )?;
 
             // ====== 버튼 그룹 ======
             self.create_group_box(370, 290, 165, 55, "동작")?;
@@ -251,9 +286,8 @@ impl Dialog for FileTransDialog {
             // 파일 번역은 별도의 엔진 선택 UI 를 두지 않고 전역 설정 (번역 다이얼로그/
             // 설정 다이얼로그) 에서 선택된 엔진을 그대로 사용한다. 이용자가 현재
             // 어떤 엔진/언어쌍으로 동작할지 헷갈리지 않도록 표시만 해 준다.
-            self.engine_label = self.create_label_with_id(
-                20, 355, 510, 36, ctrl_id::ENGINE_LABEL, "",
-            )?;
+            self.engine_label =
+                self.create_label_with_id(20, 355, 510, 36, ctrl_id::ENGINE_LABEL, "")?;
             self.update_engine_label();
 
             Ok(())
@@ -278,7 +312,9 @@ impl Dialog for FileTransDialog {
             NO_TRANS_LINEFEED => self.no_trans_linefeed = !self.no_trans_linefeed,
             BTN_TRANSLATE => self.start_translation(),
             // SAFETY: self.hwnd is a valid dialog window handle.
-            BTN_CLOSE => unsafe { let _ = DestroyWindow(self.hwnd); },
+            BTN_CLOSE => unsafe {
+                let _ = DestroyWindow(self.hwnd);
+            },
             _ => {}
         }
     }
@@ -297,7 +333,10 @@ impl FileTransDialog {
                 TranslationEngine::DeepL => "DeepL".into(),
                 TranslationEngine::Papago => "Papago".into(),
                 TranslationEngine::Llm => {
-                    format!("LLM: {}", config.translation.llm.get_provider().display_name())
+                    format!(
+                        "LLM: {}",
+                        config.translation.llm.get_provider().display_name()
+                    )
                 }
             };
             let source = to_korean_name(config.translation.get_source_language());
@@ -309,7 +348,9 @@ impl FileTransDialog {
             engine_name, source, target,
         );
         // SAFETY: engine_label is a valid static label control handle from create_controls.
-        unsafe { Self::set_edit_text(self.engine_label, &text); }
+        unsafe {
+            Self::set_edit_text(self.engine_label, &text);
+        }
     }
 
     /// Edit 컨트롤에 텍스트 설정
@@ -325,8 +366,14 @@ impl FileTransDialog {
     /// 입력 파일 선택 (다중 선택)
     fn browse_input_files(&mut self) {
         let filters = [
-            FileFilter { name: "텍스트 파일 (*.txt)", spec: "*.txt" },
-            FileFilter { name: "모든 파일 (*.*)", spec: "*.*" },
+            FileFilter {
+                name: "텍스트 파일 (*.txt)",
+                spec: "*.txt",
+            },
+            FileFilter {
+                name: "모든 파일 (*.*)",
+                spec: "*.*",
+            },
         ];
         let picked = open_files_multi(self.hwnd, "입력 파일 선택", &filters);
         if picked.is_empty() {
@@ -343,10 +390,16 @@ impl FileTransDialog {
             self.output_files.push(output);
         }
 
-        let input_display: Vec<String> = self.input_files.iter()
-            .map(|p| p.to_string_lossy().to_string()).collect();
-        let output_display: Vec<String> = self.output_files.iter()
-            .map(|p| p.to_string_lossy().to_string()).collect();
+        let input_display: Vec<String> = self
+            .input_files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let output_display: Vec<String> = self
+            .output_files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
 
         // SAFETY: load_edit/save_edit/save_browser_btn are valid control handles
         // from create_controls.
@@ -363,11 +416,19 @@ impl FileTransDialog {
 
     /// 출력 파일 위치 변경 (단일 파일만)
     fn browse_output_file(&mut self) {
-        if self.input_files.len() != 1 { return; }
+        if self.input_files.len() != 1 {
+            return;
+        }
 
         let filters = [
-            FileFilter { name: "텍스트 파일 (*.txt)", spec: "*.txt" },
-            FileFilter { name: "모든 파일 (*.*)", spec: "*.*" },
+            FileFilter {
+                name: "텍스트 파일 (*.txt)",
+                spec: "*.txt",
+            },
+            FileFilter {
+                name: "모든 파일 (*.*)",
+                spec: "*.*",
+            },
         ];
         let initial = self.output_files.first().map(|p| p.as_path());
         let Some(path) = save_file(self.hwnd, "출력 파일 위치", &filters, Some("txt"), initial)
@@ -378,7 +439,9 @@ impl FileTransDialog {
         let path_str = path.to_string_lossy().to_string();
         self.output_files[0] = path;
         // SAFETY: save_edit is a valid control handle from create_controls.
-        unsafe { Self::set_edit_text(self.save_edit, &path_str); }
+        unsafe {
+            Self::set_edit_text(self.save_edit, &path_str);
+        }
     }
 
     /// 파일 미리보기 (처음 7줄). 입력은 UTF-8 / UTF-8 BOM 만 허용한다.
@@ -395,7 +458,9 @@ impl FileTransDialog {
         };
 
         // SAFETY: self.preview_edit is a valid edit control handle created in create_controls.
-        unsafe { Self::set_edit_text(self.preview_edit, &content); }
+        unsafe {
+            Self::set_edit_text(self.preview_edit, &content);
+        }
     }
 
     /// 번역 시작
@@ -454,7 +519,9 @@ impl FileTransDialog {
             unsafe {
                 let _ = MessageBoxW(
                     Some(self.hwnd),
-                    w!("EzTrans 경로가 설정되지 않았습니다. 번역 설정에서 DLL/DAT 경로를 지정하세요."),
+                    w!(
+                        "EzTrans 경로가 설정되지 않았습니다. 번역 설정에서 DLL/DAT 경로를 지정하세요."
+                    ),
                     w!("알림"),
                     MB_ICONINFORMATION,
                 );

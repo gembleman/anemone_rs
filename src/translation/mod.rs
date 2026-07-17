@@ -11,7 +11,6 @@
 //! - 호출자별 hwnd 라우팅. Windows 메시지로 결과 전달 (UI 블로킹 없음)
 
 pub mod deepl;
-pub mod detect;
 mod eztrans;
 pub mod google;
 pub(crate) mod http_common;
@@ -19,7 +18,6 @@ pub mod llm;
 pub mod papago;
 pub mod worker;
 
-pub use detect::is_source_language;
 pub use eztrans::EzTransTranslator;
 pub use isolang::Language;
 pub use llm::LlmProvider;

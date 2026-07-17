@@ -156,7 +156,9 @@ impl MagneticManager {
         }
 
         MAGNETIC_INSTANCE.with(|cell| {
-            let Ok(mut state) = cell.try_borrow_mut() else { return; };
+            let Ok(mut state) = cell.try_borrow_mut() else {
+                return;
+            };
             let state = match state.as_mut() {
                 Some(s) => s,
                 None => return,

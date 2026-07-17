@@ -24,8 +24,7 @@ impl EzTransTranslator {
     /// * `dat_path` - Dat 폴더 경로
     pub fn new(dll_path: &str, dat_path: &str) -> Result<Self, String> {
         // 엔진 로드
-        let engine = EzTransEngine::new(dll_path)
-            .map_err(|e| format!("DLL 로드 실패: {:?}", e))?;
+        let engine = EzTransEngine::new(dll_path).map_err(|e| format!("DLL 로드 실패: {:?}", e))?;
 
         // 초기화 (EHND 모드)
         engine

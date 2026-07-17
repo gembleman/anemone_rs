@@ -175,19 +175,28 @@ impl DispatchShared {
 
     /// hwnd 의 최신 ID 원자 슬롯 확보 (없으면 생성)
     fn latest_atomic(&self, hwnd_raw: usize) -> std::sync::Arc<AtomicU64> {
-        let mut snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
+        let mut snap = self
+            .latest_snapshot
+            .lock()
+            .expect("latest_snapshot poisoned");
         snap.entry(hwnd_raw)
             .or_insert_with(|| std::sync::Arc::new(AtomicU64::new(0)))
             .clone()
     }
 
     fn latest_atomic_lookup(&self, hwnd_raw: usize) -> Option<std::sync::Arc<AtomicU64>> {
-        let snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
+        let snap = self
+            .latest_snapshot
+            .lock()
+            .expect("latest_snapshot poisoned");
         snap.get(&hwnd_raw).cloned()
     }
 
     fn drop_latest_atomic(&self, hwnd_raw: usize) {
-        let mut snap = self.latest_snapshot.lock().expect("latest_snapshot poisoned");
+        let mut snap = self
+            .latest_snapshot
+            .lock()
+            .expect("latest_snapshot poisoned");
         snap.remove(&hwnd_raw);
     }
 }
@@ -296,7 +305,9 @@ impl TranslationDispatch {
         req.id = id;
 
         // 워커가 lock 없이 stale 판정할 수 있도록 원자 슬롯 갱신
-        self.shared.latest_atomic(hwnd_raw).store(id, Ordering::Release);
+        self.shared
+            .latest_atomic(hwnd_raw)
+            .store(id, Ordering::Release);
 
         // shutdown 이 진행됐다면 sender 가 None — 조용히 폐기.
         let send_result = {
@@ -447,8 +458,7 @@ impl TranslationDispatch {
             if key.is_empty() {
                 continue;
             }
-            match super::deepl::translate_async_with_client(client, text, source, target, key)
-                .await
+            match super::deepl::translate_async_with_client(client, text, source, target, key).await
             {
                 Ok(s) => return Ok(s),
                 Err(e) => {
@@ -531,7 +541,10 @@ impl TranslationDispatch {
                 .await
                 {
                     Ok(result) => result,
-                    Err(e) => Err(TranslationError::Engine(format!("EzTrans 실행 오류: {}", e))),
+                    Err(e) => Err(TranslationError::Engine(format!(
+                        "EzTrans 실행 오류: {}",
+                        e
+                    ))),
                 }
             }
             TranslationEngine::Google => {

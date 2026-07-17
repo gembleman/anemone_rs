@@ -82,7 +82,6 @@ pub const TEXTALIGN_RIGHT: u16 = 1222;
 pub const TRANS_ENGINE: u16 = 1260;
 pub const TRANS_SOURCE_LANG: u16 = 1261;
 pub const TRANS_TARGET_LANG: u16 = 1262;
-pub const TRANS_AUTO_DETECT: u16 = 1263;
 pub const EZTRANS_DLL_EDIT: u16 = 1264;
 pub const EZTRANS_DLL_BROWSE: u16 = 1265;
 pub const EZTRANS_DAT_EDIT: u16 = 1266;

@@ -259,9 +259,6 @@ pub struct TranslationConfig {
     /// LLM 설정
     #[serde(default)]
     pub llm: LlmConfig,
-    /// 자동 언어 감지 활성화
-    #[serde(default = "default_auto_detect")]
-    pub auto_detect: bool,
 }
 
 fn default_engine() -> String {
@@ -274,10 +271,6 @@ fn default_source_lang() -> String {
 
 fn default_target_lang() -> String {
     "ko".to_string()
-}
-
-fn default_auto_detect() -> bool {
-    true
 }
 
 fn default_deepl_strategy() -> String {
@@ -346,7 +339,11 @@ impl TranslationConfig {
     }
 
     /// 인덱스로 소스 언어 설정 (UI 콤보박스용)
-    pub fn set_source_lang_by_index(&mut self, index: usize, engine: crate::translation::TranslationEngine) {
+    pub fn set_source_lang_by_index(
+        &mut self,
+        index: usize,
+        engine: crate::translation::TranslationEngine,
+    ) {
         let supported = engine.supported_source_languages();
         if let Some(&lang) = supported.get(index) {
             self.set_source_language(lang);
@@ -354,7 +351,11 @@ impl TranslationConfig {
     }
 
     /// 인덱스로 타겟 언어 설정 (UI 콤보박스용)
-    pub fn set_target_lang_by_index(&mut self, index: usize, engine: crate::translation::TranslationEngine) {
+    pub fn set_target_lang_by_index(
+        &mut self,
+        index: usize,
+        engine: crate::translation::TranslationEngine,
+    ) {
         let supported = engine.supported_target_languages();
         if let Some(&lang) = supported.get(index) {
             self.set_target_language(lang);
@@ -416,7 +417,6 @@ impl Default for TranslationConfig {
             papago_client_id: String::new(),
             papago_client_secret: String::new(),
             llm: LlmConfig::default(),
-            auto_detect: true,
         }
     }
 }

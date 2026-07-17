@@ -11,10 +11,10 @@ use windows::{
     core::*,
 };
 
+use super::helpers::{Dialog, DialogControls};
 use crate::config::{Config, LlmGlossaryEntry};
 use crate::define_dialog_instance;
 use crate::util::to_wide;
-use super::helpers::{Dialog, DialogControls};
 
 mod ctrl_id {
     pub const LIST: u16 = 7001;
@@ -35,7 +35,9 @@ pub struct GlossaryDialog {
 }
 
 impl DialogControls for GlossaryDialog {
-    fn dialog_hwnd(&self) -> HWND { self.hwnd }
+    fn dialog_hwnd(&self) -> HWND {
+        self.hwnd
+    }
 }
 
 define_dialog_instance!(GLOSSARY_INSTANCE: GlossaryDialog);
@@ -49,16 +51,19 @@ impl Dialog for GlossaryDialog {
     const HEIGHT: i32 = 380;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 
-    fn instance_slot()
-        -> &'static std::thread::LocalKey<
-            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-        > {
+    fn instance_slot() -> &'static std::thread::LocalKey<
+        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+    > {
         &GLOSSARY_INSTANCE
     }
 
     fn init(hwnd: HWND, _parent: HWND, config: Self::Params) -> Self {
         let entries = config.borrow().translation.llm.glossary.clone();
-        GlossaryDialog { hwnd, config, entries }
+        GlossaryDialog {
+            hwnd,
+            config,
+            entries,
+        }
     }
 
     fn create_controls(&mut self) -> Result<()> {
@@ -81,7 +86,10 @@ impl Dialog for GlossaryDialog {
             // A-2: 동작 안내. '추가/수정' 은 동일 원문이 있으면 번역만 갱신,
             // 없으면 새 항목으로 추가. '적용' 을 눌러야 저장됨.
             self.create_label(
-                20, 305, 440, 18,
+                20,
+                305,
+                440,
+                18,
                 "원문이 이미 있으면 번역만 갱신, 없으면 추가. '적용' 으로 저장.",
             )?;
 
@@ -125,8 +133,14 @@ impl Dialog for GlossaryDialog {
 
 impl GlossaryDialog {
     fn add_or_update_entry(&mut self) {
-        let src = self.get_control_text(ctrl_id::SOURCE_EDIT).trim().to_string();
-        let tgt = self.get_control_text(ctrl_id::TARGET_EDIT).trim().to_string();
+        let src = self
+            .get_control_text(ctrl_id::SOURCE_EDIT)
+            .trim()
+            .to_string();
+        let tgt = self
+            .get_control_text(ctrl_id::TARGET_EDIT)
+            .trim()
+            .to_string();
         if src.is_empty() {
             return;
         }
@@ -134,7 +148,10 @@ impl GlossaryDialog {
         if let Some(existing) = self.entries.iter_mut().find(|e| e.source == src) {
             existing.target = tgt;
         } else {
-            self.entries.push(LlmGlossaryEntry { source: src, target: tgt });
+            self.entries.push(LlmGlossaryEntry {
+                source: src,
+                target: tgt,
+            });
         }
         self.refresh_listbox();
         self.set_control_text(ctrl_id::SOURCE_EDIT, "");
@@ -153,12 +170,21 @@ impl GlossaryDialog {
     fn populate_listbox(&self) {
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox handle.
         unsafe {
-            let Ok(lb) = GetDlgItem(Some(self.hwnd), ctrl_id::LIST as i32) else { return; };
-            if lb.is_invalid() { return; }
+            let Ok(lb) = GetDlgItem(Some(self.hwnd), ctrl_id::LIST as i32) else {
+                return;
+            };
+            if lb.is_invalid() {
+                return;
+            }
             for e in &self.entries {
                 let line = format!("{} → {}", e.source, e.target);
                 let wide = to_wide(&line);
-                let _ = SendMessageW(lb, LB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(wide.as_ptr() as isize)));
+                let _ = SendMessageW(
+                    lb,
+                    LB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(wide.as_ptr() as isize)),
+                );
             }
         }
     }
@@ -166,8 +192,12 @@ impl GlossaryDialog {
     fn refresh_listbox(&self) {
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox handle.
         unsafe {
-            let Ok(lb) = GetDlgItem(Some(self.hwnd), ctrl_id::LIST as i32) else { return; };
-            if lb.is_invalid() { return; }
+            let Ok(lb) = GetDlgItem(Some(self.hwnd), ctrl_id::LIST as i32) else {
+                return;
+            };
+            if lb.is_invalid() {
+                return;
+            }
             // 전체 삭제: LB_GETCOUNT 만큼 하나씩 지우는 대신 reset
             let count = SendMessageW(lb, LB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32;
             for _ in 0..count {
@@ -176,7 +206,12 @@ impl GlossaryDialog {
             for e in &self.entries {
                 let line = format!("{} → {}", e.source, e.target);
                 let wide = to_wide(&line);
-                let _ = SendMessageW(lb, LB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(wide.as_ptr() as isize)));
+                let _ = SendMessageW(
+                    lb,
+                    LB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(wide.as_ptr() as isize)),
+                );
             }
         }
     }
@@ -184,8 +219,12 @@ impl GlossaryDialog {
     fn listbox_get_sel(&self) -> i32 {
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox handle.
         unsafe {
-            let Ok(lb) = GetDlgItem(Some(self.hwnd), ctrl_id::LIST as i32) else { return LB_ERR; };
-            if lb.is_invalid() { return LB_ERR; }
+            let Ok(lb) = GetDlgItem(Some(self.hwnd), ctrl_id::LIST as i32) else {
+                return LB_ERR;
+            };
+            if lb.is_invalid() {
+                return LB_ERR;
+            }
             SendMessageW(lb, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32
         }
     }
@@ -205,14 +244,19 @@ impl GlossaryDialog {
     fn get_control_text(&self, ctrl_id: u16) -> String {
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid control handle.
         unsafe {
-            let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32) else { return String::new(); };
-            if ctrl.is_invalid() { return String::new(); }
+            let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32) else {
+                return String::new();
+            };
+            if ctrl.is_invalid() {
+                return String::new();
+            }
             let len = GetWindowTextLengthW(ctrl);
-            if len == 0 { return String::new(); }
+            if len == 0 {
+                return String::new();
+            }
             let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
             GetWindowTextW(ctrl, &mut buffer);
             String::from_utf16_lossy(&buffer[..len as usize])
         }
     }
 }
-

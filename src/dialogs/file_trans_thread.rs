@@ -14,6 +14,7 @@ use windows::Win32::{
     UI::WindowsAndMessaging::PostMessageW,
 };
 
+use super::file_trans::{FileTransJobData, WriteType};
 use crate::constants::{
     WM_PROGRESS_COMPLETE, WM_PROGRESS_CURRENT, WM_PROGRESS_ERROR, WM_PROGRESS_INDEX,
     WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
@@ -25,7 +26,6 @@ use crate::translation::{
     worker::{TranslationDispatch, TranslationRequest},
 };
 use crate::util::to_wide;
-use super::file_trans::{FileTransJobData, WriteType};
 
 /// 시스템 절전 진입을 차단하는 RAII 가드.
 ///
@@ -93,10 +93,7 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     {
         Ok(rt) => rt,
         Err(e) => {
-            send_error(
-                progress_hwnd,
-                &format!("tokio 런타임 생성 실패: {}", e),
-            );
+            send_error(progress_hwnd, &format!("tokio 런타임 생성 실패: {}", e));
             return;
         }
     };
@@ -257,7 +254,8 @@ fn process_single_file(
     // `prev` 가 직전에 읽은 라인이고, 새 라인이 도착하면 prev 를 "마지막 아님"
     // 으로 출력한다. 루프 종료 후 남은 prev 가 진짜 마지막 라인.
     let mut lines_iter = reader.lines().filter_map(|l| {
-        l.inspect_err(|e| tracing::warn!("Failed to read line: {e}")).ok()
+        l.inspect_err(|e| tracing::warn!("Failed to read line: {e}"))
+            .ok()
     });
 
     let mut prev: Option<String> = lines_iter.next();

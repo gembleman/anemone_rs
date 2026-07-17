@@ -6,12 +6,8 @@ use std::collections::HashMap;
 
 use windows::{
     Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::LibraryLoader::GetModuleHandleW,
-        UI::Controls::*,
-        UI::HiDpi::AdjustWindowRectExForDpi,
-        UI::WindowsAndMessaging::*,
+        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW, UI::Controls::*,
+        UI::HiDpi::AdjustWindowRectExForDpi, UI::WindowsAndMessaging::*,
     },
     core::*,
 };
@@ -51,8 +47,14 @@ pub fn dialog_font_for_dpi(dpi: u32) -> HFONT {
         let hfont = unsafe {
             let face = to_wide("맑은 고딕");
             CreateFontW(
-                height, 0, 0, 0,
-                FW_NORMAL.0 as i32, 0, 0, 0,
+                height,
+                0,
+                0,
+                0,
+                FW_NORMAL.0 as i32,
+                0,
+                0,
+                0,
                 DEFAULT_CHARSET,
                 OUT_DEFAULT_PRECIS,
                 CLIP_DEFAULT_PRECIS,
@@ -161,11 +163,15 @@ fn client_size_to_window_size(
 ) -> (i32, i32) {
     let w = crate::dpi::scale(width, dpi);
     let h = crate::dpi::scale(height, dpi);
-    let mut rect = RECT { left: 0, top: 0, right: w, bottom: h };
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: w,
+        bottom: h,
+    };
     // SAFETY: rect 는 스택의 유효한 RECT. style/ex_style 은 호출자 제공값,
     // dpi 는 GetDpiForWindow 결과로 양수.
-    let ok =
-        unsafe { AdjustWindowRectExForDpi(&mut rect, style, false, ex_style, dpi).is_ok() };
+    let ok = unsafe { AdjustWindowRectExForDpi(&mut rect, style, false, ex_style, dpi).is_ok() };
     if ok {
         (rect.right - rect.left, rect.bottom - rect.top)
     } else {
@@ -217,8 +223,14 @@ unsafe extern "system" fn rescale_child_for_dpi(hwnd: HWND, lparam: LPARAM) -> B
         return TRUE;
     }
 
-    let mut top_left = POINT { x: rect.left, y: rect.top };
-    let mut bottom_right = POINT { x: rect.right, y: rect.bottom };
+    let mut top_left = POINT {
+        x: rect.left,
+        y: rect.top,
+    };
+    let mut bottom_right = POINT {
+        x: rect.right,
+        y: rect.bottom,
+    };
     unsafe {
         let _ = ScreenToClient(ctx.parent, &mut top_left);
         let _ = ScreenToClient(ctx.parent, &mut bottom_right);
@@ -230,15 +242,7 @@ unsafe extern "system" fn rescale_child_for_dpi(hwnd: HWND, lparam: LPARAM) -> B
     let h = scale_between_dpi(bottom_right.y - top_left.y, ctx.old_dpi, ctx.new_dpi).max(1);
 
     unsafe {
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            x,
-            y,
-            w,
-            h,
-            SWP_NOZORDER | SWP_NOACTIVATE,
-        );
+        let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
         let _ = SendMessageW(
             hwnd,
             WM_SETFONT,
@@ -330,9 +334,7 @@ pub unsafe fn create_dialog_window(opts: &DialogWindowOptions) -> Result<HWND> {
 
 /// 부모 윈도우 중앙에 다이얼로그 윈도우를 생성한다 (진행률 대화상자 등).
 // SAFETY: Caller must provide valid options (parent HWND, class name previously registered).
-pub unsafe fn create_dialog_window_centered_on_parent(
-    opts: &DialogWindowOptions,
-) -> Result<HWND> {
+pub unsafe fn create_dialog_window_centered_on_parent(opts: &DialogWindowOptions) -> Result<HWND> {
     // SAFETY: opts.parent is a valid window handle. GetWindowRect and CreateWindowExW use
     // valid parameters. The class was registered via register_dialog_class.
     unsafe {
@@ -615,8 +617,11 @@ pub unsafe fn create_combobox(
             w!("COMBOBOX"),
             w!(""),
             WINDOW_STYLE(
-                CBS_DROPDOWNLIST as u32 | CBS_HASSTRINGS as u32
-                    | WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0,
+                CBS_DROPDOWNLIST as u32
+                    | CBS_HASSTRINGS as u32
+                    | WS_CHILD.0
+                    | WS_VISIBLE.0
+                    | WS_VSCROLL.0,
             ),
             WINDOW_EX_STYLE::default(),
             ChildSpec { x, y, w, h, id },
@@ -632,12 +637,7 @@ pub unsafe fn create_combobox(
             );
         }
 
-        let _ = SendMessageW(
-            hwnd,
-            CB_SETCURSEL,
-            Some(WPARAM(selected)),
-            Some(LPARAM(0)),
-        );
+        let _ = SendMessageW(hwnd, CB_SETCURSEL, Some(WPARAM(selected)), Some(LPARAM(0)));
 
         Ok(hwnd)
     }
@@ -687,8 +687,7 @@ pub unsafe fn create_edit_numeric(
             w!("EDIT"),
             PCWSTR(text_wide.as_ptr()),
             WINDOW_STYLE(
-                ES_AUTOHSCROLL as u32 | ES_NUMBER as u32
-                    | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0,
+                ES_AUTOHSCROLL as u32 | ES_NUMBER as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0,
             ),
             WS_EX_CLIENTEDGE,
             ChildSpec { x, y, w, h, id },
@@ -746,8 +745,12 @@ pub unsafe fn create_listbox(
             w!("LISTBOX"),
             w!(""),
             WINDOW_STYLE(
-                LBS_NOTIFY as u32 | LBS_NOINTEGRALHEIGHT as u32
-                    | WS_CHILD.0 | WS_VISIBLE.0 | WS_VSCROLL.0 | WS_TABSTOP.0,
+                LBS_NOTIFY as u32
+                    | LBS_NOINTEGRALHEIGHT as u32
+                    | WS_CHILD.0
+                    | WS_VISIBLE.0
+                    | WS_VSCROLL.0
+                    | WS_TABSTOP.0,
             ),
             WS_EX_CLIENTEDGE,
             ChildSpec { x, y, w, h, id },
@@ -771,38 +774,105 @@ pub trait DialogControls {
         unsafe { create_label(self.dialog_hwnd(), x, y, w, h, 0, text) }
     }
 
-    unsafe fn create_label_with_id(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+    unsafe fn create_label_with_id(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+    ) -> Result<HWND> {
         unsafe { create_label(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 
-    unsafe fn create_button(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+    unsafe fn create_button(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+    ) -> Result<HWND> {
         unsafe { create_button(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 
     #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
-    unsafe fn create_checkbox(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str, checked: bool) -> Result<HWND> {
+    unsafe fn create_checkbox(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+        checked: bool,
+    ) -> Result<HWND> {
         unsafe { create_checkbox(self.dialog_hwnd(), x, y, w, h, id, text, checked) }
     }
 
     #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/텍스트/상태는 의도된 시그니처.
-    unsafe fn create_radio(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str, checked: bool) -> Result<HWND> {
+    unsafe fn create_radio(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+        checked: bool,
+    ) -> Result<HWND> {
         unsafe { create_radio(self.dialog_hwnd(), x, y, w, h, id, text, checked) }
     }
 
     #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/아이템/선택은 의도된 시그니처.
-    unsafe fn create_combobox(&self, x: i32, y: i32, w: i32, h: i32, id: u16, items: &[&str], selected: usize) -> Result<HWND> {
+    unsafe fn create_combobox(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        items: &[&str],
+        selected: usize,
+    ) -> Result<HWND> {
         unsafe { create_combobox(self.dialog_hwnd(), x, y, w, h, id, items, selected) }
     }
 
-    unsafe fn create_edit(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+    unsafe fn create_edit(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+    ) -> Result<HWND> {
         unsafe { create_edit(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 
-    unsafe fn create_edit_numeric(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+    unsafe fn create_edit_numeric(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+    ) -> Result<HWND> {
         unsafe { create_edit_numeric(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 
-    unsafe fn create_multiline_edit(&self, x: i32, y: i32, w: i32, h: i32, id: u16, text: &str) -> Result<HWND> {
+    unsafe fn create_multiline_edit(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        text: &str,
+    ) -> Result<HWND> {
         unsafe { create_multiline_edit(self.dialog_hwnd(), x, y, w, h, id, text) }
     }
 
@@ -811,11 +881,28 @@ pub trait DialogControls {
     }
 
     #[allow(clippy::too_many_arguments)] // Win32 위치/크기/id/min/max는 의도된 시그니처.
-    unsafe fn create_trackbar(&self, x: i32, y: i32, w: i32, h: i32, id: u16, min: i32, max: i32) -> Result<HWND> {
+    unsafe fn create_trackbar(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        min: i32,
+        max: i32,
+    ) -> Result<HWND> {
         unsafe { create_trackbar(self.dialog_hwnd(), x, y, w, h, id, min, max) }
     }
 
-    unsafe fn create_tab_control(&self, x: i32, y: i32, w: i32, h: i32, id: u16, tabs: &[&str]) -> Result<HWND> {
+    unsafe fn create_tab_control(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: u16,
+        tabs: &[&str],
+    ) -> Result<HWND> {
         unsafe { create_tab_control(self.dialog_hwnd(), x, y, w, h, id, tabs) }
     }
 }
@@ -845,10 +932,9 @@ pub trait Dialog: Sized + 'static {
     /// 다이얼로그 타입별 thread-local 인스턴스 슬롯.
     /// `define_dialog_instance!` 매크로로 선언한 static 을 반환한다.
     #[allow(clippy::type_complexity)]
-    fn instance_slot()
-        -> &'static std::thread::LocalKey<
-            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-        >;
+    fn instance_slot() -> &'static std::thread::LocalKey<
+        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+    >;
 
     /// 윈도우 생성 직후 호출되어 자기 자신을 만든다.
     /// `hwnd` 는 새로 만든 다이얼로그 윈도우, `parent` 는 부모.

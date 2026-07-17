@@ -26,7 +26,9 @@ fn copy_eztrans_dll() {
     }
 
     let Some(target_dir) = resolve_target_dir() else {
-        println!("cargo:warning=target 디렉터리 추정에 실패했습니다. eztrans_dll 복사를 건너뜁니다.");
+        println!(
+            "cargo:warning=target 디렉터리 추정에 실패했습니다. eztrans_dll 복사를 건너뜁니다."
+        );
         return;
     };
     let dst = target_dir.join("eztrans_dll");

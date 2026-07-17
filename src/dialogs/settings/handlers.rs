@@ -1,20 +1,18 @@
 //! 설정 대화상자 명령/이벤트 핸들러
 
 use windows::{
-    Win32::{
-        Foundation::*, UI::Controls::*, UI::WindowsAndMessaging::*,
-    },
+    Win32::{Foundation::*, UI::Controls::*, UI::WindowsAndMessaging::*},
     core::*,
 };
 
-use super::ctrl_id;
 use super::SettingsDialog;
+use super::ctrl_id;
 use crate::config::{ColorType, TextAlign, TextType};
 use crate::constants::WM_APP_REFRESH;
-use crate::util::to_wide;
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
 use crate::dialogs::helpers::Dialog;
+use crate::util::to_wide;
 
 /// +/- 버튼 처리 매크로: config에서 값을 읽고, 범위 내에서 증감 후, UI 업데이트
 macro_rules! handle_size_button {
@@ -84,25 +82,60 @@ impl SettingsDialog {
 
             // NAME/ORG/TRANS 색상 버튼
             NAME_COLOR => self.handle_color_button(NAME_COLOR, TextType::Name, ColorType::Primary),
-            NAME_OUTLINE1 => self.handle_color_button(NAME_OUTLINE1, TextType::Name, ColorType::Outline1),
-            NAME_OUTLINE2 => self.handle_color_button(NAME_OUTLINE2, TextType::Name, ColorType::Outline2),
-            NAME_SHADOW_COLOR => self.handle_color_button(NAME_SHADOW_COLOR, TextType::Name, ColorType::Shadow),
+            NAME_OUTLINE1 => {
+                self.handle_color_button(NAME_OUTLINE1, TextType::Name, ColorType::Outline1)
+            }
+            NAME_OUTLINE2 => {
+                self.handle_color_button(NAME_OUTLINE2, TextType::Name, ColorType::Outline2)
+            }
+            NAME_SHADOW_COLOR => {
+                self.handle_color_button(NAME_SHADOW_COLOR, TextType::Name, ColorType::Shadow)
+            }
             NAME_FONT => self.handle_font_button(TextType::Name),
-            NAME_SHADOW => { self.config.borrow_mut().toggle_shadow(TextType::Name); self.notify_change(); }
+            NAME_SHADOW => {
+                self.config.borrow_mut().toggle_shadow(TextType::Name);
+                self.notify_change();
+            }
 
-            ORG_COLOR => self.handle_color_button(ORG_COLOR, TextType::Original, ColorType::Primary),
-            ORG_OUTLINE1 => self.handle_color_button(ORG_OUTLINE1, TextType::Original, ColorType::Outline1),
-            ORG_OUTLINE2 => self.handle_color_button(ORG_OUTLINE2, TextType::Original, ColorType::Outline2),
-            ORG_SHADOW_COLOR => self.handle_color_button(ORG_SHADOW_COLOR, TextType::Original, ColorType::Shadow),
+            ORG_COLOR => {
+                self.handle_color_button(ORG_COLOR, TextType::Original, ColorType::Primary)
+            }
+            ORG_OUTLINE1 => {
+                self.handle_color_button(ORG_OUTLINE1, TextType::Original, ColorType::Outline1)
+            }
+            ORG_OUTLINE2 => {
+                self.handle_color_button(ORG_OUTLINE2, TextType::Original, ColorType::Outline2)
+            }
+            ORG_SHADOW_COLOR => {
+                self.handle_color_button(ORG_SHADOW_COLOR, TextType::Original, ColorType::Shadow)
+            }
             ORG_FONT => self.handle_font_button(TextType::Original),
-            ORG_SHADOW => { self.config.borrow_mut().toggle_shadow(TextType::Original); self.notify_change(); }
+            ORG_SHADOW => {
+                self.config.borrow_mut().toggle_shadow(TextType::Original);
+                self.notify_change();
+            }
 
-            TRANS_COLOR => self.handle_color_button(TRANS_COLOR, TextType::Translation, ColorType::Primary),
-            TRANS_OUTLINE1 => self.handle_color_button(TRANS_OUTLINE1, TextType::Translation, ColorType::Outline1),
-            TRANS_OUTLINE2 => self.handle_color_button(TRANS_OUTLINE2, TextType::Translation, ColorType::Outline2),
-            TRANS_SHADOW_COLOR => self.handle_color_button(TRANS_SHADOW_COLOR, TextType::Translation, ColorType::Shadow),
+            TRANS_COLOR => {
+                self.handle_color_button(TRANS_COLOR, TextType::Translation, ColorType::Primary)
+            }
+            TRANS_OUTLINE1 => {
+                self.handle_color_button(TRANS_OUTLINE1, TextType::Translation, ColorType::Outline1)
+            }
+            TRANS_OUTLINE2 => {
+                self.handle_color_button(TRANS_OUTLINE2, TextType::Translation, ColorType::Outline2)
+            }
+            TRANS_SHADOW_COLOR => self.handle_color_button(
+                TRANS_SHADOW_COLOR,
+                TextType::Translation,
+                ColorType::Shadow,
+            ),
             TRANS_FONT => self.handle_font_button(TextType::Translation),
-            TRANS_SHADOW => { self.config.borrow_mut().toggle_shadow(TextType::Translation); self.notify_change(); }
+            TRANS_SHADOW => {
+                self.config
+                    .borrow_mut()
+                    .toggle_shadow(TextType::Translation);
+                self.notify_change();
+            }
 
             // 테두리 설정
             BORDER_MODE => {
@@ -133,55 +166,95 @@ impl SettingsDialog {
             }
 
             // 텍스트 정렬
-            TEXTALIGN_LEFT => { self.config.borrow_mut().text_align = TextAlign::Left; self.notify_change(); }
-            TEXTALIGN_MID => { self.config.borrow_mut().text_align = TextAlign::Center; self.notify_change(); }
-            TEXTALIGN_RIGHT => { self.config.borrow_mut().text_align = TextAlign::Right; self.notify_change(); }
+            TEXTALIGN_LEFT => {
+                self.config.borrow_mut().text_align = TextAlign::Left;
+                self.notify_change();
+            }
+            TEXTALIGN_MID => {
+                self.config.borrow_mut().text_align = TextAlign::Center;
+                self.notify_change();
+            }
+            TEXTALIGN_RIGHT => {
+                self.config.borrow_mut().text_align = TextAlign::Right;
+                self.notify_change();
+            }
 
             // 윈도우 옵션 체크박스
             TOPMOST => toggle_field!(self, window_topmost),
-            USE_MAGNETIC => { self.config.borrow_mut().toggle_magnetic_mode(); self.notify_change(); }
-            MAGNETIC_MINIMIZE => toggle_field!(self, magnetic_minimize),
-            HIDEWIN => toggle_field!(self, temp_window_hide),
-            CLIPBOARD_WATCH => { self.config.borrow_mut().toggle_clipboard_watch(); self.notify_change(); }
-            WNDCLICK_THROUGH => { self.config.borrow_mut().toggle_click_through(); self.notify_change(); }
-
-            // 텍스트 크기 +/-
-            TEXTSIZE_MINUS => handle_size_button!(self,
-                |cfg: &crate::config::Config| cfg.translation_style.size,
-                ColorType::Primary, -1, 6, 100,
-                |s: &Self, v| s.update_textsize_ui(v)),
-            TEXTSIZE_PLUS => handle_size_button!(self,
-                |cfg: &crate::config::Config| cfg.translation_style.size,
-                ColorType::Primary, 1, 6, 100,
-                |s: &Self, v| s.update_textsize_ui(v)),
-
-            // 외곽선1 +/-
-            OUTLINE1_MINUS => handle_size_button!(self,
-                |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
-                ColorType::Outline1, -1, 0, 20,
-                |s: &Self, v| s.update_trackbar_pos(OUTLINE1_TRACKBAR, v)),
-            OUTLINE1_PLUS => handle_size_button!(self,
-                |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
-                ColorType::Outline1, 1, 0, 20,
-                |s: &Self, v| s.update_trackbar_pos(OUTLINE1_TRACKBAR, v)),
-
-            // 외곽선2 +/-
-            OUTLINE2_MINUS => handle_size_button!(self,
-                |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
-                ColorType::Outline2, -1, 0, 20,
-                |s: &Self, v| s.update_trackbar_pos(OUTLINE2_TRACKBAR, v)),
-            OUTLINE2_PLUS => handle_size_button!(self,
-                |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
-                ColorType::Outline2, 1, 0, 20,
-                |s: &Self, v| s.update_trackbar_pos(OUTLINE2_TRACKBAR, v)),
-
-            // 자동 언어 감지
-            TRANS_AUTO_DETECT => {
-                let mut cfg = self.config.borrow_mut();
-                cfg.translation.auto_detect = !cfg.translation.auto_detect;
-                drop(cfg);
+            USE_MAGNETIC => {
+                self.config.borrow_mut().toggle_magnetic_mode();
                 self.notify_change();
             }
+            MAGNETIC_MINIMIZE => toggle_field!(self, magnetic_minimize),
+            HIDEWIN => toggle_field!(self, temp_window_hide),
+            CLIPBOARD_WATCH => {
+                self.config.borrow_mut().toggle_clipboard_watch();
+                self.notify_change();
+            }
+            WNDCLICK_THROUGH => {
+                self.config.borrow_mut().toggle_click_through();
+                self.notify_change();
+            }
+
+            // 텍스트 크기 +/-
+            TEXTSIZE_MINUS => handle_size_button!(
+                self,
+                |cfg: &crate::config::Config| cfg.translation_style.size,
+                ColorType::Primary,
+                -1,
+                6,
+                100,
+                |s: &Self, v| s.update_textsize_ui(v)
+            ),
+            TEXTSIZE_PLUS => handle_size_button!(
+                self,
+                |cfg: &crate::config::Config| cfg.translation_style.size,
+                ColorType::Primary,
+                1,
+                6,
+                100,
+                |s: &Self, v| s.update_textsize_ui(v)
+            ),
+
+            // 외곽선1 +/-
+            OUTLINE1_MINUS => handle_size_button!(
+                self,
+                |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
+                ColorType::Outline1,
+                -1,
+                0,
+                20,
+                |s: &Self, v| s.update_trackbar_pos(OUTLINE1_TRACKBAR, v)
+            ),
+            OUTLINE1_PLUS => handle_size_button!(
+                self,
+                |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
+                ColorType::Outline1,
+                1,
+                0,
+                20,
+                |s: &Self, v| s.update_trackbar_pos(OUTLINE1_TRACKBAR, v)
+            ),
+
+            // 외곽선2 +/-
+            OUTLINE2_MINUS => handle_size_button!(
+                self,
+                |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
+                ColorType::Outline2,
+                -1,
+                0,
+                20,
+                |s: &Self, v| s.update_trackbar_pos(OUTLINE2_TRACKBAR, v)
+            ),
+            OUTLINE2_PLUS => handle_size_button!(
+                self,
+                |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
+                ColorType::Outline2,
+                1,
+                0,
+                20,
+                |s: &Self, v| s.update_trackbar_pos(OUTLINE2_TRACKBAR, v)
+            ),
 
             // EzTrans DLL 찾아보기
             EZTRANS_DLL_BROWSE => {
@@ -249,8 +322,11 @@ impl SettingsDialog {
                 Ok(h) if !h.is_invalid() => h,
                 _ => return,
             };
-            let sel = SendMessageW(listbox, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32;
-            if sel == LB_ERR { return; }
+            let sel =
+                SendMessageW(listbox, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32;
+            if sel == LB_ERR {
+                return;
+            }
             let _ = SendMessageW(
                 listbox,
                 LB_DELETESTRING,
@@ -274,7 +350,10 @@ impl SettingsDialog {
         let _ = crate::dialogs::glossary::GlossaryDialog::show(self.hwnd, config.clone());
         // 다이얼로그가 닫힌 후 표시 라벨 갱신
         let count = config.borrow().translation.llm.glossary.len();
-        self.set_control_text(ctrl_id::LLM_GLOSSARY_COUNT_LABEL, &format!("사전 항목: {}", count));
+        self.set_control_text(
+            ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
+            &format!("사전 항목: {}", count),
+        );
     }
 
     /// 색상 버튼 처리
@@ -325,21 +404,39 @@ impl SettingsDialog {
                 cfg.background_color = ((value as u32) << 24) | rgb;
             }
             TEXTSIZE_TRACKBAR => {
-                self.config.borrow_mut().set_all_text_size(ColorType::Primary, value);
+                self.config
+                    .borrow_mut()
+                    .set_all_text_size(ColorType::Primary, value);
                 self.set_control_text(TEXTSIZE_TEXT, &format!("크기: {}", value));
             }
             OUTLINE1_TRACKBAR => {
-                self.config.borrow_mut().set_all_text_size(ColorType::Outline1, value);
+                self.config
+                    .borrow_mut()
+                    .set_all_text_size(ColorType::Outline1, value);
             }
             OUTLINE2_TRACKBAR => {
-                self.config.borrow_mut().set_all_text_size(ColorType::Outline2, value);
+                self.config
+                    .borrow_mut()
+                    .set_all_text_size(ColorType::Outline2, value);
             }
-            SHADOW_X_TRACKBAR => { self.config.borrow_mut().shadow_offset_x = value; }
-            SHADOW_Y_TRACKBAR => { self.config.borrow_mut().shadow_offset_y = value; }
-            MARGIN_X_TRACKBAR => { self.config.borrow_mut().text_margin_x = value; }
-            MARGIN_Y_TRACKBAR => { self.config.borrow_mut().text_margin_y = value; }
-            MARGIN_NAME_TRACKBAR => { self.config.borrow_mut().name_margin = value; }
-            BORDER_SIZE_TRACKBAR => { self.config.borrow_mut().border_width = value; }
+            SHADOW_X_TRACKBAR => {
+                self.config.borrow_mut().shadow_offset_x = value;
+            }
+            SHADOW_Y_TRACKBAR => {
+                self.config.borrow_mut().shadow_offset_y = value;
+            }
+            MARGIN_X_TRACKBAR => {
+                self.config.borrow_mut().text_margin_x = value;
+            }
+            MARGIN_Y_TRACKBAR => {
+                self.config.borrow_mut().text_margin_y = value;
+            }
+            MARGIN_NAME_TRACKBAR => {
+                self.config.borrow_mut().name_margin = value;
+            }
+            BORDER_SIZE_TRACKBAR => {
+                self.config.borrow_mut().border_width = value;
+            }
             LLM_TEMPERATURE_TRACKBAR => {
                 let temp = (value as f32 / 100.0).clamp(0.0, 2.0);
                 self.config.borrow_mut().translation.llm.temperature = temp;
@@ -373,16 +470,26 @@ impl SettingsDialog {
                 }
                 TRANS_SOURCE_LANG => {
                     let engine = self.config.borrow().translation.get_engine();
-                    self.config.borrow_mut().translation.set_source_lang_by_index(sel, engine);
+                    self.config
+                        .borrow_mut()
+                        .translation
+                        .set_source_lang_by_index(sel, engine);
                 }
                 TRANS_TARGET_LANG => {
                     let engine = self.config.borrow().translation.get_engine();
-                    self.config.borrow_mut().translation.set_target_lang_by_index(sel, engine);
+                    self.config
+                        .borrow_mut()
+                        .translation
+                        .set_target_lang_by_index(sel, engine);
                 }
                 LLM_PROVIDER => {
                     use crate::translation::LlmProvider;
                     let provider = LlmProvider::from_u8(sel as u8);
-                    self.config.borrow_mut().translation.llm.set_provider(provider);
+                    self.config
+                        .borrow_mut()
+                        .translation
+                        .llm
+                        .set_provider(provider);
                 }
                 DEEPL_STRATEGY_COMBO => {
                     let strategy = if sel == 1 { "round-robin" } else { "failover" };
@@ -516,7 +623,9 @@ impl SettingsDialog {
                 _ => return String::new(),
             };
             let len = GetWindowTextLengthW(ctrl);
-            if len == 0 { return String::new(); }
+            if len == 0 {
+                return String::new();
+            }
             let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
             GetWindowTextW(ctrl, &mut buffer);
             String::from_utf16_lossy(&buffer[..len as usize])

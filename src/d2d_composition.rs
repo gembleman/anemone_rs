@@ -144,15 +144,15 @@ impl CompositionRenderer {
             // 1. D3D11 디바이스 생성 (BGRA = D2D interop)
             let mut d3d_device: Option<ID3D11Device> = None;
             D3D11CreateDevice(
-                None,                  // 기본 어댑터
+                None, // 기본 어댑터
                 D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),    // 소프트웨어 모듈 없음
+                HMODULE::default(), // 소프트웨어 모듈 없음
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                None,                  // 가능한 가장 높은 feature level 자동 선택
+                None, // 가능한 가장 높은 feature level 자동 선택
                 D3D11_SDK_VERSION,
                 Some(&mut d3d_device),
-                None,                  // 실제 feature level 알 필요 없음
-                None,                  // immediate context 도 안 받음
+                None, // 실제 feature level 알 필요 없음
+                None, // immediate context 도 안 받음
             )?;
             let d3d_device = d3d_device.ok_or_else(|| Error::from_hresult(E_FAIL))?;
 
@@ -172,7 +172,10 @@ impl CompositionRenderer {
                 Height: height,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
                 Stereo: false.into(),
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
                 BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 BufferCount: 2,
                 Scaling: DXGI_SCALING_STRETCH,
@@ -206,8 +209,7 @@ impl CompositionRenderer {
             // 5. D2D device + context — factory 는 호출자가 보유한 D2DRenderer 의
             //    것을 그대로 사용한다 (factory 통일 → WRONG_FACTORY 회피).
             let d2d_device = d2d_factory.CreateDevice(&dxgi_device)?;
-            let d2d_context =
-                d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+            let d2d_context = d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
 
             // 6. swap chain back buffer 를 D2D bitmap 으로 wrap → render target
             let bitmap = create_bitmap_from_swapchain(&d2d_context, &swap_chain)?;
@@ -225,8 +227,7 @@ impl CompositionRenderer {
             let dcomp_device: IDCompositionDevice = dcomp_device_v2.cast()?;
 
             let dcomp_target = dcomp_device.CreateTargetForHwnd(
-                hwnd,
-                true, // top-most: 같은 윈도우 내 다른 redirection 보다 위
+                hwnd, true, // top-most: 같은 윈도우 내 다른 redirection 보다 위
             )?;
 
             let dcomp_visual = dcomp_device.CreateVisual()?;
@@ -261,9 +262,7 @@ impl CompositionRenderer {
     pub fn wait_for_back_buffer(&self, timeout_ms: u32) -> bool {
         // SAFETY: frame_latency_handle 은 생성자에서 GetFrameLatencyWaitable
         // Object 가 반환한 유효 핸들. drop 시 CloseHandle.
-        unsafe {
-            WaitForSingleObjectEx(self.frame_latency_handle, timeout_ms, false).0 == 0
-        }
+        unsafe { WaitForSingleObjectEx(self.frame_latency_handle, timeout_ms, false).0 == 0 }
     }
 
     /// 그리기 시작. 호출자는 반환된 컨텍스트로 D2D 명령을 발행한다.
@@ -310,7 +309,11 @@ impl CompositionRenderer {
     /// 그리기 단계와 Present 비용을 분리 측정할 때 사용.
     pub fn present(&self, sync_interval: u32) -> Result<()> {
         // SAFETY: Present 는 GPU 에 비동기 제출 — 호출자는 EndDraw 이후 호출.
-        unsafe { self.swap_chain.Present(sync_interval, DXGI_PRESENT::default()).ok() }
+        unsafe {
+            self.swap_chain
+                .Present(sync_interval, DXGI_PRESENT::default())
+                .ok()
+        }
     }
 
     /// 윈도우 리사이즈 처리.

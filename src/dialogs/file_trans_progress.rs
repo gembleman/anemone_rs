@@ -19,6 +19,7 @@ use windows::{
     core::*,
 };
 
+use super::helpers::{Dialog, DialogControls};
 use crate::constants::{
     WM_PROGRESS_COMPLETE, WM_PROGRESS_CURRENT, WM_PROGRESS_ERROR, WM_PROGRESS_INDEX,
     WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
@@ -26,7 +27,6 @@ use crate::constants::{
 };
 use crate::define_dialog_instance;
 use crate::util::to_wide;
-use super::helpers::{Dialog, DialogControls};
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -86,10 +86,9 @@ impl Dialog for FileTransProgressDialog {
     const HEIGHT: i32 = PROGRESS_HEIGHT;
     const EXTRA_STYLE: WINDOW_STYLE = WINDOW_STYLE(0);
 
-    fn instance_slot()
-        -> &'static std::thread::LocalKey<
-            std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
-        > {
+    fn instance_slot() -> &'static std::thread::LocalKey<
+        std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<Self>>>>,
+    > {
         &PROGRESS_INSTANCE
     }
 
@@ -149,7 +148,8 @@ impl Dialog for FileTransProgressDialog {
         unsafe {
             // ====== 현재 파일 정보 그룹 ======
             self.create_group_box(10, 5, 425, 50, "현재 파일")?;
-            self.name_text = self.create_label_with_id(20, 25, 405, 20, ctrl_id::NAME_TEXT, "대기 중...")?;
+            self.name_text =
+                self.create_label_with_id(20, 25, 405, 20, ctrl_id::NAME_TEXT, "대기 중...")?;
 
             // ====== 진행률 그룹 ======
             self.create_group_box(10, 60, 425, 85, "진행률")?;
@@ -157,9 +157,12 @@ impl Dialog for FileTransProgressDialog {
             // 프로그레스바 (msctls_progress32) — DialogControls 에 헬퍼가 없어 직접 생성.
             self.progress_bar = self.create_progress_bar(20, 80, 405, 20, ctrl_id::PROGRESS_BAR)?;
 
-            self.progress_text = self.create_label_with_id(20, 105, 200, 20, ctrl_id::PROGRESS_TEXT, "0/0")?;
-            self.index_text = self.create_label_with_id(230, 105, 90, 20, ctrl_id::INDEX_TEXT, "파일: 0/0")?;
-            self.total_text = self.create_label_with_id(330, 105, 95, 20, ctrl_id::TOTAL_TEXT, "전체: 0/0")?;
+            self.progress_text =
+                self.create_label_with_id(20, 105, 200, 20, ctrl_id::PROGRESS_TEXT, "0/0")?;
+            self.index_text =
+                self.create_label_with_id(230, 105, 90, 20, ctrl_id::INDEX_TEXT, "파일: 0/0")?;
+            self.total_text =
+                self.create_label_with_id(330, 105, 95, 20, ctrl_id::TOTAL_TEXT, "전체: 0/0")?;
 
             // ====== 취소 버튼 ======
             self.cancel_btn = self.create_button(175, 150, 100, 30, ctrl_id::BTN_CANCEL, "취소")?;

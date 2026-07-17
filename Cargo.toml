@@ -44,7 +44,6 @@ toml = "1.1"
 windows-numerics = "0.3"
 windows-core = "0.62"
 eztrans-rs = { path = "../eztrans-rs" }
-whatlang = "0.18"
 isolang = { version = "2.4", features = ["serde", "english_names"] }
 
 # Error handling & logging

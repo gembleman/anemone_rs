@@ -21,15 +21,15 @@ use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
 use crate::constants::{
     INITIAL_WINDOW_HEIGHT, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_X, INITIAL_WINDOW_Y,
-    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH,
-    WM_APP_REFRESH, WM_DEFERRED_CLIPBOARD, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
+    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_DEFERRED_CLIPBOARD,
+    WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
 use crate::d2d::D2DRenderer;
 use crate::d2d_composition::CompositionRenderer;
 use crate::dialogs::helpers::Dialog;
 use crate::dialogs::{
-    BacklogDialog, FileTransDialog, HookSettingsDialog, LogEntry, SettingsDialog,
-    TranslateDialog, add_to_backlog,
+    BacklogDialog, FileTransDialog, HookSettingsDialog, LogEntry, SettingsDialog, TranslateDialog,
+    add_to_backlog,
 };
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
@@ -41,14 +41,6 @@ use crate::window::{self, TextRenderStyle};
 const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
 const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
 const WINDOW_TITLE: PCWSTR = w!("아네모네");
-
-fn should_translate_clipboard_text(
-    text: &str,
-    auto_detect: bool,
-    source_lang: isolang::Language,
-) -> bool {
-    !auto_detect || crate::translation::is_source_language(text, source_lang)
-}
 
 pub struct App {
     hwnd: HWND,
@@ -299,7 +291,7 @@ impl App {
     }
 
     fn paint(&mut self) -> Result<()> {
-        use crate::bench::{phase_now, phase_record, PhaseField};
+        use crate::bench::{PhaseField, phase_now, phase_record};
 
         // phase 측정 hook 의 시작 시점. recorder 비활성 시 phase_now() 는 0 반환,
         // phase_record() 는 no-op (None 체크 1 회) — 정상 paint 경로 overhead 거의 0.
@@ -385,13 +377,18 @@ impl App {
         // 경로는 hit-testing 이 윈도우 단위라 layered 시절의 "α=1 트릭"
         // (완전 투명이면 클릭이 통과되지 않음 방지) 은 더 이상 필요/유효하지
         // 않다 — α 0 픽셀이든 1 픽셀이든 윈도우 사각 전체가 클릭을 잡는다.
-        let clear_color = if background_visible { background_color } else { 0 };
+        let clear_color = if background_visible {
+            background_color
+        } else {
+            0
+        };
         renderer.clear(ctx, clear_color);
         let t = phase_record(PhaseField::BeginClear, t);
 
         // 테두리 그리기
         if border_visible
-            && let Err(e) = renderer.draw_border(ctx, self.width, self.height, border_width, border_color)
+            && let Err(e) =
+                renderer.draw_border(ctx, self.width, self.height, border_width, border_color)
         {
             tracing::error!("D2D draw_border failed: {e}");
         }
@@ -467,10 +464,9 @@ impl App {
             } else {
                 0
             };
-            let inflate = (render_style.outline1_size
-                + render_style.outline2_size
-                + shadow_inflate
-                + 1) as f32;
+            let inflate =
+                (render_style.outline1_size + render_style.outline2_size + shadow_inflate + 1)
+                    as f32;
             if let Some(d2d) = self.d2d_renderer.as_mut() {
                 match d2d.compute_text_line_rects(
                     &self.current_text,
@@ -790,11 +786,8 @@ impl App {
     /// 대화상자 열기 헬퍼
     ///
     /// 이미 열려있으면 포커스, 아니면 새로 생성
-    fn open_dialog_generic<F, E>(
-        hwnd_storage: &mut Option<HWND>,
-        dialog_name: &str,
-        create_fn: F,
-    ) where
+    fn open_dialog_generic<F, E>(hwnd_storage: &mut Option<HWND>, dialog_name: &str, create_fn: F)
+    where
         F: FnOnce() -> std::result::Result<HWND, E>,
         E: std::fmt::Display,
     {
@@ -825,55 +818,45 @@ impl App {
     fn open_settings_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(
-            &mut self.settings_hwnd,
-            "settings",
-            || SettingsDialog::show(main_hwnd, config, None),
-        );
+        Self::open_dialog_generic(&mut self.settings_hwnd, "settings", || {
+            SettingsDialog::show(main_hwnd, config, None)
+        });
     }
 
     /// 번역 대화상자 열기
     fn open_translate_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(
-            &mut self.translate_hwnd,
-            "translate",
-            || TranslateDialog::show(main_hwnd, config),
-        );
+        Self::open_dialog_generic(&mut self.translate_hwnd, "translate", || {
+            TranslateDialog::show(main_hwnd, config)
+        });
     }
 
     /// 백로그 대화상자 열기
     fn open_backlog_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(
-            &mut self.backlog_hwnd,
-            "backlog",
-            || BacklogDialog::show(main_hwnd, config),
-        );
+        Self::open_dialog_generic(&mut self.backlog_hwnd, "backlog", || {
+            BacklogDialog::show(main_hwnd, config)
+        });
     }
 
     /// 파일 번역 대화상자 열기
     fn open_file_trans_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(
-            &mut self.file_trans_hwnd,
-            "file_trans",
-            || FileTransDialog::show(main_hwnd, config),
-        );
+        Self::open_dialog_generic(&mut self.file_trans_hwnd, "file_trans", || {
+            FileTransDialog::show(main_hwnd, config)
+        });
     }
 
     /// 후크 설정 대화상자 열기
     fn open_hook_settings_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(
-            &mut self.hook_settings_hwnd,
-            "hook_settings",
-            || HookSettingsDialog::show(main_hwnd, config),
-        );
+        Self::open_dialog_generic(&mut self.hook_settings_hwnd, "hook_settings", || {
+            HookSettingsDialog::show(main_hwnd, config)
+        });
     }
 
     /// 설정 대화상자에서 변경된 윈도우 상태를 실제 윈도우에 반영
@@ -948,38 +931,13 @@ impl App {
             tracing::debug!("Clipboard: {}", text);
 
             // 자동 번역 처리 (비동기)
-            self.process_clipboard_text_async(&text);
+            self.request_translation_async(&text);
         }
-    }
-
-    /// 클립보드 텍스트 처리 (언어 감지 및 비동기 번역)
-    fn process_clipboard_text_async(&mut self, text: &str) {
-        let config = self.config.borrow();
-        let auto_detect = config.translation.auto_detect;
-        let source_lang = config.translation.get_source_language();
-        drop(config);
-
-        // 자동 감지가 활성화된 경우에만 소스 언어가 아닌 텍스트를 건너뛴다.
-        // 비활성화된 경우에는 사용자가 선택한 소스 언어로 바로 번역한다.
-        if !should_translate_clipboard_text(text, auto_detect, source_lang) {
-            self.current_text = text.to_string();
-            if let Err(e) = self.paint() {
-                tracing::warn!("paint failed after non-source text: {e}");
-            }
-
-            // 백로그에 추가
-            let entry = LogEntry::new(text.to_string());
-            add_to_backlog(entry);
-            return;
-        }
-
-        // 비동기 번역 요청
-        self.request_translation_async(text);
     }
 
     /// 비동기 번역 요청
     fn request_translation_async(&mut self, text: &str) {
-        use crate::translation::{get_eztrans_manager, EngineCredentials, TranslationEngine};
+        use crate::translation::{EngineCredentials, TranslationEngine, get_eztrans_manager};
 
         let config = self.config.borrow();
         let engine = config.translation.get_engine();
@@ -1001,9 +959,7 @@ impl App {
         };
 
         // EzTrans 초기화 (필요시)
-        if engine == TranslationEngine::EzTrans
-            && !config.translation.eztrans_dll_path.is_empty()
-        {
+        if engine == TranslationEngine::EzTrans && !config.translation.eztrans_dll_path.is_empty() {
             let manager = get_eztrans_manager();
             if let Ok(mut mgr) = manager.lock()
                 && let Err(e) = mgr.init(
@@ -1270,9 +1226,7 @@ impl App {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        let app = APP.with(|cell| {
-            cell.try_borrow().ok().and_then(|g| g.clone())
-        });
+        let app = APP.with(|cell| cell.try_borrow().ok().and_then(|g| g.clone()));
 
         if let Some(app) = app {
             // TaskbarCreated 메시지 체크
@@ -1294,7 +1248,9 @@ impl App {
                     WM_NCHITTEST => {
                         let x = (lparam.0 & 0xFFFF) as i16 as i32;
                         let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                        if let Some(hit) = window::hit_test_resize_border(hwnd, x, y, RESIZE_BORDER_WIDTH) {
+                        if let Some(hit) =
+                            window::hit_test_resize_border(hwnd, x, y, RESIZE_BORDER_WIDTH)
+                        {
                             return LRESULT(hit as isize);
                         }
                         // DComp 합성 경로 회귀 보완: 투명 배경 모드에서 텍스트
@@ -1324,23 +1280,22 @@ impl App {
             if msg == WM_CLIPBOARDUPDATE {
                 if let Ok(mut app_ref) = app.try_borrow_mut() {
                     // SAFETY: Valid system parameters forwarded to dispatch_message.
-                    if let Some(result) = unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) } {
+                    if let Some(result) =
+                        unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) }
+                    {
                         return result;
                     }
                 } else {
                     unsafe {
-                        let _ = PostMessageW(
-                            Some(hwnd),
-                            WM_DEFERRED_CLIPBOARD,
-                            WPARAM(0),
-                            LPARAM(0),
-                        );
+                        let _ =
+                            PostMessageW(Some(hwnd), WM_DEFERRED_CLIPBOARD, WPARAM(0), LPARAM(0));
                     }
                     return LRESULT(0);
                 }
             } else if let Ok(mut app_ref) = app.try_borrow_mut() {
                 // SAFETY: Valid system parameters forwarded to dispatch_message.
-                if let Some(result) = unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) } {
+                if let Some(result) = unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) }
+                {
                     return result;
                 }
             } else {
@@ -1362,19 +1317,3 @@ impl App {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::should_translate_clipboard_text;
-    use isolang::Language;
-
-    #[test]
-    fn clipboard_translation_skips_detection_when_auto_detect_is_disabled() {
-        assert!(should_translate_clipboard_text(
-            "언어 감지 결과와 관계없이 번역",
-            false,
-            Language::Jpn,
-        ));
-    }
-}
-

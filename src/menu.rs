@@ -42,7 +42,11 @@ impl ContextMenu {
         /// 체크 상태에 따른 메뉴 플래그
         #[inline]
         fn checked_flag(checked: bool) -> MENU_ITEM_FLAGS {
-            if checked { MF_STRING | MF_CHECKED } else { MF_STRING }
+            if checked {
+                MF_STRING | MF_CHECKED
+            } else {
+                MF_STRING
+            }
         }
 
         // SAFETY: self.hmenu is a valid menu handle created by CreatePopupMenu. All
@@ -55,23 +59,62 @@ impl ContextMenu {
             }
 
             // 윈도우 표시/숨김
-            let show_text = if config.window_visible { w!("윈도우 숨기기") } else { w!("윈도우 표시") };
+            let show_text = if config.window_visible {
+                w!("윈도우 숨기기")
+            } else {
+                w!("윈도우 표시")
+            };
             AppendMenuW(self.hmenu, MF_STRING, id::WINDOW_SHOW as usize, show_text)?;
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
-            AppendMenuW(self.hmenu, checked_flag(config.click_through), id::CLICK_THROUGH as usize, w!("클릭 통과"))?;
-            AppendMenuW(self.hmenu, checked_flag(config.clipboard_watch), id::CLIPBOARD_WATCH as usize, w!("클립보드 감시"))?;
-            AppendMenuW(self.hmenu, checked_flag(config.magnetic_mode), id::MAGNETIC_MODE as usize, w!("자석 모드"))?;
+            AppendMenuW(
+                self.hmenu,
+                checked_flag(config.click_through),
+                id::CLICK_THROUGH as usize,
+                w!("클릭 통과"),
+            )?;
+            AppendMenuW(
+                self.hmenu,
+                checked_flag(config.clipboard_watch),
+                id::CLIPBOARD_WATCH as usize,
+                w!("클립보드 감시"),
+            )?;
+            AppendMenuW(
+                self.hmenu,
+                checked_flag(config.magnetic_mode),
+                id::MAGNETIC_MODE as usize,
+                w!("자석 모드"),
+            )?;
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
-            AppendMenuW(self.hmenu, checked_flag(config.background_visible), id::BACKGROUND_TOGGLE as usize, w!("배경 표시"))?;
-            AppendMenuW(self.hmenu, checked_flag(config.border_visible), id::BORDER_TOGGLE as usize, w!("테두리 표시"))?;
+            AppendMenuW(
+                self.hmenu,
+                checked_flag(config.background_visible),
+                id::BACKGROUND_TOGGLE as usize,
+                w!("배경 표시"),
+            )?;
+            AppendMenuW(
+                self.hmenu,
+                checked_flag(config.border_visible),
+                id::BORDER_TOGGLE as usize,
+                w!("테두리 표시"),
+            )?;
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
             AppendMenuW(self.hmenu, MF_STRING, id::TRANSLATE as usize, w!("번역"))?;
-            AppendMenuW(self.hmenu, MF_STRING, id::FILE_TRANS as usize, w!("파일 번역"))?;
+            AppendMenuW(
+                self.hmenu,
+                MF_STRING,
+                id::FILE_TRANS as usize,
+                w!("파일 번역"),
+            )?;
             AppendMenuW(self.hmenu, MF_STRING, id::BACKLOG as usize, w!("백로그"))?;
-            AppendMenuW(self.hmenu, MF_STRING, id::HOOK_SETTINGS as usize, w!("후크 설정"))?;
+            AppendMenuW(
+                self.hmenu,
+                MF_STRING,
+                id::HOOK_SETTINGS as usize,
+                w!("후크 설정"),
+            )?;
             AppendMenuW(self.hmenu, MF_STRING, id::SETTINGS as usize, w!("설정"))?;
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 
@@ -100,7 +143,6 @@ impl ContextMenu {
             Ok(())
         }
     }
-
 }
 
 impl Drop for ContextMenu {

@@ -266,7 +266,9 @@ fn render_frame(sync_interval: u32, mode: RenderMode) -> Result<()> {
         let Ok(borrowed) = r.try_borrow() else {
             return Ok(());
         };
-        let renderer = borrowed.as_ref().ok_or_else(|| Error::from_hresult(E_FAIL))?;
+        let renderer = borrowed
+            .as_ref()
+            .ok_or_else(|| Error::from_hresult(E_FAIL))?;
 
         // waitable swap chain — 메인 paint 와 동일하게 다음 back buffer 가
         // 사용 가능해질 때까지 명시 wait. 안 부르면 EndDraw 내부에서 같은
@@ -332,7 +334,9 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
         let Ok(mut borrowed_d2d) = c.try_borrow_mut() else {
             return Ok(());
         };
-        let Some(d2d) = borrowed_d2d.as_mut() else { return Ok(()); };
+        let Some(d2d) = borrowed_d2d.as_mut() else {
+            return Ok(());
+        };
 
         // 한 프레임 시작 — 캐시 reset + AA 모드.
         d2d.configure_frame(ctx);
@@ -358,7 +362,12 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
         d2d.draw_text(
             ctx,
             "D2DRenderer ▸ DComp 결합 OK",
-            TextBox { x: 20.0, y: 300.0, max_width: 600.0, max_height: 40.0 },
+            TextBox {
+                x: 20.0,
+                y: 300.0,
+                max_width: 600.0,
+                max_height: 40.0,
+            },
             &style,
         )?;
         Ok(())
@@ -372,11 +381,17 @@ fn draw_bench_match_app(ctx: &ID2D1DeviceContext) -> Result<()> {
     // 메인 paint 의 배경 처리: background_visible=true 일 때 default
     // background_color. config::Config default 와 동일한 값 사용.
     let bg = premul(0.0, 0.0, 0.0, 0.0); // background_visible 가 보통 false 라 ARGB=0
-    unsafe { ctx.Clear(Some(&bg)); }
+    unsafe {
+        ctx.Clear(Some(&bg));
+    }
 
     D2D.with(|c| -> Result<()> {
-        let Ok(mut borrowed_d2d) = c.try_borrow_mut() else { return Ok(()); };
-        let Some(d2d) = borrowed_d2d.as_mut() else { return Ok(()); };
+        let Ok(mut borrowed_d2d) = c.try_borrow_mut() else {
+            return Ok(());
+        };
+        let Some(d2d) = borrowed_d2d.as_mut() else {
+            return Ok(());
+        };
 
         d2d.configure_frame(ctx);
 
@@ -544,7 +559,10 @@ fn diagnose_pipeline(hwnd: HWND) {
             Height: height,
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
             Stereo: false.into(),
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
             BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
             BufferCount: 2,
             Scaling: DXGI_SCALING_STRETCH,
@@ -552,7 +570,8 @@ fn diagnose_pipeline(hwnd: HWND) {
             AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
             Flags: 0,
         };
-        let swap_chain = match dxgi_factory.CreateSwapChainForComposition(&dxgi_device, &desc, None) {
+        let swap_chain = match dxgi_factory.CreateSwapChainForComposition(&dxgi_device, &desc, None)
+        {
             Ok(s) => {
                 eprintln!("  4. CreateSwapChainForComposition: OK");
                 s
@@ -680,7 +699,12 @@ fn diagnose_pipeline(hwnd: HWND) {
 
         // 8. 그리기 한 번 — Clear 까지 가는지
         d2d_context.BeginDraw();
-        let red = D2D1_COLOR_F { r: 1.0 * 0.85, g: 0.2 * 0.85, b: 0.2 * 0.85, a: 0.85 };
+        let red = D2D1_COLOR_F {
+            r: 1.0 * 0.85,
+            g: 0.2 * 0.85,
+            b: 0.2 * 0.85,
+            a: 0.85,
+        };
         d2d_context.Clear(Some(&red));
         match d2d_context.EndDraw(None, None) {
             Ok(()) => eprintln!("  8. EndDraw after Clear: OK"),
