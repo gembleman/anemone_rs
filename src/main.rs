@@ -2,7 +2,6 @@
 // #![windows_subsystem = "windows"]
 
 mod app;
-mod bench;
 mod cli;
 mod clipboard;
 mod config;

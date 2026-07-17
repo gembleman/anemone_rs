@@ -26,7 +26,7 @@ mod d2d_composition;
 // bench 모듈에는 메인 binary 만 사용하는 phase 측정 인프라가 들어있다.
 // example 격리 컴파일이라 일부 항목이 dead_code 로 잡혀 모듈 단위로 봉합.
 #[allow(dead_code)]
-#[path = "../src/bench.rs"]
+#[path = "../benchmark/bench.rs"]
 mod bench;
 
 // d2d.rs 는 `crate::util::to_wide` 와 `crate::window::TextRenderStyle` 를
@@ -109,7 +109,7 @@ fn main() -> Result<()> {
         };
         RegisterClassExW(&wnd_class);
 
-        // 벤치 모드면 baseline (`app.rs::run_paint_bench`) 과 동일한
+        // 벤치 모드면 baseline (`benchmark/app.rs::run_paint_bench`) 과 동일한
         // 400×200 클라이언트 영역으로 윈도우를 만들어 측정 조건을 맞춘다.
         let bench_iters = paint_bench_iters();
         let (win_w, win_h) = if bench_iters.is_some() {
@@ -446,7 +446,7 @@ fn premul(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
 }
 
 /// 합성 경로 paint 1 회 비용을 N 회 반복 측정. baseline (기존 paint 경로,
-/// `app.rs::run_paint_bench`) 과 동일한 구조 — WARMUP 16 + iters 회 측정 →
+/// `benchmark/app.rs::run_paint_bench`) 과 동일한 구조 — WARMUP 16 + iters 회 측정 →
 /// `bench_paint.log` 에 라벨 `composition_paint` 로 append.
 ///
 /// 측정 범위는 begin_draw → D2D 명령 → end_draw_and_present 까지. baseline 의
