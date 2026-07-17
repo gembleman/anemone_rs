@@ -65,6 +65,8 @@ pub struct SettingsDialog {
     tab_controls: [Vec<HWND>; 3],
     current_tab: usize,
     applied_dpi: u32,
+    scroll_pos: i32,
+    scroll_max: i32,
     /// 엔진별 컨트롤 (EnableWindow 토글용)
     pub(super) engine_controls: [Vec<HWND>; 4],
 }
@@ -150,6 +152,8 @@ unsafe extern "system" fn settings_dialog_proc(
                 tab_controls: [Vec::new(), Vec::new(), Vec::new()],
                 current_tab: TAB_APPEARANCE,
                 applied_dpi: crate::dpi::dpi_for_window(hwnd),
+                scroll_pos: 0,
+                scroll_max: 0,
                 engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             }));
             SETTINGS_INSTANCE.with(|slot| {
@@ -405,6 +409,7 @@ impl SettingsDialog {
 
     fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
         let new_dpi = (wparam.0 & 0xffff) as u32;
+        self.scroll_to(0);
         super::helpers::rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
         self.applied_dpi = new_dpi;
 
@@ -423,6 +428,7 @@ impl SettingsDialog {
                 );
             }
         }
+        self.adjust_dialog_size_for_tab(self.current_tab);
     }
 
     /// 탭 전환: 현재 탭 컨트롤 숨기고 새 탭 컨트롤 표시
@@ -444,7 +450,7 @@ impl SettingsDialog {
     }
 
     /// 탭에 따라 다이얼로그 클라이언트 높이를 조정 (빈 공간 최소화)
-    fn adjust_dialog_size_for_tab(&self, tab: usize) {
+    fn adjust_dialog_size_for_tab(&mut self, tab: usize) {
         // 디자인 클라이언트 높이. 닫기 버튼은 target_height - 65 에 배치되므로,
         // 각 탭 마지막 그룹박스 하단 아래로 닫기 버튼이 오도록 잡는다.
         let target_height = match tab {
@@ -455,23 +461,68 @@ impl SettingsDialog {
         };
         // SAFETY: self.hwnd is valid. SetWindowPos uses valid parameters.
         unsafe {
+            self.scroll_to(0);
             let dpi = crate::dpi::dpi_for_window(self.hwnd);
             let s = |v: i32| crate::dpi::scale(v, dpi);
+            let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let work = if GetMonitorInfoW(monitor, &mut info).as_bool() {
+                info.rcWork
+            } else {
+                RECT {
+                    left: 0,
+                    top: 0,
+                    right: GetSystemMetrics(SM_CXSCREEN),
+                    bottom: GetSystemMetrics(SM_CYSCREEN),
+                }
+            };
+            let work_width = work.right - work.left;
+            let work_height = work.bottom - work.top;
+
             // 디자인 좌표는 클라이언트 기준. SetWindowPos 는 윈도우 전체 크기를
             // 받으므로 타이틀/테두리만큼 더해 환산해야 닫기 버튼이 안 잘린다.
-            let (_, win_h) =
+            let (_, desired_height) =
                 super::helpers::design_to_window_size(self.hwnd, Self::WIDTH, target_height);
+            let needs_scroll = desired_height > work_height;
+            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            let new_style = if needs_scroll {
+                style | WS_VSCROLL.0
+            } else {
+                style & !WS_VSCROLL.0
+            };
+            if style != new_style {
+                let _ = SetWindowLongPtrW(self.hwnd, GWL_STYLE, new_style as _);
+            }
+
+            // 세로 스크롤바가 클라이언트 폭을 잠식하지 않도록 스타일 변경 후
+            // 전체 윈도우 크기를 다시 계산한다.
+            let (desired_width, desired_height) =
+                super::helpers::design_to_window_size(self.hwnd, Self::WIDTH, target_height);
+            let win_width = desired_width.min(work_width);
+            let win_height = desired_height.min(work_height);
             let mut rect = RECT::default();
             let _ = GetWindowRect(self.hwnd, &mut rect);
-            let cur_w = rect.right - rect.left;
+            let x = if win_width >= work_width {
+                work.left
+            } else {
+                rect.left.clamp(work.left, work.right - win_width)
+            };
+            let y = if win_height >= work_height {
+                work.top
+            } else {
+                rect.top.clamp(work.top, work.bottom - win_height)
+            };
             let _ = SetWindowPos(
                 self.hwnd,
                 None,
-                0,
-                0,
-                cur_w,
-                win_h,
-                SWP_NOMOVE | SWP_NOZORDER,
+                x,
+                y,
+                win_width,
+                win_height,
+                SWP_NOZORDER | SWP_FRAMECHANGED,
             );
             // 탭 컨트롤도 같이 늘리기 (탭 헤더 ~ 닫기 버튼 위까지).
             // 폭은 리소스와 동일하게 클라이언트 폭 - 좌우 5px = 475.
@@ -498,7 +549,126 @@ impl SettingsDialog {
                     SWP_NOSIZE | SWP_NOZORDER,
                 );
             }
+
+            let mut client = RECT::default();
+            let _ = GetClientRect(self.hwnd, &mut client);
+            let viewport_height = (client.bottom - client.top).max(1);
+            let content_height = s(target_height);
+            self.scroll_max = (content_height - viewport_height).max(0);
+            let scroll_info = SCROLLINFO {
+                cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+                fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+                nMin: 0,
+                nMax: content_height.saturating_sub(1),
+                nPage: viewport_height as u32,
+                nPos: 0,
+                ..Default::default()
+            };
+            SetScrollInfo(self.hwnd, SB_VERT, &scroll_info, true);
         }
+    }
+
+    /// 낮은 해상도에서 잘린 설정 내용을 세로로 이동한다.
+    fn scroll_to(&mut self, position: i32) {
+        let new_pos = position.clamp(0, self.scroll_max);
+        if new_pos == self.scroll_pos {
+            return;
+        }
+
+        // SAFETY: self.hwnd와 그 자식 컨트롤은 설정창 수명 동안 유효하다.
+        unsafe {
+            let delta = self.scroll_pos - new_pos;
+            self.offset_scroll_children(delta);
+            self.scroll_pos = new_pos;
+            let scroll_info = SCROLLINFO {
+                cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+                fMask: SIF_POS,
+                nPos: new_pos,
+                ..Default::default()
+            };
+            SetScrollInfo(self.hwnd, SB_VERT, &scroll_info, true);
+            let _ = InvalidateRect(Some(self.hwnd), None, true);
+            let _ = UpdateWindow(self.hwnd);
+        }
+    }
+
+    /// 현재 보이는 영역 밖에 있는 컨트롤까지 포함해 모든 직접 자식을 이동한다.
+    /// `ScrollWindowEx(SW_SCROLLCHILDREN)`는 스크롤 사각형과 교차하는 자식만
+    /// 옮기므로, 화면 아래에 완전히 가려진 컨트롤에는 사용할 수 없다.
+    unsafe fn offset_scroll_children(&self, delta: i32) {
+        unsafe fn offset(parent: HWND, child: HWND, delta: i32) {
+            let mut rect = RECT::default();
+            if unsafe { GetWindowRect(child, &mut rect) }.is_err() {
+                return;
+            }
+            let mut top_left = POINT {
+                x: rect.left,
+                y: rect.top,
+            };
+            unsafe {
+                let _ = ScreenToClient(parent, &mut top_left);
+                let _ = SetWindowPos(
+                    child,
+                    None,
+                    top_left.x,
+                    top_left.y + delta,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+
+        unsafe {
+            if let Ok(tab) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32) {
+                offset(self.hwnd, tab, delta);
+            }
+            for &child in self.tab_controls.iter().flatten() {
+                offset(self.hwnd, child, delta);
+            }
+            if let Ok(close) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
+                offset(self.hwnd, close, delta);
+            }
+        }
+    }
+
+    fn handle_vertical_scroll(&mut self, wparam: WPARAM) {
+        if self.scroll_max == 0 {
+            return;
+        }
+
+        let command = (wparam.0 & 0xffff) as i32;
+        let dpi = crate::dpi::dpi_for_window(self.hwnd);
+        let line = crate::dpi::scale(24, dpi);
+        let mut client = RECT::default();
+        // SAFETY: self.hwnd는 유효한 설정창 핸들이다.
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut client);
+        }
+        let page = (client.bottom - client.top - line).max(line);
+        let target = match command {
+            value if value == SB_LINEUP.0 => self.scroll_pos - line,
+            value if value == SB_LINEDOWN.0 => self.scroll_pos + line,
+            value if value == SB_PAGEUP.0 => self.scroll_pos - page,
+            value if value == SB_PAGEDOWN.0 => self.scroll_pos + page,
+            value if value == SB_TOP.0 => 0,
+            value if value == SB_BOTTOM.0 => self.scroll_max,
+            value if value == SB_THUMBTRACK.0 || value == SB_THUMBPOSITION.0 => {
+                let mut info = SCROLLINFO {
+                    cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+                    fMask: SIF_TRACKPOS,
+                    ..Default::default()
+                };
+                // SAFETY: info는 쓰기 가능한 SCROLLINFO이고 hwnd에 SB_VERT가 있다.
+                if unsafe { GetScrollInfo(self.hwnd, SB_VERT, &mut info) }.is_ok() {
+                    info.nTrackPos
+                } else {
+                    ((wparam.0 >> 16) & 0xffff) as i32
+                }
+            }
+            _ => return,
+        };
+        self.scroll_to(target);
     }
 
     /// 엔진별 컨트롤 enable 상태 갱신
@@ -593,6 +763,21 @@ impl SettingsDialog {
                     }
                 }
                 None
+            }
+            WM_VSCROLL => {
+                self.handle_vertical_scroll(wparam);
+                Some(LRESULT(0))
+            }
+            WM_MOUSEWHEEL => {
+                if self.scroll_max > 0 {
+                    let delta = ((wparam.0 >> 16) & 0xffff) as u16 as i16 as i32;
+                    let lines = delta / WHEEL_DELTA as i32;
+                    let step = crate::dpi::scale(72, crate::dpi::dpi_for_window(self.hwnd));
+                    self.scroll_to(self.scroll_pos - lines * step);
+                    Some(LRESULT(0))
+                } else {
+                    None
+                }
             }
             WM_HSCROLL => {
                 // SAFETY: lparam contains a valid trackbar HWND from the system.
