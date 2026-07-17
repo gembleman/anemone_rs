@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use windows::{
     Win32::{
@@ -23,7 +23,7 @@ use windows::{
 };
 
 use super::file_dialog::{FileFilter, open_files_multi, save_file};
-use super::file_trans_progress::FileTransProgressDialog;
+use super::file_trans_progress::{FileTransProgressDialog, ProgressEventQueue, ProgressReporter};
 use super::helpers::{
     center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
     show_dialog_window, unregister_resource_dialog,
@@ -65,7 +65,7 @@ pub struct FileTransJobData {
     pub output_files: Vec<PathBuf>,
     pub write_type: WriteType,
     pub no_trans_linefeed: bool,
-    pub progress_hwnd: isize, // HWND를 isize로 저장 (Send 가능)
+    pub progress: ProgressReporter,
     pub cancel_token: Arc<AtomicBool>,
     pub engine: TranslationEngine,
     pub source_lang: Language,
@@ -75,13 +75,6 @@ pub struct FileTransJobData {
     pub eztrans_dll_path: String,
     pub eztrans_dat_path: String,
 }
-
-// SAFETY: FileTransJobData is Send/Sync safe because the HWND is stored as a plain isize
-// (not as HWND which is !Send). The isize is only reconstructed to HWND on the target
-// thread for PostMessageW, which is safe to call cross-thread. All other fields (Vec,
-// WriteType, bool, Arc<AtomicBool>) are inherently Send+Sync.
-unsafe impl Send for FileTransJobData {}
-unsafe impl Sync for FileTransJobData {}
 
 /// Windows 파일 시스템의 대소문자 비구분 규칙에 맞춰 비교할 절대 경로 키를 만든다.
 fn normalized_path_key(path: &Path) -> std::result::Result<String, String> {
@@ -182,7 +175,6 @@ pub struct FileTransDialog {
     output_files: Vec<PathBuf>,
     write_type: WriteType,
     no_trans_linefeed: bool,
-    cancel_token: Arc<AtomicBool>,
 }
 
 define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
@@ -291,7 +283,6 @@ impl FileTransDialog {
             output_files: Vec::new(),
             write_type: WriteType::TranslationOnly,
             no_trans_linefeed: false,
-            cancel_token: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -656,24 +647,27 @@ impl FileTransDialog {
             return;
         }
 
-        self.cancel_token.store(false, Ordering::SeqCst);
-
-        let progress_hwnd =
-            match FileTransProgressDialog::show(self.hwnd, self.cancel_token.clone()) {
-                Ok(hwnd) => hwnd,
-                Err(e) => {
-                    tracing::error!("Failed to create progress dialog: {:?}", e);
-                    return;
-                }
-            };
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        let progress_events = Arc::new(ProgressEventQueue::default());
+        let progress_hwnd = match FileTransProgressDialog::show(
+            self.hwnd,
+            cancel_token.clone(),
+            progress_events.clone(),
+        ) {
+            Ok(hwnd) => hwnd,
+            Err(e) => {
+                tracing::error!("Failed to create progress dialog: {:?}", e);
+                return;
+            }
+        };
 
         let job_data = Arc::new(FileTransJobData {
             input_files: self.input_files.clone(),
             output_files: self.output_files.clone(),
             write_type: self.write_type,
             no_trans_linefeed: self.no_trans_linefeed,
-            progress_hwnd: progress_hwnd.0 as isize,
-            cancel_token: self.cancel_token.clone(),
+            progress: ProgressReporter::new(progress_hwnd, progress_events),
+            cancel_token,
             engine,
             source_lang,
             target_lang,
@@ -682,9 +676,10 @@ impl FileTransDialog {
             eztrans_dat_path: dat,
         });
 
-        std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
             super::file_trans_thread::file_trans_thread(job_data);
         });
+        FileTransProgressDialog::attach_worker(worker);
     }
 }
 

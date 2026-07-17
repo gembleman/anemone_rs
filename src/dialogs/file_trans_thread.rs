@@ -10,24 +10,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, WPARAM},
     Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
     System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState},
-    UI::WindowsAndMessaging::PostMessageW,
 };
 
 use super::file_trans::{FileTransJobData, WriteType, validate_job_paths};
-use crate::constants::{
-    WM_PROGRESS_COMPLETE, WM_PROGRESS_CURRENT, WM_PROGRESS_ERROR, WM_PROGRESS_INDEX,
-    WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
-    WM_PROGRESS_UPDATE,
-};
+use super::file_trans_progress::ProgressEvent;
 use crate::translation::{
     TranslationEngine, get_eztrans_manager,
     http_common::shared_client,
     worker::{TranslationDispatch, TranslationRequest},
 };
-use crate::util::to_wide;
 
 /// 시스템 절전 진입을 차단하는 RAII 가드.
 ///
@@ -177,20 +170,16 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     // 긴 배치 번역 중 OS 가 절전으로 진입하지 않도록 함수 전체 동안 가드 유지.
     let _sleep_guard = SleepBlocker::new();
 
-    // isize를 HWND로 변환
-    let progress_hwnd = HWND(job_data.progress_hwnd as *mut std::ffi::c_void);
-
     // 입출력 파일 수 확인
     if job_data.input_files.len() != job_data.output_files.len() {
-        send_error(
-            progress_hwnd,
-            "입력 파일과 출력 파일 수가 일치하지 않습니다.",
-        );
+        job_data.progress.send(ProgressEvent::Error(
+            "입력 파일과 출력 파일 수가 일치하지 않습니다.".to_string(),
+        ));
         return;
     }
 
     if let Err(message) = validate_job_paths(&job_data.input_files, &job_data.output_files) {
-        send_error(progress_hwnd, &message);
+        job_data.progress.send(ProgressEvent::Error(message));
         return;
     }
 
@@ -203,7 +192,9 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
             Err(_) => Err("EzTrans 매니저 잠금 실패".to_string()),
         };
         if let Err(e) = init_result {
-            send_error(progress_hwnd, &format!("EzTrans 초기화 실패: {}", e));
+            job_data
+                .progress
+                .send(ProgressEvent::Error(format!("EzTrans 초기화 실패: {e}")));
             return;
         }
     }
@@ -216,7 +207,9 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     {
         Ok(rt) => rt,
         Err(e) => {
-            send_error(progress_hwnd, &format!("tokio 런타임 생성 실패: {}", e));
+            job_data
+                .progress
+                .send(ProgressEvent::Error(format!("tokio 런타임 생성 실패: {e}")));
             return;
         }
     };
@@ -226,30 +219,26 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
 
     // 인코딩 검증 — UTF-8 / UTF-8 BOM 만 허용.
     if let Err(msg) = validate_inputs_utf8(&job_data.input_files) {
-        send_error(progress_hwnd, &msg);
+        job_data.progress.send(ProgressEvent::Error(msg));
         return;
     }
 
     // 전체 라인 수 계산
     let total_lines = calculate_total_lines(&job_data.input_files);
     if total_lines < 0 {
-        send_error(progress_hwnd, "파일을 읽을 수 없습니다.");
+        job_data
+            .progress
+            .send(ProgressEvent::Error("파일을 읽을 수 없습니다.".to_string()));
         return;
     }
 
     // 전체 파일 수 및 라인 수 전송
-    send_progress_message(
-        progress_hwnd,
-        WM_PROGRESS_TOTAL_COUNT,
-        0,
-        job_data.input_files.len() as isize,
-    );
-    send_progress_message(
-        progress_hwnd,
-        WM_PROGRESS_TOTAL_SIZE,
-        0,
-        total_lines as isize,
-    );
+    job_data
+        .progress
+        .send(ProgressEvent::TotalFiles(job_data.input_files.len() as i32));
+    job_data
+        .progress
+        .send(ProgressEvent::TotalLines(total_lines));
 
     let mut global_current_line = 0;
 
@@ -262,36 +251,39 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     {
         // 취소 체크
         if job_data.cancel_token.load(Ordering::SeqCst) {
-            send_error(progress_hwnd, "사용자가 취소했습니다.");
+            job_data
+                .progress
+                .send(ProgressEvent::Error("사용자가 취소했습니다.".to_string()));
             return;
         }
 
         // 파일 인덱스 업데이트
-        send_progress_message(progress_hwnd, WM_PROGRESS_INDEX, 0, (idx + 1) as isize);
+        job_data
+            .progress
+            .send(ProgressEvent::FileIndex((idx + 1) as i32));
 
         // 파일명 전송
-        send_filename(progress_hwnd, input_path);
+        send_filename(&job_data, input_path);
 
         // 단일 파일 처리
         match process_single_file(
             input_path,
             output_path,
             &job_data,
-            progress_hwnd,
             &mut global_current_line,
             &rt,
             &http_client,
         ) {
             Ok(()) => {}
             Err(e) => {
-                send_error(progress_hwnd, &e);
+                job_data.progress.send(ProgressEvent::Error(e));
                 return;
             }
         }
     }
 
     // 완료
-    send_progress_message(progress_hwnd, WM_PROGRESS_COMPLETE, 0, 0);
+    job_data.progress.send(ProgressEvent::Complete);
 }
 
 /// 입력 파일들이 모두 UTF-8 또는 UTF-8 BOM 인지 검증.
@@ -334,7 +326,6 @@ fn process_single_file(
     input_path: &Path,
     output_path: &Path,
     job_data: &FileTransJobData,
-    progress_hwnd: HWND,
     global_current: &mut i32,
     rt: &tokio::runtime::Runtime,
     http_client: &reqwest::Client,
@@ -359,13 +350,15 @@ fn process_single_file(
         .map_err(|e| e.to_string())?;
 
     // 라인 카운트는 calculate_total_lines 에서 이미 한 번 산정했지만, 진행률 바
-    // 범위 (WM_PROGRESS_LIST_SIZE) 가 라인 처리 직전에 도착해야 하므로 한 번 더
+    // 파일 진행률 범위가 라인 처리 직전에 도착해야 하므로 한 번 더
     // 카운트한다. 본 패스에서는 한꺼번에 `Vec<String>` 으로 적재하지 않고
     // 스트리밍 처리해 메모리를 라인 1~2 개 수준으로 유지한다.
     let line_count = count_lines(input_path)?;
 
     // 리스트 크기 전송
-    send_progress_message(progress_hwnd, WM_PROGRESS_LIST_SIZE, 0, line_count as isize);
+    job_data
+        .progress
+        .send(ProgressEvent::FileLines(line_count as i32));
 
     // 스트리밍 라인 처리. 마지막 라인 판정을 위해 1-라인 lookahead 패턴 사용 —
     // `prev` 가 직전에 읽은 라인이고, 새 라인이 도착하면 prev 를 "마지막 아님"
@@ -403,13 +396,12 @@ fn process_single_file(
 
         idx += 1;
         *global_current += 1;
-        send_progress_message(progress_hwnd, WM_PROGRESS_UPDATE, idx, 0);
-        send_progress_message(
-            progress_hwnd,
-            WM_PROGRESS_CURRENT,
-            0,
-            *global_current as isize,
-        );
+        job_data
+            .progress
+            .send(ProgressEvent::FileProgress(idx as i32));
+        job_data
+            .progress
+            .send(ProgressEvent::TotalProgress(*global_current));
 
         prev = Some(next);
     }
@@ -430,13 +422,12 @@ fn process_single_file(
 
         idx += 1;
         *global_current += 1;
-        send_progress_message(progress_hwnd, WM_PROGRESS_UPDATE, idx, 0);
-        send_progress_message(
-            progress_hwnd,
-            WM_PROGRESS_CURRENT,
-            0,
-            *global_current as isize,
-        );
+        job_data
+            .progress
+            .send(ProgressEvent::FileProgress(idx as i32));
+        job_data
+            .progress
+            .send(ProgressEvent::TotalProgress(*global_current));
     }
 
     pending_output.persist()
@@ -527,49 +518,14 @@ fn write_output(
     Ok(())
 }
 
-/// 진행률 메시지 전송
-fn send_progress_message(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) {
-    // SAFETY: hwnd was reconstructed from a valid isize stored in FileTransJobData.
-    // PostMessageW is safe to call from any thread.
-    unsafe {
-        let _ = PostMessageW(Some(hwnd), msg, WPARAM(wparam), LPARAM(lparam));
-    }
-}
-
 /// 파일명 전송
-fn send_filename(hwnd: HWND, path: &Path) {
+fn send_filename(job_data: &FileTransJobData, path: &Path) {
     let filename = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    post_wide_string(hwnd, WM_PROGRESS_NAME, &filename);
-}
-
-/// 에러 메시지 전송
-fn send_error(hwnd: HWND, message: &str) {
-    post_wide_string(hwnd, WM_PROGRESS_ERROR, message);
-}
-
-/// UTF-16 문자열을 힙에 박스로 담아 LPARAM 로 PostMessage 한다.
-///
-/// 수신측은 `lparam` 을 `*mut Vec<u16>` 으로 받아 `Box::from_raw` 로 회수해
-/// 자동 free 한다. 이전 구현은 `static mut` 버퍼를 공유했지만, PostMessage 가
-/// 비동기 큐잉이라 수신측이 처리하기 전에 송신측이 같은 버퍼를 덮어쓰는
-/// 데이터 레이스가 있었다 (연속 파일 처리 시 파일명 메시지가 섞일 수 있음).
-fn post_wide_string(hwnd: HWND, msg: u32, s: &str) {
-    let boxed: Box<Vec<u16>> = Box::new(to_wide(s));
-    let raw = Box::into_raw(boxed);
-
-    // SAFETY: raw points to a leaked Vec<u16> owned by us; receiver reclaims via Box::from_raw.
-    // PostMessageW only queues; ownership transfer is atomic at message-queue boundary.
-    let result = unsafe { PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(raw as isize)) };
-    if result.is_err() {
-        // PostMessage 실패 — 수신자가 박스를 회수하지 못하므로 직접 회수해서 누수 방지.
-        // SAFETY: raw is still valid; we just leaked it via into_raw above.
-        let _ = unsafe { Box::from_raw(raw) };
-        tracing::warn!("PostMessageW failed for msg {msg:#x}");
-    }
+    job_data.progress.send(ProgressEvent::FileName(filename));
 }
 
 #[cfg(test)]

@@ -38,24 +38,8 @@ pub const WM_APP_REFRESH: u32 = WM_APP + 1;
 
 // ── 파일 번역 진행률 메시지 ─────────────────────────────
 
-/// 전체 라인 수
-pub const WM_PROGRESS_TOTAL_SIZE: u32 = WM_USER + 300;
-/// 전체 파일 수
-pub const WM_PROGRESS_TOTAL_COUNT: u32 = WM_USER + 301;
-/// 현재 파일 인덱스
-pub const WM_PROGRESS_INDEX: u32 = WM_USER + 302;
-/// 현재 파일 이름
-pub const WM_PROGRESS_NAME: u32 = WM_USER + 303;
-/// 현재 파일 라인 수
-pub const WM_PROGRESS_LIST_SIZE: u32 = WM_USER + 304;
-/// 진행률 업데이트
-pub const WM_PROGRESS_UPDATE: u32 = WM_USER + 305;
-/// 전체 진행 라인
-pub const WM_PROGRESS_CURRENT: u32 = WM_USER + 306;
-/// 번역 완료
-pub const WM_PROGRESS_COMPLETE: u32 = WM_USER + 307;
-/// 에러 발생
-pub const WM_PROGRESS_ERROR: u32 = WM_USER + 308;
+/// 공유 진행률 이벤트 큐 확인 요청
+pub const WM_PROGRESS_EVENT: u32 = WM_USER + 300;
 
 // ── 응답 저장소 ─────────────────────────────────────────
 

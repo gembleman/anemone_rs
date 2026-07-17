@@ -3,9 +3,11 @@
 //! 번역 진행 상황 표시 및 취소 기능.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use windows::{
     Win32::{
@@ -26,11 +28,7 @@ use super::helpers::{
     register_resource_dialog, rescale_dialog_children_for_dpi, show_dialog_window,
     unregister_resource_dialog,
 };
-use crate::constants::{
-    WM_PROGRESS_COMPLETE, WM_PROGRESS_CURRENT, WM_PROGRESS_ERROR, WM_PROGRESS_INDEX,
-    WM_PROGRESS_LIST_SIZE, WM_PROGRESS_NAME, WM_PROGRESS_TOTAL_COUNT, WM_PROGRESS_TOTAL_SIZE,
-    WM_PROGRESS_UPDATE,
-};
+use crate::constants::WM_PROGRESS_EVENT;
 use crate::define_dialog_instance;
 use crate::util::to_wide;
 
@@ -46,6 +44,7 @@ mod ctrl_id {
 }
 
 /// 진행률 대화상자 상태
+#[derive(Debug, Default, PartialEq, Eq)]
 struct ProgressState {
     total_files: i32,
     current_file_index: i32,
@@ -54,11 +53,103 @@ struct ProgressState {
     list_size: i32,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProgressEvent {
+    TotalFiles(i32),
+    TotalLines(i32),
+    FileIndex(i32),
+    FileName(String),
+    FileLines(i32),
+    FileProgress(i32),
+    TotalProgress(i32),
+    Complete,
+    Error(String),
+}
+
+#[derive(Default)]
+pub(crate) struct ProgressEventQueue {
+    events: Mutex<VecDeque<ProgressEvent>>,
+}
+
+impl ProgressEventQueue {
+    fn push(&self, event: ProgressEvent) {
+        self.events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_back(event);
+    }
+
+    fn drain(&self) -> Vec<ProgressEvent> {
+        self.events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .drain(..)
+            .collect()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ProgressReporter {
+    hwnd: isize,
+    queue: Arc<ProgressEventQueue>,
+}
+
+impl ProgressReporter {
+    pub(crate) fn new(hwnd: HWND, queue: Arc<ProgressEventQueue>) -> Self {
+        Self {
+            hwnd: hwnd.0 as isize,
+            queue,
+        }
+    }
+
+    pub(crate) fn send(&self, event: ProgressEvent) {
+        self.queue.push(event);
+        let hwnd = HWND(self.hwnd as *mut std::ffi::c_void);
+        if unsafe { PostMessageW(Some(hwnd), WM_PROGRESS_EVENT, WPARAM(0), LPARAM(0)) }.is_err() {
+            tracing::warn!("진행률 이벤트 알림 전송 실패");
+        }
+    }
+}
+
+impl ProgressState {
+    fn apply(&mut self, event: &ProgressEvent) {
+        match event {
+            ProgressEvent::TotalFiles(value) => self.total_files = *value,
+            ProgressEvent::TotalLines(value) => self.total_lines = *value,
+            ProgressEvent::FileIndex(value) => self.current_file_index = *value,
+            ProgressEvent::FileLines(value) => self.list_size = *value,
+            ProgressEvent::FileProgress(_) => {}
+            ProgressEvent::TotalProgress(value) => self.current_line = *value,
+            ProgressEvent::FileName(_) | ProgressEvent::Complete | ProgressEvent::Error(_) => {}
+        }
+    }
+}
+
+struct FileTransTask {
+    cancel_token: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl FileTransTask {
+    fn cancel(&self) {
+        self.cancel_token.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Drop for FileTransTask {
+    fn drop(&mut self) {
+        self.cancel();
+        // UI 스레드를 막지 않도록 JoinHandle은 join하지 않고 분리한다.
+        self.worker.take();
+    }
+}
+
 /// 파일 번역 진행률 대화상자
 pub struct FileTransProgressDialog {
     hwnd: HWND,
     parent_hwnd: HWND,
-    cancel_token: Arc<AtomicBool>,
+    task: FileTransTask,
+    event_queue: Arc<ProgressEventQueue>,
     applied_dpi: u32,
     name_text: HWND,
     progress_bar: HWND,
@@ -76,21 +167,12 @@ define_dialog_instance!(PROGRESS_INSTANCE: FileTransProgressDialog);
 struct PendingProgress {
     parent: HWND,
     cancel_token: Arc<AtomicBool>,
+    event_queue: Arc<ProgressEventQueue>,
 }
 
 thread_local! {
     static PROGRESS_PENDING: RefCell<Option<PendingProgress>> = const { RefCell::new(None) };
     static PROGRESS_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
-}
-
-/// 인스턴스가 메시지를 처리할 수 없을 때 워커가 넘긴 문자열 버퍼를 회수한다.
-fn reclaim_progress_payload(msg: u32, lparam: LPARAM) {
-    if (msg == WM_PROGRESS_NAME || msg == WM_PROGRESS_ERROR) && lparam.0 != 0 {
-        // SAFETY: 해당 두 메시지의 lparam은 워커가 Box::into_raw로 넘긴 *mut Vec<u16>이다.
-        unsafe {
-            let _ = Box::from_raw(lparam.0 as *mut Vec<u16>);
-        }
-    }
 }
 
 /// `resources/file_trans_progress.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
@@ -105,6 +187,7 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
         let Some(PendingProgress {
             parent,
             cancel_token,
+            event_queue,
         }) = pending
         else {
             PROGRESS_INIT_ERROR.with(|slot| {
@@ -117,6 +200,7 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
             hwnd,
             parent,
             cancel_token,
+            event_queue,
         )));
         PROGRESS_INSTANCE.with(|slot| {
             *slot.borrow_mut() = Some(dialog.clone());
@@ -144,15 +228,12 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
         guard.clone()
     });
     let Some(dialog) = instance else {
-        reclaim_progress_payload(msg, lparam);
         return 0;
     };
 
-    if (WM_PROGRESS_TOTAL_SIZE..=WM_PROGRESS_ERROR).contains(&msg) {
+    if msg == WM_PROGRESS_EVENT {
         if let Ok(mut dialog) = dialog.try_borrow_mut() {
-            dialog.handle_progress_message(msg, wparam, lparam);
-        } else {
-            reclaim_progress_payload(msg, lparam);
+            dialog.drain_progress_events();
         }
         return 1;
     }
@@ -192,7 +273,12 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
 }
 
 impl FileTransProgressDialog {
-    fn new(hwnd: HWND, parent: HWND, cancel_token: Arc<AtomicBool>) -> Self {
+    fn new(
+        hwnd: HWND,
+        parent: HWND,
+        cancel_token: Arc<AtomicBool>,
+        event_queue: Arc<ProgressEventQueue>,
+    ) -> Self {
         // UI 스레드는 main()에서 STA로 초기화된다. 작업 표시줄 초기화 실패는
         // 진행률 창 자체의 실패로 취급하지 않는다.
         let taskbar = unsafe {
@@ -217,7 +303,11 @@ impl FileTransProgressDialog {
         Self {
             hwnd,
             parent_hwnd: parent,
-            cancel_token,
+            task: FileTransTask {
+                cancel_token,
+                worker: None,
+            },
+            event_queue,
             applied_dpi: crate::dpi::dpi_for_window(hwnd),
             name_text: HWND::default(),
             progress_bar: HWND::default(),
@@ -225,19 +315,17 @@ impl FileTransProgressDialog {
             index_text: HWND::default(),
             total_text: HWND::default(),
             cancel_btn: HWND::default(),
-            state: ProgressState {
-                total_files: 0,
-                current_file_index: 0,
-                total_lines: 0,
-                current_line: 0,
-                list_size: 0,
-            },
+            state: ProgressState::default(),
             taskbar,
         }
     }
 
     /// `resources/file_trans_progress.rc`의 모델리스 DIALOGEX 리소스를 연다.
-    pub fn show(parent: HWND, cancel_token: Arc<AtomicBool>) -> Result<HWND> {
+    pub(crate) fn show(
+        parent: HWND,
+        cancel_token: Arc<AtomicBool>,
+        event_queue: Arc<ProgressEventQueue>,
+    ) -> Result<HWND> {
         let existing = PROGRESS_INSTANCE
             .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
         if let Some(hwnd) = existing
@@ -260,6 +348,7 @@ impl FileTransProgressDialog {
             *slot.borrow_mut() = Some(PendingProgress {
                 parent,
                 cancel_token,
+                event_queue,
             });
         });
 
@@ -298,6 +387,16 @@ impl FileTransProgressDialog {
             show_dialog_window(hwnd);
         }
         Ok(hwnd)
+    }
+
+    pub(crate) fn attach_worker(worker: JoinHandle<()>) {
+        PROGRESS_INSTANCE.with(|slot| {
+            if let Some(dialog) = slot.borrow().as_ref()
+                && let Ok(mut dialog) = dialog.try_borrow_mut()
+            {
+                dialog.task.worker = Some(worker);
+            }
+        });
     }
 
     fn initialize_controls(&mut self) -> Result<()> {
@@ -382,43 +481,40 @@ impl FileTransProgressDialog {
         }
     }
 
-    /// 진행률 메시지 처리
-    fn handle_progress_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) {
-        // SAFETY: All control handles were loaded from the RC template and are valid.
-        // lparam for WM_PROGRESS_NAME/WM_PROGRESS_ERROR is a *mut Vec<u16> leaked by
-        // file_trans_thread::post_wide_string; we reclaim ownership via Box::from_raw below.
+    fn drain_progress_events(&mut self) {
+        let events = self.event_queue.drain();
+        for event in events {
+            self.handle_progress_event(event);
+        }
+    }
+
+    /// 공유 큐에서 꺼낸 진행률 이벤트를 화면에 반영한다.
+    fn handle_progress_event(&mut self, event: ProgressEvent) {
+        self.state.apply(&event);
+        // SAFETY: 모든 컨트롤 핸들은 RC 템플릿에서 읽은 유효한 핸들이다.
         unsafe {
-            match msg {
-                WM_PROGRESS_TOTAL_SIZE => {
-                    self.state.total_lines = lparam.0 as i32;
+            match event {
+                ProgressEvent::TotalLines(_) => {
                     let text = format!("전체: 0/{}", self.state.total_lines);
                     Self::set_text(self.total_text, &text);
                 }
-                WM_PROGRESS_TOTAL_COUNT => {
-                    self.state.total_files = lparam.0 as i32;
+                ProgressEvent::TotalFiles(_) => {
                     let text = format!("파일: 0/{}", self.state.total_files);
                     Self::set_text(self.index_text, &text);
                 }
-                WM_PROGRESS_INDEX => {
-                    self.state.current_file_index = lparam.0 as i32;
+                ProgressEvent::FileIndex(_) => {
                     let text = format!(
                         "파일: {}/{}",
                         self.state.current_file_index, self.state.total_files
                     );
                     Self::set_text(self.index_text, &text);
                 }
-                WM_PROGRESS_NAME => {
-                    // lparam 은 워커가 Box::into_raw 로 넘긴 *mut Vec<u16> — Box::from_raw 로 회수.
-                    if lparam.0 != 0 {
-                        let boxed: Box<Vec<u16>> = Box::from_raw(lparam.0 as *mut Vec<u16>);
-                        let end = boxed.iter().position(|&c| c == 0).unwrap_or(boxed.len());
-                        let filename = String::from_utf16_lossy(&boxed[..end]);
-                        let text = format!(
-                            "{} ({}/{})",
-                            filename, self.state.current_file_index, self.state.total_files
-                        );
-                        Self::set_text(self.name_text, &text);
-                    }
+                ProgressEvent::FileName(filename) => {
+                    let text = format!(
+                        "{} ({}/{})",
+                        filename, self.state.current_file_index, self.state.total_files
+                    );
+                    Self::set_text(self.name_text, &text);
                     // 프로그레스바 초기화
                     let _ = SendMessageW(
                         self.progress_bar,
@@ -427,8 +523,7 @@ impl FileTransProgressDialog {
                         Some(LPARAM(0)),
                     );
                 }
-                WM_PROGRESS_LIST_SIZE => {
-                    self.state.list_size = lparam.0 as i32;
+                ProgressEvent::FileLines(_) => {
                     // 프로그레스바 범위 설정
                     let _ = SendMessageW(
                         self.progress_bar,
@@ -443,8 +538,7 @@ impl FileTransProgressDialog {
                         Some(LPARAM(0)),
                     );
                 }
-                WM_PROGRESS_UPDATE => {
-                    let current = wparam.0 as i32;
+                ProgressEvent::FileProgress(current) => {
                     // 프로그레스바 업데이트
                     let _ = SendMessageW(
                         self.progress_bar,
@@ -455,8 +549,7 @@ impl FileTransProgressDialog {
                     let text = format!("{}/{}", current, self.state.list_size);
                     Self::set_text(self.progress_text, &text);
                 }
-                WM_PROGRESS_CURRENT => {
-                    self.state.current_line = lparam.0 as i32;
+                ProgressEvent::TotalProgress(_) => {
                     let text = format!(
                         "전체: {}/{}",
                         self.state.current_line, self.state.total_lines
@@ -474,7 +567,7 @@ impl FileTransProgressDialog {
                         );
                     }
                 }
-                WM_PROGRESS_COMPLETE => {
+                ProgressEvent::Complete => {
                     Self::set_text(self.name_text, "완료!");
                     Self::set_text(self.progress_text, "번역 완료");
                     let _ = EnableWindow(self.cancel_btn, false);
@@ -495,16 +588,7 @@ impl FileTransProgressDialog {
                     // 창 닫기
                     let _ = DestroyWindow(self.hwnd);
                 }
-                WM_PROGRESS_ERROR => {
-                    // lparam 은 워커가 Box::into_raw 로 넘긴 *mut Vec<u16> — Box::from_raw 로 회수.
-                    let error_msg = if lparam.0 != 0 {
-                        let boxed: Box<Vec<u16>> = Box::from_raw(lparam.0 as *mut Vec<u16>);
-                        let end = boxed.iter().position(|&c| c == 0).unwrap_or(boxed.len());
-                        String::from_utf16_lossy(&boxed[..end])
-                    } else {
-                        "알 수 없는 오류가 발생했습니다.".to_string()
-                    };
-
+                ProgressEvent::Error(error_msg) => {
                     Self::set_text(self.name_text, "오류 발생");
                     let _ = EnableWindow(self.cancel_btn, false);
 
@@ -525,23 +609,83 @@ impl FileTransProgressDialog {
                     self.clear_taskbar_progress();
                     let _ = DestroyWindow(self.hwnd);
                 }
-                _ => {}
             }
         }
     }
 
     /// 취소 처리
     fn handle_cancel(&mut self) {
-        self.cancel_token.store(true, Ordering::SeqCst);
+        self.task.cancel();
         // SAFETY: self.cancel_btn is a valid control handle from the RC template.
         unsafe {
             let _ = EnableWindow(self.cancel_btn, false);
             Self::set_text(self.progress_text, "취소 중...");
             // 작업 표시줄을 PAUSED 로 표시 — 실제 종료/정리는 워커 스레드가
-            // 취소 토큰을 감지해 WM_PROGRESS_ERROR 를 보낼 때 마무리된다.
+            // 취소 토큰을 감지해 오류 이벤트를 보낼 때 마무리된다.
             if let Some(ref tb) = self.taskbar {
                 let _ = tb.SetProgressState(self.parent_hwnd, TBPF_PAUSED);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FileTransTask, ProgressEvent, ProgressEventQueue, ProgressState};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn progress_events_update_model_state() {
+        let mut state = ProgressState::default();
+        for event in [
+            ProgressEvent::TotalFiles(3),
+            ProgressEvent::TotalLines(120),
+            ProgressEvent::FileIndex(2),
+            ProgressEvent::FileLines(40),
+            ProgressEvent::TotalProgress(75),
+        ] {
+            state.apply(&event);
+        }
+
+        assert_eq!(
+            state,
+            ProgressState {
+                total_files: 3,
+                current_file_index: 2,
+                total_lines: 120,
+                current_line: 75,
+                list_size: 40,
+            }
+        );
+    }
+
+    #[test]
+    fn event_queue_preserves_order_and_owns_strings() {
+        let queue = ProgressEventQueue::default();
+        queue.push(ProgressEvent::FileName("첫 파일.txt".to_string()));
+        queue.push(ProgressEvent::Error("오류".to_string()));
+
+        assert_eq!(
+            queue.drain(),
+            vec![
+                ProgressEvent::FileName("첫 파일.txt".to_string()),
+                ProgressEvent::Error("오류".to_string()),
+            ]
+        );
+        assert!(queue.drain().is_empty());
+    }
+
+    #[test]
+    fn dropping_task_requests_cancellation_without_joining() {
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        let task = FileTransTask {
+            cancel_token: cancel_token.clone(),
+            worker: None,
+        };
+
+        drop(task);
+
+        assert!(cancel_token.load(Ordering::SeqCst));
     }
 }
