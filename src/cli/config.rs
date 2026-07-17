@@ -2,12 +2,19 @@ use crate::config::Config;
 
 use super::helpers::{JsonVal, json_object};
 
-pub(super) fn run(args: &[String], json: bool) -> Result<(), String> {
-    let sub = args
-        .first()
-        .ok_or_else(|| "config <show|get|set> ... 형식으로 호출하세요.".to_string())?;
-    match sub.as_str() {
-        "show" => {
+#[derive(clap::Subcommand)]
+pub(super) enum Command {
+    /// 현재 config.toml 내용 출력
+    Show,
+    /// 점 경로로 config 값 조회
+    Get { key: String },
+    /// 점 경로로 config 값 변경 후 저장
+    Set { key: String, value: String },
+}
+
+pub(super) fn run(command: Command, json: bool) -> Result<(), String> {
+    match command {
+        Command::Show => {
             let config = Config::load_or_default();
             let toml =
                 toml::to_string_pretty(&config).map_err(|e| format!("TOML 직렬화 실패: {e}"))?;
@@ -20,31 +27,22 @@ pub(super) fn run(args: &[String], json: bool) -> Result<(), String> {
             }
             Ok(())
         }
-        "get" => {
-            let key = args
-                .get(1)
-                .ok_or_else(|| "config get <KEY> — 점 경로 키가 필요합니다.".to_string())?;
+        Command::Get { key } => {
             let config = Config::load_or_default();
-            let value = config_get(&config, key)?;
+            let value = config_get(&config, &key)?;
             if json {
                 println!(
                     "{}",
-                    json_object(&[("key", JsonVal::Str(key)), ("value", JsonVal::Str(&value))])
+                    json_object(&[("key", JsonVal::Str(&key)), ("value", JsonVal::Str(&value))])
                 );
             } else {
                 println!("{value}");
             }
             Ok(())
         }
-        "set" => {
-            let key = args
-                .get(1)
-                .ok_or_else(|| "config set <KEY> <VALUE> — 키가 필요합니다.".to_string())?;
-            let value = args
-                .get(2)
-                .ok_or_else(|| "config set <KEY> <VALUE> — 값이 필요합니다.".to_string())?;
+        Command::Set { key, value } => {
             let mut config = Config::load_or_default();
-            config_set(&mut config, key, value)?;
+            config_set(&mut config, &key, &value)?;
             config
                 .save()
                 .map_err(|e| format!("config 저장 실패: {e}"))?;
@@ -52,8 +50,8 @@ pub(super) fn run(args: &[String], json: bool) -> Result<(), String> {
                 println!(
                     "{}",
                     json_object(&[
-                        ("key", JsonVal::Str(key)),
-                        ("value", JsonVal::Str(value)),
+                        ("key", JsonVal::Str(&key)),
+                        ("value", JsonVal::Str(&value)),
                         ("saved", JsonVal::Bool(true)),
                     ])
                 );
@@ -62,7 +60,6 @@ pub(super) fn run(args: &[String], json: bool) -> Result<(), String> {
             }
             Ok(())
         }
-        other => Err(format!("알 수 없는 config 서브커맨드: {other}")),
     }
 }
 

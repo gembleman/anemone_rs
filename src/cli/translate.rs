@@ -9,49 +9,33 @@ use crate::translation::{
     translate_with_eztrans,
 };
 
-use super::helpers::{JsonVal, get_value, json_object};
+use super::helpers::{JsonVal, json_object};
 
-pub(super) fn run(args: &[String], json: bool) -> Result<(), String> {
-    let mut text: Option<String> = None;
-    let mut engine_override: Option<String> = None;
-    let mut from_override: Option<String> = None;
-    let mut to_override: Option<String> = None;
-    let mut use_stdin = false;
+#[derive(clap::Args)]
+pub(super) struct Args {
+    /// 번역할 텍스트
+    #[arg(required_unless_present = "stdin", conflicts_with = "stdin")]
+    text: Option<String>,
+    /// 사용할 번역 엔진
+    #[arg(long, value_enum)]
+    engine: Option<super::Engine>,
+    /// 소스 언어 코드 (예: ja)
+    #[arg(long = "from")]
+    source: Option<String>,
+    /// 타겟 언어 코드 (예: ko)
+    #[arg(long = "to")]
+    target: Option<String>,
+    /// stdin에서 번역할 텍스트 읽기
+    #[arg(long)]
+    stdin: bool,
+}
 
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--engine" => {
-                engine_override = Some(get_value(args, &mut i, "--engine")?);
-            }
-            "--from" => {
-                from_override = Some(get_value(args, &mut i, "--from")?);
-            }
-            "--to" => {
-                to_override = Some(get_value(args, &mut i, "--to")?);
-            }
-            "--stdin" => {
-                use_stdin = true;
-                i += 1;
-            }
-            a if a.starts_with("--") => {
-                return Err(format!("알 수 없는 옵션: {a}"));
-            }
-            _ => {
-                if text.is_none() {
-                    text = Some(args[i].clone());
-                } else {
-                    return Err("translate 는 위치 인자로 텍스트를 하나만 받습니다.".to_string());
-                }
-                i += 1;
-            }
-        }
-    }
-
-    let text = if use_stdin {
+pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
+    let text = if args.stdin {
         read_stdin_to_string()?
     } else {
-        text.ok_or_else(|| "번역할 텍스트가 필요합니다. (텍스트 인자 또는 --stdin)".to_string())?
+        args.text
+            .expect("clap이 텍스트 또는 --stdin 중 하나를 보장해야 함")
     };
     let text = text.trim_end_matches(['\r', '\n']).to_string();
     if text.is_empty() {
@@ -59,9 +43,9 @@ pub(super) fn run(args: &[String], json: bool) -> Result<(), String> {
     }
 
     let config = Config::load_or_default();
-    let engine = resolve_engine(&engine_override, &config)?;
+    let engine = resolve_engine(args.engine, &config);
     let (source_lang, target_lang) =
-        resolve_languages(&from_override, &to_override, &config, engine)?;
+        resolve_languages(&args.source, &args.target, &config, engine)?;
 
     let translated = run_translation(&config, engine, source_lang, target_lang, &text)?;
 
@@ -190,12 +174,12 @@ pub(super) fn build_credentials(
 }
 
 pub(super) fn resolve_engine(
-    override_value: &Option<String>,
+    override_value: Option<super::Engine>,
     config: &Config,
-) -> Result<TranslationEngine, String> {
+) -> TranslationEngine {
     match override_value {
-        Some(s) => Ok(TranslationEngine::from_str(s)),
-        None => Ok(config.translation.get_engine()),
+        Some(engine) => engine.into(),
+        None => config.translation.get_engine(),
     }
 }
 

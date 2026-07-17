@@ -12,9 +12,87 @@ mod file_trans;
 mod helpers;
 mod list;
 mod translate;
-mod usage;
 
-pub use usage::print_usage;
+use std::ffi::OsString;
+
+use clap::{Parser, Subcommand, ValueEnum};
+
+use crate::translation::TranslationEngine;
+
+const AFTER_HELP: &str = "인자 없이 실행하면 GUI 모드로 시작합니다.\n\
+\n\
+ENGINE: eztrans | google | deepl | papago | llm\n\
+LANG:   ISO 639-1 (예: ja, ko, en, zh)\n\
+\n\
+CONFIG KEYS (대표):\n\
+    translation.engine, translation.source_lang, translation.target_lang\n\
+    translation.eztrans_dll_path, translation.eztrans_dat_path\n\
+    translation.deepl_api_key, translation.papago_client_id\n\
+    translation.papago_client_secret\n\
+    translation.llm.provider, translation.llm.model, translation.llm.api_key\n\
+    translation.llm.base_url, translation.llm.temperature, translation.llm.max_tokens\n\
+    clipboard_watch, click_through, magnetic_mode, background_visible\n\
+    border_visible, window_topmost, window_visible";
+
+#[derive(Parser)]
+#[command(
+    name = "anemone_rs",
+    about = "Windows 오버레이 번역 도구",
+    after_help = AFTER_HELP
+)]
+struct Cli {
+    /// 결과를 JSON 한 줄로 출력
+    #[arg(long, global = true)]
+    json: bool,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// 텍스트 번역
+    Translate(translate::Args),
+    /// 파일을 한 줄씩 번역해 출력 파일에 기록
+    FileTrans(file_trans::Args),
+    /// 지원하는 번역 엔진 출력
+    ListEngines,
+    /// 엔진이 지원하는 언어 출력
+    ListLangs(list::LanguagesArgs),
+    /// config.toml 조회 및 변경
+    Config {
+        #[command(subcommand)]
+        command: config::Command,
+    },
+    /// config.toml 절대 경로 출력
+    ConfigPath,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub(super) enum Engine {
+    #[value(name = "eztrans")]
+    EzTrans,
+    #[value(name = "google")]
+    Google,
+    #[value(name = "deepl")]
+    DeepL,
+    #[value(name = "papago")]
+    Papago,
+    #[value(name = "llm")]
+    Llm,
+}
+
+impl From<Engine> for TranslationEngine {
+    fn from(value: Engine) -> Self {
+        match value {
+            Engine::EzTrans => Self::EzTrans,
+            Engine::Google => Self::Google,
+            Engine::DeepL => Self::DeepL,
+            Engine::Papago => Self::Papago,
+            Engine::Llm => Self::Llm,
+        }
+    }
+}
 
 /// CLI 실행 결과. `main` 의 종료 코드와 매핑된다.
 pub enum CliOutcome {
@@ -26,40 +104,30 @@ pub enum CliOutcome {
 
 /// CLI 진입점.
 ///
-/// `std::env::args` 를 직접 파싱해 의존성을 추가하지 않는다. 결과 출력은
-/// stdout/stderr 로 흘려보내고, 종료 코드는 `CliOutcome::Done(code)` 로 알린다.
+/// 결과 출력은 stdout/stderr 로 흘려보내고, 종료 코드는
+/// `CliOutcome::Done(code)` 로 알린다.
 pub fn run() -> CliOutcome {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    if argv.is_empty() {
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    if argv.len() <= 1 {
         return CliOutcome::Gui;
     }
 
-    // 전역 플래그(`--json`) 를 먼저 분리한다. 위치는 어디든 허용.
-    let mut json = false;
-    let mut rest: Vec<String> = Vec::with_capacity(argv.len());
-    for a in argv {
-        if a == "--json" {
-            json = true;
-        } else {
-            rest.push(a);
+    let cli = match Cli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(error) => {
+            let code = error.exit_code();
+            let _ = error.print();
+            return CliOutcome::Done(code);
         }
-    }
+    };
 
-    let cmd = rest.remove(0);
-    let args = rest;
-
-    let result: Result<(), String> = match cmd.as_str() {
-        "-h" | "--help" | "help" => {
-            print_usage();
-            Ok(())
-        }
-        "translate" => translate::run(&args, json),
-        "file-trans" => file_trans::run(&args, json),
-        "list-engines" => list::engines(json),
-        "list-langs" => list::languages(&args, json),
-        "config" => config::run(&args, json),
-        "config-path" => config::print_path(json),
-        other => Err(format!("알 수 없는 명령: {other}")),
+    let result = match cli.command {
+        Command::Translate(args) => translate::run(args, cli.json),
+        Command::FileTrans(args) => file_trans::run(args, cli.json),
+        Command::ListEngines => list::engines(cli.json),
+        Command::ListLangs(args) => list::languages(args, cli.json),
+        Command::Config { command } => config::run(command, cli.json),
+        Command::ConfigPath => config::print_path(cli.json),
     };
 
     match result {
@@ -68,5 +136,76 @@ pub fn run() -> CliOutcome {
             eprintln!("error: {msg}");
             CliOutcome::Done(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{CommandFactory, Parser, error::ErrorKind};
+
+    use super::Cli;
+
+    #[test]
+    fn command_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn parses_existing_command_shapes() {
+        assert!(Cli::try_parse_from(["anemone_rs", "translate", "테스트"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "anemone_rs",
+                "file-trans",
+                "--in",
+                "input.txt",
+                "--out",
+                "output.txt",
+                "--format",
+                "both-nl",
+                "--json",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "anemone_rs",
+                "config",
+                "set",
+                "translation.engine",
+                "google",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn json_without_command_is_an_error_instead_of_a_panic() {
+        let error = match Cli::try_parse_from(["anemone_rs", "--json"]) {
+            Ok(_) => panic!("명령 없는 --json을 허용하면 안 됨"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), ErrorKind::MissingSubcommand);
+    }
+
+    #[test]
+    fn rejects_extra_arguments_and_invalid_engine() {
+        assert!(Cli::try_parse_from(["anemone_rs", "list-engines", "extra"]).is_err());
+        assert!(
+            Cli::try_parse_from(["anemone_rs", "translate", "테스트", "--engine", "unknown",])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn translate_requires_exactly_one_input_source() {
+        assert!(Cli::try_parse_from(["anemone_rs", "translate"]).is_err());
+        assert!(Cli::try_parse_from(["anemone_rs", "translate", "테스트", "--stdin"]).is_err());
+        assert!(Cli::try_parse_from(["anemone_rs", "translate", "--stdin"]).is_ok());
+    }
+
+    #[test]
+    fn double_dash_allows_flag_like_translation_text() {
+        assert!(Cli::try_parse_from(["anemone_rs", "translate", "--", "--json"]).is_ok());
     }
 }

@@ -1,6 +1,11 @@
 use crate::translation::{Language, TranslationEngine, lang_utils};
 
-use super::helpers::get_value;
+#[derive(clap::Args)]
+pub(super) struct LanguagesArgs {
+    /// 조회할 번역 엔진
+    #[arg(long, value_enum)]
+    engine: Option<super::Engine>,
+}
 
 pub(super) fn engines(json: bool) -> Result<(), String> {
     const ENGINES: &[TranslationEngine] = &[
@@ -24,18 +29,10 @@ pub(super) fn engines(json: bool) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn languages(args: &[String], json: bool) -> Result<(), String> {
-    let mut engine_override: Option<String> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--engine" => engine_override = Some(get_value(args, &mut i, "--engine")?),
-            a => return Err(format!("알 수 없는 옵션: {a}")),
-        }
-    }
-    let engine = engine_override
-        .as_deref()
-        .map(TranslationEngine::from_str)
+pub(super) fn languages(args: LanguagesArgs, json: bool) -> Result<(), String> {
+    let engine = args
+        .engine
+        .map(TranslationEngine::from)
         .unwrap_or(TranslationEngine::Google);
     let source = engine.supported_source_languages();
     let target = engine.supported_target_languages();

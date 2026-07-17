@@ -1,12 +1,3 @@
-pub(super) fn get_value(args: &[String], i: &mut usize, name: &str) -> Result<String, String> {
-    let next = args
-        .get(*i + 1)
-        .cloned()
-        .ok_or_else(|| format!("{name} 뒤에 값이 필요합니다."))?;
-    *i += 2;
-    Ok(next)
-}
-
 /// 최소한의 JSON 출력 헬퍼. 외부 의존성 없이 짧은 객체만 출력하므로
 /// 문자열 이스케이프만 직접 구현한다.
 pub(super) enum JsonVal<'a> {

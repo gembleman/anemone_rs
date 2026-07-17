@@ -1,48 +1,55 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use clap::ValueEnum;
+
 use crate::config::Config;
 use crate::translation::http_common::shared_client;
 use crate::translation::worker::{TranslationDispatch, TranslationRequest};
 use crate::translation::{TranslationEngine, get_eztrans_manager};
 
-use super::helpers::{JsonVal, get_value, json_object};
+use super::helpers::{JsonVal, json_object};
 use super::translate::{build_credentials, resolve_engine, resolve_languages};
 
-pub(super) fn run(args: &[String], json: bool) -> Result<(), String> {
-    let mut input: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
-    let mut engine_override: Option<String> = None;
-    let mut from_override: Option<String> = None;
-    let mut to_override: Option<String> = None;
-    let mut format_str: Option<String> = None;
-    let mut no_trans_linefeed = false;
+#[derive(clap::Args)]
+pub(super) struct Args {
+    /// 입력 파일
+    #[arg(long = "in")]
+    input: PathBuf,
+    /// 출력 파일
+    #[arg(long = "out")]
+    output: PathBuf,
+    /// 사용할 번역 엔진
+    #[arg(long, value_enum)]
+    engine: Option<super::Engine>,
+    /// 소스 언어 코드 (예: ja)
+    #[arg(long = "from")]
+    source: Option<String>,
+    /// 타겟 언어 코드 (예: ko)
+    #[arg(long = "to")]
+    target: Option<String>,
+    /// 출력 형식
+    #[arg(long, value_enum, default_value = "only")]
+    format: WriteType,
+    /// 공백 줄을 번역하지 않음
+    #[arg(long)]
+    no_trans_linefeed: bool,
+}
 
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--in" => input = Some(PathBuf::from(get_value(args, &mut i, "--in")?)),
-            "--out" => output = Some(PathBuf::from(get_value(args, &mut i, "--out")?)),
-            "--engine" => engine_override = Some(get_value(args, &mut i, "--engine")?),
-            "--from" => from_override = Some(get_value(args, &mut i, "--from")?),
-            "--to" => to_override = Some(get_value(args, &mut i, "--to")?),
-            "--format" => format_str = Some(get_value(args, &mut i, "--format")?),
-            "--no-trans-linefeed" => {
-                no_trans_linefeed = true;
-                i += 1;
-            }
-            a => return Err(format!("알 수 없는 옵션: {a}")),
-        }
-    }
-
-    let input = input.ok_or_else(|| "--in <FILE> 이 필요합니다.".to_string())?;
-    let output = output.ok_or_else(|| "--out <FILE> 이 필요합니다.".to_string())?;
-    let write_type = parse_write_type(format_str.as_deref())?;
+pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
+    let Args {
+        input,
+        output,
+        engine,
+        source,
+        target,
+        format: write_type,
+        no_trans_linefeed,
+    } = args;
 
     let config = Config::load_or_default();
-    let engine = resolve_engine(&engine_override, &config)?;
-    let (source_lang, target_lang) =
-        resolve_languages(&from_override, &to_override, &config, engine)?;
+    let engine = resolve_engine(engine, &config);
+    let (source_lang, target_lang) = resolve_languages(&source, &target, &config, engine)?;
 
     // EzTrans 사전 초기화 — 라인마다 같은 에러로 실패하는 것보다 사전 차단.
     if engine == TranslationEngine::EzTrans {
@@ -136,7 +143,7 @@ pub(super) fn run(args: &[String], json: bool) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ValueEnum)]
 enum WriteType {
     /// 번역만
     Only,
@@ -144,17 +151,6 @@ enum WriteType {
     Both,
     /// 원문 + 번역 + 빈 줄
     BothNl,
-}
-
-fn parse_write_type(s: Option<&str>) -> Result<WriteType, String> {
-    match s.unwrap_or("only") {
-        "only" => Ok(WriteType::Only),
-        "both" => Ok(WriteType::Both),
-        "both-nl" => Ok(WriteType::BothNl),
-        other => Err(format!(
-            "알 수 없는 --format: {other} (only|both|both-nl 중 하나)"
-        )),
-    }
 }
 
 fn write_line(
