@@ -217,17 +217,24 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     // TLS 세션 재사용으로 라인 단위 동기 호출의 DNS·핸드셰이크 비용 제거.
     let http_client = shared_client();
 
-    // 인코딩 검증 — UTF-8 / UTF-8 BOM 만 허용.
-    if let Err(msg) = validate_inputs_utf8(&job_data.input_files) {
-        job_data.progress.send(ProgressEvent::Error(msg));
-        return;
-    }
-
-    // 전체 라인 수 계산
-    let total_lines = match calculate_total_lines(&job_data.input_files) {
-        Ok(total) => total,
+    // UTF-8 검증과 파일별 줄 수 계산을 한 번의 사전 검사로 수행한다.
+    let file_line_counts = match preflight_inputs(&job_data.input_files) {
+        Ok(counts) => counts,
         Err(error) => {
             job_data.progress.send(ProgressEvent::Error(error));
+            return;
+        }
+    };
+    let total_lines = match file_line_counts.iter().try_fold(0i32, |total, &count| {
+        i32::try_from(count)
+            .ok()
+            .and_then(|count| total.checked_add(count))
+    }) {
+        Some(total) => total,
+        None => {
+            job_data.progress.send(ProgressEvent::Error(
+                "입력 파일의 전체 줄 수가 너무 많습니다.".to_string(),
+            ));
             return;
         }
     };
@@ -270,6 +277,7 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
             input_path,
             output_path,
             &job_data,
+            file_line_counts[idx],
             &mut global_current_line,
             &rt,
             &http_client,
@@ -286,25 +294,17 @@ pub fn file_trans_thread(job_data: Arc<FileTransJobData>) {
     job_data.progress.send(ProgressEvent::Complete);
 }
 
-/// 입력 파일들이 모두 UTF-8 또는 UTF-8 BOM 인지 검증.
-fn validate_inputs_utf8(files: &[PathBuf]) -> Result<(), String> {
+/// UTF-8 검증과 파일별 줄 수 계산을 결합한 사전 검사.
+fn preflight_inputs(files: &[PathBuf]) -> Result<Vec<usize>, String> {
+    let mut counts = Vec::with_capacity(files.len());
     for path in files {
-        crate::util::read_utf8_translation_input(path)?;
+        let body = crate::util::read_utf8_translation_input(path)?;
+        counts.push(count_reader_lines(
+            BufReader::new(std::io::Cursor::new(body)),
+            path,
+        )?);
     }
-    Ok(())
-}
-
-/// 전체 라인 수 계산
-fn calculate_total_lines(files: &[PathBuf]) -> Result<i32, String> {
-    let mut total = 0i32;
-
-    for path in files {
-        let file = File::open(path)
-            .map_err(|e| format!("입력 파일을 열 수 없습니다: {}\n{e}", path.display()))?;
-        total += count_reader_lines(BufReader::new(file), path)? as i32;
-    }
-
-    Ok(total)
+    Ok(counts)
 }
 
 fn count_reader_lines<R: BufRead>(reader: R, path: &Path) -> Result<usize, String> {
@@ -314,18 +314,12 @@ fn count_reader_lines<R: BufRead>(reader: R, path: &Path) -> Result<usize, Strin
     })
 }
 
-/// 단일 파일의 라인 수를 카운트. 진행률 바 범위 산정용.
-fn count_lines(path: &Path) -> Result<usize, String> {
-    let file = File::open(path)
-        .map_err(|e| format!("입력 파일을 열 수 없습니다: {}\n{}", path.display(), e))?;
-    count_reader_lines(BufReader::new(file), path)
-}
-
 /// 단일 파일 처리
 fn process_single_file(
     input_path: &Path,
     output_path: &Path,
     job_data: &FileTransJobData,
+    line_count: usize,
     global_current: &mut i32,
     rt: &tokio::runtime::Runtime,
     http_client: &reqwest::Client,
@@ -348,12 +342,6 @@ fn process_single_file(
         .writer()
         .write_all(&[0xEF, 0xBB, 0xBF])
         .map_err(|e| e.to_string())?;
-
-    // 라인 카운트는 calculate_total_lines 에서 이미 한 번 산정했지만, 진행률 바
-    // 파일 진행률 범위가 라인 처리 직전에 도착해야 하므로 한 번 더
-    // 카운트한다. 본 패스에서는 한꺼번에 `Vec<String>` 으로 적재하지 않고
-    // 스트리밍 처리해 메모리를 라인 1~2 개 수준으로 유지한다.
-    let line_count = count_lines(input_path)?;
 
     // 리스트 크기 전송
     job_data

@@ -549,8 +549,10 @@ impl FileTransDialog {
         let content = match crate::util::read_utf8_translation_input(path) {
             Ok(body) => {
                 let reader = BufReader::new(Cursor::new(body));
-                let lines: Vec<String> = reader.lines().take(7).filter_map(|l| l.ok()).collect();
-                lines.join("\r\n")
+                match reader.lines().take(7).collect::<std::io::Result<Vec<_>>>() {
+                    Ok(lines) => lines.join("\r\n"),
+                    Err(error) => format!("! 미리보기를 읽을 수 없습니다: {error}"),
+                }
             }
             Err(msg) => format!("! {msg}"),
         };
