@@ -10,6 +10,8 @@ pub enum TranslationSettingChange {
     LlmProvider(LlmProvider),
     DeepLStrategyRoundRobin(bool),
     DeepLApiKey(String),
+    AddDeepLKey(String),
+    RemoveDeepLKey(usize),
     PapagoClientId(String),
     PapagoClientSecret(String),
     EzTransDllPath(String),
@@ -71,6 +73,18 @@ impl TranslationSettingsEditor {
             ),
             TranslationSettingChange::DeepLApiKey(value) => {
                 set_if_changed(&mut config.deepl_api_key, value)
+            }
+            TranslationSettingChange::AddDeepLKey(value) => {
+                let value = value.trim();
+                if value.is_empty() || config.deepl_keys.iter().any(|key| key == value) {
+                    false
+                } else {
+                    config.deepl_keys.push(value.to_string());
+                    true
+                }
+            }
+            TranslationSettingChange::RemoveDeepLKey(index) => {
+                if index >= config.deepl_keys.len() { false } else { config.deepl_keys.remove(index); true }
             }
             TranslationSettingChange::PapagoClientId(value) => {
                 set_if_changed(&mut config.papago_client_id, value)
@@ -185,5 +199,15 @@ mod tests {
             TranslationSettingChange::DeepLApiKey("secret".into()),
         );
         assert!(!result.runtime_sync_required);
+    }
+
+    #[test]
+    fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
+        let mut config = TranslationConfig::default();
+        assert!(TranslationSettingsEditor::apply(&mut config, TranslationSettingChange::AddDeepLKey(" key ".into())).changed);
+        assert_eq!(config.deepl_keys, ["key"]);
+        assert!(!TranslationSettingsEditor::apply(&mut config, TranslationSettingChange::AddDeepLKey("key".into())).changed);
+        assert!(TranslationSettingsEditor::apply(&mut config, TranslationSettingChange::RemoveDeepLKey(0)).changed);
+        assert!(config.deepl_keys.is_empty());
     }
 }

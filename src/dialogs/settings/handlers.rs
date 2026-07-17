@@ -301,6 +301,12 @@ impl SettingsDialog {
         if key.is_empty() {
             return;
         }
+        if !self
+            .apply_translation_change(TranslationSettingChange::AddDeepLKey(key.clone()))
+            .changed
+        {
+            return;
+        }
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox.
         unsafe {
             let listbox = match GetDlgItem(Some(self.hwnd), ctrl_id::DEEPL_KEYS_LIST as i32) {
@@ -315,7 +321,6 @@ impl SettingsDialog {
                 Some(LPARAM(key_wide.as_ptr() as isize)),
             );
         }
-        self.config.borrow_mut().translation.deepl_keys.push(key);
         self.set_control_text(ctrl_id::DEEPL_KEY_ADD_EDIT, "");
         self.notify_change();
     }
@@ -341,12 +346,7 @@ impl SettingsDialog {
             );
             sel
         };
-        {
-            let mut cfg = self.config.borrow_mut();
-            if (sel as usize) < cfg.translation.deepl_keys.len() {
-                cfg.translation.deepl_keys.remove(sel as usize);
-            }
-        }
+        self.apply_translation_change(TranslationSettingChange::RemoveDeepLKey(sel as usize));
         self.notify_change();
     }
 
@@ -517,12 +517,16 @@ impl SettingsDialog {
         }
     }
 
-    fn apply_translation_change(&self, change: TranslationSettingChange) {
+    fn apply_translation_change(
+        &self,
+        change: TranslationSettingChange,
+    ) -> crate::translation::settings::SettingsApplyResult {
         let result =
             TranslationSettingsEditor::apply(&mut self.config.borrow_mut().translation, change);
         if result.runtime_sync_required {
             self.sync_translation_manager();
         }
+        result
     }
 
     /// 컨트롤 텍스트 설정 헬퍼
