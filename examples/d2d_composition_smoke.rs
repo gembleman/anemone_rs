@@ -12,7 +12,7 @@
 //! - 리사이즈해도 그림이 깨지지 않는다 → `resize()` 경로 OK
 //! - ESC 또는 X 로 종료 시 크래시 없음 → COM 해제 순서 OK
 //!
-//! 메인 앱의 paint 경로 (`d2d.rs` + layered window) 는 **건드리지 않는다**.
+//! 메인 앱의 paint 경로 (`d2d` 모듈 + layered window) 는 **건드리지 않는다**.
 //! 본 예제는 `src/d2d_composition.rs` 만 `#[path]` 로 직접 포함해 binary crate
 //! 와 격리된다.
 
@@ -29,9 +29,9 @@ mod d2d_composition;
 #[path = "../benchmark/bench.rs"]
 mod bench;
 
-// d2d.rs 는 `crate::util::to_wide` 와 `crate::window::TextRenderStyle` 를
+// d2d 모듈은 `crate::util::to_wide` 와 `crate::window::TextRenderStyle` 를
 // 참조하므로, 같은 이름의 stub 모듈을 example crate 루트에 둔다. binary
-// crate 와 격리된 채로 d2d.rs 를 그대로 컴파일 시키기 위한 최소 의존만 노출.
+// crate 와 격리된 채로 d2d 모듈을 그대로 컴파일 시키기 위한 최소 의존만 노출.
 mod util {
     pub fn to_wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -54,12 +54,12 @@ mod window {
         pub shadow_offset_y: i32,
     }
 }
-// example 은 d2d.rs 의 일부 API (configure_frame / draw_border / draw_text)
+// example 은 d2d 모듈의 일부 API (configure_frame / draw_border / draw_text)
 // 만 사용한다. 메인 binary crate 에서는 모두 사용되지만 격리 컴파일이라
 // 사용 안 한 메서드/필드가 dead_code 경고로 잡힌다 — example 측 모듈에만
 // 한정해 봉합.
 #[allow(dead_code)]
-#[path = "../src/d2d.rs"]
+#[path = "../src/d2d/mod.rs"]
 mod d2d;
 
 use bench::{BenchAccumulator, paint_bench_iters};
