@@ -11,7 +11,6 @@ use crate::config::{ColorType, TextAlign, TextType};
 use crate::constants::WM_APP_REFRESH;
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
-use crate::dialogs::helpers::Dialog;
 use crate::util::to_wide;
 
 /// +/- 버튼 처리 매크로: config에서 값을 읽고, 범위 내에서 증감 후, UI 업데이트

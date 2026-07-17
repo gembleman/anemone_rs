@@ -26,7 +26,7 @@ use crate::constants::{
 };
 use crate::d2d::D2DRenderer;
 use crate::d2d_composition::CompositionRenderer;
-use crate::dialogs::helpers::Dialog;
+use crate::dialogs::helpers::{Dialog, dispatch_resource_dialog_message};
 use crate::dialogs::{
     BacklogDialog, FileTransDialog, HookSettingsDialog, LogEntry, SettingsDialog, TranslateDialog,
     add_to_backlog,
@@ -243,15 +243,7 @@ impl App {
             while GetMessageW(&mut msg, None, 0, 0).into() {
                 // 리소스 기반 모델리스 창의 Tab/Shift+Tab/기본 버튼 처리를
                 // 다이얼로그 매니저에 먼저 맡긴다.
-                let handled_by_resource_dialog = app.try_borrow().ok().is_some_and(|app| {
-                    [app.settings_hwnd, app.hook_settings_hwnd]
-                        .into_iter()
-                        .flatten()
-                        .any(|hwnd| {
-                            IsWindow(Some(hwnd)).as_bool() && IsDialogMessageW(hwnd, &msg).as_bool()
-                        })
-                });
-                if handled_by_resource_dialog {
+                if dispatch_resource_dialog_message(&msg) {
                     continue;
                 }
                 let _ = TranslateMessage(&msg);

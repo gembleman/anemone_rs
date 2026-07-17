@@ -17,6 +17,85 @@ use crate::{constants::APP_ICON_ID, util::to_wide};
 thread_local! {
     static DIALOG_APPLIED_DPI: std::cell::RefCell<HashMap<isize, u32>> =
         std::cell::RefCell::new(HashMap::new());
+    static RESOURCE_DIALOGS: std::cell::RefCell<Vec<isize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// 열린 리소스 기반 모델리스 다이얼로그를 메시지 루프에 등록한다.
+pub fn register_resource_dialog(hwnd: HWND) {
+    if hwnd.is_invalid() {
+        return;
+    }
+    RESOURCE_DIALOGS.with(|dialogs| {
+        let mut dialogs = dialogs.borrow_mut();
+        let raw = hwnd.0 as isize;
+        if !dialogs.contains(&raw) {
+            dialogs.push(raw);
+        }
+    });
+}
+
+/// 닫힌 리소스 기반 모델리스 다이얼로그를 메시지 루프에서 해제한다.
+pub fn unregister_resource_dialog(hwnd: HWND) {
+    RESOURCE_DIALOGS.with(|dialogs| {
+        dialogs.borrow_mut().retain(|&raw| raw != hwnd.0 as isize);
+    });
+}
+
+/// 열린 리소스 다이얼로그 중 하나가 메시지를 처리하면 `true`를 반환한다.
+///
+/// # Safety
+/// `msg`는 현재 UI 스레드의 `GetMessageW`가 채운 유효한 메시지여야 한다.
+pub unsafe fn dispatch_resource_dialog_message(msg: &MSG) -> bool {
+    let dialogs = RESOURCE_DIALOGS.with(|dialogs| {
+        let mut dialogs = dialogs.borrow_mut();
+        dialogs.retain(|&raw| unsafe { IsWindow(Some(HWND(raw as *mut _))).as_bool() });
+        dialogs.clone()
+    });
+
+    dialogs
+        .into_iter()
+        .any(|raw| unsafe { IsDialogMessageW(HWND(raw as *mut _), msg).as_bool() })
+}
+
+/// 부모 윈도우가 있는 모니터의 작업 영역 중앙에 다이얼로그를 배치한다.
+///
+/// # Safety
+/// `hwnd`와 `parent`는 유효한 윈도우 핸들이어야 한다.
+pub unsafe fn center_dialog_on_monitor(hwnd: HWND, parent: HWND) {
+    unsafe {
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return;
+        }
+        let monitor = MonitorFromWindow(parent, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let work = if GetMonitorInfoW(monitor, &mut info).as_bool() {
+            info.rcWork
+        } else {
+            RECT {
+                left: 0,
+                top: 0,
+                right: GetSystemMetrics(SM_CXSCREEN),
+                bottom: GetSystemMetrics(SM_CYSCREEN),
+            }
+        };
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        let x = work.left + (work.right - work.left - width) / 2;
+        let y = work.top + (work.bottom - work.top - height) / 2;
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
 }
 
 /// 다이얼로그 공용 한글 폰트 (Malgun Gothic 9pt).
@@ -671,36 +750,6 @@ pub unsafe fn create_edit(
     }
 }
 
-/// 리스트박스 생성
-// SAFETY: Caller must provide a valid parent HWND.
-pub unsafe fn create_listbox(
-    parent: HWND,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    id: u16,
-) -> Result<HWND> {
-    // SAFETY: parent is valid; delegating to create_child with valid parameters.
-    unsafe {
-        create_child(
-            parent,
-            w!("LISTBOX"),
-            w!(""),
-            WINDOW_STYLE(
-                LBS_NOTIFY as u32
-                    | LBS_NOINTEGRALHEIGHT as u32
-                    | WS_CHILD.0
-                    | WS_VISIBLE.0
-                    | WS_VSCROLL.0
-                    | WS_TABSTOP.0,
-            ),
-            WS_EX_CLIENTEDGE,
-            ChildSpec { x, y, w, h, id },
-        )
-    }
-}
-
 // ============================================================
 // DialogControls 트레이트
 // ============================================================
@@ -793,10 +842,6 @@ pub trait DialogControls {
         text: &str,
     ) -> Result<HWND> {
         unsafe { create_edit(self.dialog_hwnd(), x, y, w, h, id, text) }
-    }
-
-    unsafe fn create_listbox(&self, x: i32, y: i32, w: i32, h: i32, id: u16) -> Result<HWND> {
-        unsafe { create_listbox(self.dialog_hwnd(), x, y, w, h, id) }
     }
 }
 

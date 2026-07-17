@@ -18,7 +18,10 @@ use windows::{
     core::*,
 };
 
-use super::helpers::show_dialog_window;
+use super::helpers::{
+    center_dialog_on_monitor, register_resource_dialog, show_dialog_window,
+    unregister_resource_dialog,
+};
 use crate::config::{Config, TextAlign};
 use crate::constants::TBM_GETPOS_VAL;
 use crate::define_dialog_instance;
@@ -84,44 +87,6 @@ thread_local! {
     static SETTINGS_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-/// 부모 윈도우가 있는 모니터의 작업 영역 중앙에 설정창을 배치한다.
-unsafe fn center_on_monitor(hwnd: HWND, parent: HWND) {
-    unsafe {
-        let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
-            return;
-        }
-        let monitor = MonitorFromWindow(parent, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let work = if GetMonitorInfoW(monitor, &mut info).as_bool() {
-            info.rcWork
-        } else {
-            RECT {
-                left: 0,
-                top: 0,
-                right: GetSystemMetrics(SM_CXSCREEN),
-                bottom: GetSystemMetrics(SM_CYSCREEN),
-            }
-        };
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-        let x = work.left + (work.right - work.left - width) / 2;
-        let y = work.top + (work.bottom - work.top - height) / 2;
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            x,
-            y,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-        );
-    }
-}
-
 /// `resources/settings.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
 unsafe extern "system" fn settings_dialog_proc(
     hwnd: HWND,
@@ -169,6 +134,7 @@ unsafe extern "system" fn settings_dialog_proc(
                 });
                 return 0;
             }
+            register_resource_dialog(hwnd);
             return 1;
         }
 
@@ -209,6 +175,7 @@ unsafe extern "system" fn settings_dialog_proc(
                 1
             }
             WM_DESTROY => {
+                unregister_resource_dialog(hwnd);
                 SETTINGS_INSTANCE.with(|slot| {
                     if let Ok(mut guard) = slot.try_borrow_mut() {
                         *guard = None;
@@ -279,7 +246,7 @@ impl SettingsDialog {
 
         // 부모가 있는 모니터의 작업 영역 중앙에 배치한다.
         unsafe {
-            center_on_monitor(hwnd, parent);
+            center_dialog_on_monitor(hwnd, parent);
             show_dialog_window(hwnd);
         }
         Ok(hwnd)

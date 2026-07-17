@@ -1,0 +1,25 @@
+#include <windows.h>
+
+#define IDD_GLOSSARY 102
+
+IDD_GLOSSARY DIALOGEX 0, 0, 274, 203
+STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW
+CAPTION "LLM 글로서리 편집"
+FONT 9, "맑은 고딕", 400, 0, 0x81
+BEGIN
+    GROUPBOX        "사전 항목 (source → target)", -1, 6, 5, 263, 117
+    LISTBOX         7001, 11, 16, 251, 101, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+
+    LTEXT           "원문(&S):", -1, 11, 128, 40, 10
+    EDITTEXT        7002, 51, 127, 80, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "번역(&T):", -1, 137, 128, 40, 10
+    EDITTEXT        7003, 177, 127, 86, 12, ES_AUTOHSCROLL | WS_TABSTOP
+
+    PUSHBUTTON      "추가/수정", 7010, 11, 144, 51, 14
+    PUSHBUTTON      "삭제", 7011, 69, 144, 51, 14
+
+    LTEXT           "원문이 이미 있으면 번역만 갱신, 없으면 추가. '적용' 으로 저장.", -1, 11, 163, 251, 10
+    PUSHBUTTON      "적용", 7020, 149, 184, 57, 16
+    DEFPUSHBUTTON   "닫기", 7021, 211, 184, 57, 16
+END
