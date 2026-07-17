@@ -9,10 +9,14 @@ fn main() {
     let settings_rc = fs::read_to_string("resources/settings.rc")
         .expect("Failed to read settings dialog resource");
     res.append_rc_content(&settings_rc);
+    let hook_settings_rc = fs::read_to_string("resources/hook_settings.rc")
+        .expect("Failed to read hook settings dialog resource");
+    res.append_rc_content(&hook_settings_rc);
     res.compile().expect("Failed to compile Windows resources");
 
     println!("cargo:rerun-if-changed=assets/Anemone.ico");
     println!("cargo:rerun-if-changed=resources/settings.rc");
+    println!("cargo:rerun-if-changed=resources/hook_settings.rc");
 
     copy_eztrans_dll();
 }

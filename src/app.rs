@@ -241,16 +241,17 @@ impl App {
             // 메시지 루프
             let mut msg: MSG = zeroed();
             while GetMessageW(&mut msg, None, 0, 0).into() {
-                // 리소스 기반 모델리스 설정창의 Tab/Shift+Tab/기본 버튼 처리를
+                // 리소스 기반 모델리스 창의 Tab/Shift+Tab/기본 버튼 처리를
                 // 다이얼로그 매니저에 먼저 맡긴다.
-                let handled_by_settings = app
-                    .try_borrow()
-                    .ok()
-                    .and_then(|app| app.settings_hwnd)
-                    .is_some_and(|hwnd| {
-                        IsWindow(Some(hwnd)).as_bool() && IsDialogMessageW(hwnd, &msg).as_bool()
-                    });
-                if handled_by_settings {
+                let handled_by_resource_dialog = app.try_borrow().ok().is_some_and(|app| {
+                    [app.settings_hwnd, app.hook_settings_hwnd]
+                        .into_iter()
+                        .flatten()
+                        .any(|hwnd| {
+                            IsWindow(Some(hwnd)).as_bool() && IsDialogMessageW(hwnd, &msg).as_bool()
+                        })
+                });
+                if handled_by_resource_dialog {
                     continue;
                 }
                 let _ = TranslateMessage(&msg);
