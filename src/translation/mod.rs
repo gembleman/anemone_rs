@@ -17,6 +17,7 @@ pub(crate) mod http_common;
 mod job;
 pub mod llm;
 pub mod papago;
+pub mod settings;
 pub mod worker;
 
 pub use eztrans::EzTransTranslator;

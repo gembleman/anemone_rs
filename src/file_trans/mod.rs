@@ -97,9 +97,6 @@ pub(crate) struct FileTransJobData {
     pub source_lang: Language,
     pub target_lang: Language,
     pub credentials: EngineCredentials,
-    /// EzTrans 사용 시 필요한 DLL/DAT 경로. 다른 엔진에서는 빈 문자열이어도 무방하다.
-    pub eztrans_dll_path: String,
-    pub eztrans_dat_path: String,
 }
 
 /// 파일 번역 작업이 UI 또는 CLI 호출자에게 전달하는 진행 이벤트.

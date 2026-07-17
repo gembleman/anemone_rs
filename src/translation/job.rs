@@ -113,12 +113,6 @@ impl TranslationJobSpec {
     pub fn credentials(&self) -> EngineCredentials {
         self.credentials.clone()
     }
-    pub fn eztrans_dll_path(&self) -> &str {
-        &self.eztrans_dll_path
-    }
-    pub fn eztrans_dat_path(&self) -> &str {
-        &self.eztrans_dat_path
-    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

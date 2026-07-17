@@ -11,6 +11,7 @@ use crate::config::{ColorType, TextAlign, TextType};
 use crate::constants::WM_APP_REFRESH;
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
+use crate::translation::settings::{TranslationSettingChange, TranslationSettingsEditor};
 use crate::util::to_wide;
 
 /// +/- 버튼 처리 매크로: config에서 값을 읽고, 범위 내에서 증감 후, UI 업데이트
@@ -258,9 +259,10 @@ impl SettingsDialog {
             // EzTrans DLL 찾아보기
             EZTRANS_DLL_BROWSE => match self.browse_dll_file("J2KEngine.dll 선택") {
                 Ok(Some(path)) => {
-                    self.config.borrow_mut().translation.eztrans_dll_path = path.clone();
+                    self.apply_translation_change(TranslationSettingChange::EzTransDllPath(
+                        path.clone(),
+                    ));
                     self.set_control_text(EZTRANS_DLL_EDIT, &path);
-                    self.sync_translation_manager();
                     self.notify_change();
                 }
                 Ok(None) => {}
@@ -270,9 +272,10 @@ impl SettingsDialog {
             // EzTrans Dat 폴더 찾아보기
             EZTRANS_DAT_BROWSE => match self.browse_folder_with_title("EzTrans Dat 폴더 선택") {
                 Ok(Some(path)) => {
-                    self.config.borrow_mut().translation.eztrans_dat_path = path.clone();
+                    self.apply_translation_change(TranslationSettingChange::EzTransDatPath(
+                        path.clone(),
+                    ));
                     self.set_control_text(EZTRANS_DAT_EDIT, &path);
-                    self.sync_translation_manager();
                     self.notify_change();
                 }
                 Ok(None) => {}
@@ -441,8 +444,10 @@ impl SettingsDialog {
                 self.config.borrow_mut().border_width = value;
             }
             LLM_TEMPERATURE_TRACKBAR => {
-                let temp = (value as f32 / 100.0).clamp(0.0, 2.0);
-                self.config.borrow_mut().translation.llm.temperature = temp;
+                self.apply_translation_change(TranslationSettingChange::LlmTemperatureSlider(
+                    value,
+                ));
+                let temp = self.config.borrow().translation.llm.temperature;
                 self.set_control_text(LLM_TEMPERATURE_LABEL, &format!("{:.2}", temp));
             }
             _ => return,
@@ -468,61 +473,55 @@ impl SettingsDialog {
                 TRANS_ENGINE => {
                     use crate::translation::TranslationEngine;
                     let engine = TranslationEngine::from_u8(sel as u8);
-                    self.config.borrow_mut().translation.set_engine(engine);
+                    self.apply_translation_change(TranslationSettingChange::Engine(engine));
                     // 엔진 변경 시 해당 그룹만 활성화하고 언어 콤보 항목 재구성
                     self.apply_engine_state(engine);
                 }
                 TRANS_SOURCE_LANG => {
                     let engine = self.config.borrow().translation.get_engine();
-                    self.config
-                        .borrow_mut()
-                        .translation
-                        .set_source_lang_by_index(sel, engine);
+                    if let Some(&language) = engine.supported_source_languages().get(sel) {
+                        self.apply_translation_change(TranslationSettingChange::SourceLanguage(
+                            language,
+                        ));
+                    }
                 }
                 TRANS_TARGET_LANG => {
                     let engine = self.config.borrow().translation.get_engine();
-                    self.config
-                        .borrow_mut()
-                        .translation
-                        .set_target_lang_by_index(sel, engine);
+                    if let Some(&language) = engine.supported_target_languages().get(sel) {
+                        self.apply_translation_change(TranslationSettingChange::TargetLanguage(
+                            language,
+                        ));
+                    }
                 }
                 LLM_PROVIDER => {
                     use crate::translation::LlmProvider;
                     let provider = LlmProvider::from_u8(sel as u8);
-                    self.config
-                        .borrow_mut()
-                        .translation
-                        .llm
-                        .set_provider(provider);
+                    self.apply_translation_change(TranslationSettingChange::LlmProvider(provider));
                 }
                 DEEPL_STRATEGY_COMBO => {
-                    let strategy = if sel == 1 { "round-robin" } else { "failover" };
-                    self.config.borrow_mut().translation.deepl_strategy = strategy.to_string();
+                    self.apply_translation_change(
+                        TranslationSettingChange::DeepLStrategyRoundRobin(sel == 1),
+                    );
                 }
                 _ => return,
             }
-            self.sync_translation_manager();
             self.notify_change();
         }
     }
 
     /// EzTrans 초기화 동기화 (다른 엔진은 워커가 매번 자격증명을 받아 stateless)
     fn sync_translation_manager(&self) {
-        use crate::translation::get_eztrans_manager;
         let config = self.config.borrow();
-        if config.translation.eztrans_dll_path.is_empty()
-            || config.translation.eztrans_dat_path.is_empty()
-        {
-            return;
-        }
-        let manager = get_eztrans_manager();
-        if let Ok(mut mgr) = manager.lock()
-            && let Err(e) = mgr.init(
-                &config.translation.eztrans_dll_path,
-                &config.translation.eztrans_dat_path,
-            )
-        {
+        if let Err(e) = TranslationSettingsEditor::sync_runtime(&config.translation) {
             tracing::warn!("EzTrans init failed in sync: {e}");
+        }
+    }
+
+    fn apply_translation_change(&self, change: TranslationSettingChange) {
+        let result =
+            TranslationSettingsEditor::apply(&mut self.config.borrow_mut().translation, change);
+        if result.runtime_sync_required {
+            self.sync_translation_manager();
         }
     }
 
@@ -574,58 +573,48 @@ impl SettingsDialog {
         use ctrl_id::*;
         match ctrl_id {
             DEEPL_API_KEY_EDIT => {
-                self.config.borrow_mut().translation.deepl_api_key = text;
-                self.sync_translation_manager();
+                self.apply_translation_change(TranslationSettingChange::DeepLApiKey(text));
                 self.notify_change();
             }
             PAPAGO_ID_EDIT => {
-                self.config.borrow_mut().translation.papago_client_id = text;
-                self.sync_translation_manager();
+                self.apply_translation_change(TranslationSettingChange::PapagoClientId(text));
                 self.notify_change();
             }
             PAPAGO_SECRET_EDIT => {
-                self.config.borrow_mut().translation.papago_client_secret = text;
-                self.sync_translation_manager();
+                self.apply_translation_change(TranslationSettingChange::PapagoClientSecret(text));
                 self.notify_change();
             }
             EZTRANS_DLL_EDIT => {
-                self.config.borrow_mut().translation.eztrans_dll_path = text;
-                self.sync_translation_manager();
+                self.apply_translation_change(TranslationSettingChange::EzTransDllPath(text));
                 self.notify_change();
             }
             EZTRANS_DAT_EDIT => {
-                self.config.borrow_mut().translation.eztrans_dat_path = text;
-                self.sync_translation_manager();
+                self.apply_translation_change(TranslationSettingChange::EzTransDatPath(text));
                 self.notify_change();
             }
             LLM_MODEL_EDIT => {
-                self.config.borrow_mut().translation.llm.model = text;
+                self.apply_translation_change(TranslationSettingChange::LlmModel(text));
                 self.notify_change();
             }
             LLM_API_KEY_EDIT => {
-                self.config.borrow_mut().translation.llm.api_key = text;
-                self.sync_translation_manager();
+                self.apply_translation_change(TranslationSettingChange::LlmApiKey(text));
                 self.notify_change();
             }
             LLM_BASE_URL_EDIT => {
-                self.config.borrow_mut().translation.llm.base_url = text;
+                self.apply_translation_change(TranslationSettingChange::LlmBaseUrl(text));
                 self.notify_change();
             }
             LLM_SYSTEM_PROMPT_EDIT => {
-                self.config.borrow_mut().translation.llm.system_prompt = text;
+                self.apply_translation_change(TranslationSettingChange::LlmSystemPrompt(text));
                 self.notify_change();
             }
             LLM_MAX_TOKENS_EDIT => {
-                if let Ok(v) = text.trim().parse::<u32>() {
-                    self.config.borrow_mut().translation.llm.max_tokens = v.clamp(1, 32_000);
-                    self.notify_change();
-                }
+                self.apply_translation_change(TranslationSettingChange::LlmMaxTokensText(text));
+                self.notify_change();
             }
             LLM_DEBOUNCE_EDIT => {
-                if let Ok(v) = text.trim().parse::<u32>() {
-                    self.config.borrow_mut().translation.llm.debounce_ms = v.clamp(0, 10_000);
-                    self.notify_change();
-                }
+                self.apply_translation_change(TranslationSettingChange::LlmDebounceText(text));
+                self.notify_change();
             }
             _ => {}
         }

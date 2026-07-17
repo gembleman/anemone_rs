@@ -73,8 +73,6 @@ pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
         source_lang: spec.source_lang(),
         target_lang: spec.target_lang(),
         credentials: spec.credentials(),
-        eztrans_dll_path: spec.eztrans_dll_path().to_owned(),
-        eztrans_dat_path: spec.eztrans_dat_path().to_owned(),
     };
     let total = Cell::new(0usize);
     let error = RefCell::new(None);

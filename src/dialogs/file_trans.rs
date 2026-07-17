@@ -537,8 +537,6 @@ impl FileTransDialog {
             source_lang: spec.source_lang(),
             target_lang: spec.target_lang(),
             credentials: spec.credentials(),
-            eztrans_dll_path: spec.eztrans_dll_path().to_owned(),
-            eztrans_dat_path: spec.eztrans_dat_path().to_owned(),
         };
         let task = FileTransRunner::start(job_data);
         if let Err(e) = FileTransProgressDialog::show(self.hwnd, task) {

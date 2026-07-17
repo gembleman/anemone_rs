@@ -119,30 +119,6 @@ impl TranslationConfig {
         supported.iter().position(|&l| l == lang).unwrap_or(0)
     }
 
-    /// 인덱스로 소스 언어 설정 (UI 콤보박스용)
-    pub fn set_source_lang_by_index(
-        &mut self,
-        index: usize,
-        engine: crate::translation::TranslationEngine,
-    ) {
-        let supported = engine.supported_source_languages();
-        if let Some(&lang) = supported.get(index) {
-            self.set_source_language(lang);
-        }
-    }
-
-    /// 인덱스로 타겟 언어 설정 (UI 콤보박스용)
-    pub fn set_target_lang_by_index(
-        &mut self,
-        index: usize,
-        engine: crate::translation::TranslationEngine,
-    ) {
-        let supported = engine.supported_target_languages();
-        if let Some(&lang) = supported.get(index) {
-            self.set_target_language(lang);
-        }
-    }
-
     /// DeepL 멀티 키 전략
     pub fn deepl_strategy(&self) -> crate::translation::worker::DeepLStrategy {
         use crate::translation::worker::DeepLStrategy;

@@ -44,7 +44,7 @@ pub enum DeepLStrategy {
 ///
 /// 엔진이 늘어나도 `TranslationRequest`에 옵션 필드가 폭발하지 않도록 enum으로 묶는다.
 /// 잘못된 조합(예: EzTrans에 API 키 전달)은 매칭 패턴 단계에서 명확히 드러난다.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub enum EngineCredentials {
     /// 자격증명 불필요 (EzTrans, Google 비공식)
     #[default]
@@ -61,6 +61,25 @@ pub enum EngineCredentials {
     },
     /// LLM 호출 파라미터 일체 (제공자/모델/키/프롬프트/샘플링)
     Llm(LlmCallParams),
+}
+
+impl std::fmt::Debug for EngineCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => formatter.write_str("None"),
+            Self::DeepL { keys, strategy } => formatter
+                .debug_struct("DeepL")
+                .field("key_count", &keys.len())
+                .field("strategy", strategy)
+                .finish(),
+            Self::Papago { .. } => formatter.write_str("Papago(<redacted>)"),
+            Self::Llm(parameters) => formatter
+                .debug_struct("Llm")
+                .field("provider", &parameters.provider)
+                .field("model", &parameters.effective_model())
+                .finish(),
+        }
+    }
 }
 
 /// 번역 요청
