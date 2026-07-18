@@ -1,5 +1,6 @@
 use super::*;
 use crate::translation::TranslationError;
+use secrecy::ExposeSecret;
 
 #[test]
 fn rejects_missing_credentials_without_exposing_values() {
@@ -48,8 +49,33 @@ fn builds_deepl_credentials_from_the_effective_key_list() {
     let spec = TranslationJobSpec::from_config(&config).unwrap();
     assert_eq!(spec.engine(), TranslationEngine::DeepL);
     assert!(
-        matches!(spec.credentials(), EngineCredentials::DeepL { keys, .. } if keys == ["first", "second"])
+        matches!(spec.credentials(), EngineCredentials::DeepL { keys, .. }
+            if keys.iter().map(|key| key.expose_secret()).eq(["first", "second"]))
     );
+}
+
+#[test]
+fn runtime_llm_params_redact_api_key_from_debug_output() {
+    let secret = "debug-output-must-not-contain-this-key";
+    let config = TranslationConfig {
+        engine: "llm".into(),
+        llm: crate::config::LlmConfig {
+            api_key: secret.into(),
+            ..crate::config::LlmConfig::default()
+        },
+        ..TranslationConfig::default()
+    };
+
+    let credentials = TranslationJobSpec::from_config(&config)
+        .unwrap()
+        .credentials();
+    let EngineCredentials::Llm(params) = credentials else {
+        panic!("expected LLM credentials");
+    };
+    let debug = format!("{params:?}");
+
+    assert!(!debug.contains(secret));
+    assert!(debug.contains("[REDACTED]"));
 }
 
 #[test]

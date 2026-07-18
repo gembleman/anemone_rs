@@ -3,6 +3,7 @@
 use crate::config::TranslationConfig;
 use crate::translation::worker::EngineCredentials;
 use crate::translation::{EzTransProcessConfig, Language, TranslationEngine, prepare_eztrans};
+use secrecy::SecretString;
 
 /// 비밀 자격증명을 포함할 수 있는 실행 사양. 의도적으로 `Debug`를 구현하지 않는다.
 #[derive(Clone)]
@@ -46,7 +47,11 @@ impl TranslationJobSpec {
             match engine {
                 TranslationEngine::EzTrans | TranslationEngine::Google => EngineCredentials::None,
                 TranslationEngine::DeepL => {
-                    let keys = config.deepl_effective_keys();
+                    let keys = config
+                        .deepl_effective_keys()
+                        .into_iter()
+                        .map(SecretString::from)
+                        .collect::<Vec<_>>();
                     if keys.is_empty() {
                         return Err(TranslationConfigError::MissingCredential("DeepL API 키"));
                     }
@@ -64,8 +69,8 @@ impl TranslationJobSpec {
                         ));
                     }
                     EngineCredentials::Papago {
-                        client_id: config.papago_client_id.clone(),
-                        client_secret: config.papago_client_secret.clone(),
+                        client_id: SecretString::from(config.papago_client_id.clone()),
+                        client_secret: SecretString::from(config.papago_client_secret.clone()),
                     }
                 }
                 TranslationEngine::Llm => {
@@ -82,7 +87,7 @@ impl TranslationJobSpec {
                     })?;
                     let params = crate::translation::custom::CustomApiCallParams {
                         url: custom.url.clone(),
-                        api_key: custom.api_key.clone(),
+                        api_key: SecretString::from(custom.api_key.clone()),
                         auth_header: custom.auth_header.clone(),
                         auth_scheme: custom.auth_scheme.clone(),
                         headers: custom.headers.clone(),

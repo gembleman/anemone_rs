@@ -6,6 +6,7 @@ pub mod openai_compat;
 pub mod usage;
 
 use super::{EnumParseError, Language, lang_utils};
+use secrecy::SecretString;
 
 /// LLM 제공자
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -110,7 +111,7 @@ pub struct GlossaryEntry {
 pub struct LlmCallParams {
     pub provider: LlmProvider,
     pub model: String,
-    pub api_key: String,
+    pub api_key: SecretString,
     /// 비어 있으면 `provider.default_base_url()` 사용
     pub base_url: String,
     /// `{source}`, `{target}` 플레이스홀더가 치환됨
