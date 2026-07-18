@@ -252,6 +252,26 @@ fn eztrans_window_deduplicates_and_reuses_bounded_cache() {
 }
 
 #[test]
+fn eztrans_cache_keeps_a_reused_entry_during_a_unique_scan() {
+    let translator = MockBatchTranslator::new(1);
+    let job = eztrans_job();
+    let mut cache = BoundedTranslationCache::new(4);
+
+    let initial = [
+        input_line("반복"),
+        input_line("고유-1"),
+        input_line("고유-2"),
+        input_line("고유-3"),
+    ];
+    translate_eztrans_window(&initial, &job, &translator, &mut cache).unwrap();
+    translate_eztrans_window(&[input_line("반복")], &job, &translator, &mut cache).unwrap();
+    translate_eztrans_window(&[input_line("고유-4")], &job, &translator, &mut cache).unwrap();
+    translate_eztrans_window(&[input_line("반복")], &job, &translator, &mut cache).unwrap();
+
+    assert_eq!(translator.translated_lines.load(Ordering::Relaxed), 5);
+}
+
+#[test]
 fn eztrans_batches_are_balanced_across_configured_processes_and_bounded() {
     let originals = (0..1_000)
         .map(|index| Arc::<str>::from(format!("문장 {index}")))

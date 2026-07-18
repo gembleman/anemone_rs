@@ -1,12 +1,13 @@
 //! 파일 번역과 진행률 보고를 수행하는 백그라운드 작업.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use quick_cache::unsync::Cache;
 use windows::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
 
 use super::{FileTransJobData, ProgressEvent, WriteType, validate_job_paths};
@@ -400,20 +401,16 @@ pub struct InputLine {
     pub ending: LineEnding,
 }
 
-/// 파일 작업 동안만 유지되는 bounded FIFO 번역 캐시. HashMap 조회는 평균 O(1)이고,
-/// 삽입 순서 큐로 메모리 상한을 강제한다. 설정/사전이 다른 다음 작업으로는 넘어가지 않는다.
+/// 파일 작업 동안만 유지되는 bounded scan-resistant 번역 캐시.
+/// 설정/사전이 다른 다음 작업으로는 넘어가지 않는다.
 pub struct BoundedTranslationCache {
-    capacity: usize,
-    entries: HashMap<Arc<str>, Arc<str>>,
-    insertion_order: VecDeque<Arc<str>>,
+    entries: Cache<Arc<str>, Arc<str>>,
 }
 
 impl BoundedTranslationCache {
     pub fn new(capacity: usize) -> Self {
         Self {
-            capacity,
-            entries: HashMap::with_capacity(capacity.min(16_384)),
-            insertion_order: VecDeque::with_capacity(capacity.min(16_384)),
+            entries: Cache::new(capacity),
         }
     }
 
@@ -422,16 +419,6 @@ impl BoundedTranslationCache {
     }
 
     fn insert(&mut self, original: Arc<str>, translated: Arc<str>) {
-        if self.capacity == 0 || self.entries.contains_key(original.as_ref()) {
-            return;
-        }
-        while self.entries.len() >= self.capacity {
-            let Some(oldest) = self.insertion_order.pop_front() else {
-                break;
-            };
-            self.entries.remove(oldest.as_ref());
-        }
-        self.insertion_order.push_back(original.clone());
         self.entries.insert(original, translated);
     }
 }
