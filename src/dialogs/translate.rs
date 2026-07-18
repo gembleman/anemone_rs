@@ -33,6 +33,7 @@ use crate::util::to_wide;
 use crate::clipboard::{ClipboardGuard, OwnedGlobalMemory};
 use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
+use crate::translation::manual::{ManualOutputFormat, ManualTranslationOptions};
 use crate::translation::{
     Language, LlmProvider, TranslationEngine, TranslationJobSpec, request_translation,
     take_response, unregister_translation_hwnd,
@@ -71,15 +72,6 @@ mod subclass_id {
     pub const DEST_EDIT: usize = 2;
 }
 
-/// 출력 형식
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum OutputFormat {
-    #[default]
-    Normal = 0, // 일반
-    Brackets = 1,  // 괄호 포함
-    NameSplit = 2, // 이름 분리
-}
-
 /// 번역 대화상자
 pub struct TranslateDialog {
     hwnd: HWND,
@@ -99,8 +91,7 @@ pub struct TranslateDialog {
     llm_api_key_label: HWND,
     llm_api_key_edit: HWND,
     one_go: bool,
-    no_linefeed: bool,
-    output_format: OutputFormat,
+    manual_options: ManualTranslationOptions,
     /// 번역 진행 중 여부
     translating: bool,
 }
@@ -225,8 +216,7 @@ impl TranslateDialog {
             llm_api_key_label: HWND::default(),
             llm_api_key_edit: HWND::default(),
             one_go: false,
-            no_linefeed: false,
-            output_format: OutputFormat::Normal,
+            manual_options: ManualTranslationOptions::default(),
             translating: false,
         }
     }
@@ -424,10 +414,12 @@ impl TranslateDialog {
             BTN_COPY => self.copy_to_clipboard(),
             BTN_CLEAR => self.clear_text(),
             CHK_ONE_GO => self.one_go = !self.one_go,
-            CHK_NO_LINEFEED => self.no_linefeed = !self.no_linefeed,
-            RADIO_OUTPUT_1 => self.output_format = OutputFormat::Normal,
-            RADIO_OUTPUT_2 => self.output_format = OutputFormat::Brackets,
-            RADIO_OUTPUT_3 => self.output_format = OutputFormat::NameSplit,
+            CHK_NO_LINEFEED => {
+                self.manual_options.remove_linefeeds = !self.manual_options.remove_linefeeds;
+            }
+            RADIO_OUTPUT_1 => self.manual_options.output_format = ManualOutputFormat::Normal,
+            RADIO_OUTPUT_2 => self.manual_options.output_format = ManualOutputFormat::Brackets,
+            RADIO_OUTPUT_3 => self.manual_options.output_format = ManualOutputFormat::NameSplit,
             // CBN_SELCHANGE
             COMBO_ENGINE | COMBO_SOURCE_LANG | COMBO_TARGET_LANG if notify_code == 1 => {
                 if cmd == COMBO_ENGINE {
@@ -613,11 +605,7 @@ impl TranslateDialog {
 
         self.apply_current_settings();
 
-        let text = if self.no_linefeed {
-            source.replace("\r\n", " ").replace('\n', " ")
-        } else {
-            source
-        };
+        let text = self.manual_options.prepare_input(&source);
 
         let spec = {
             let config = self.config.borrow();
@@ -660,17 +648,7 @@ impl TranslateDialog {
         self.translating = false;
 
         let result = match response.result {
-            Ok(translated) => match self.output_format {
-                OutputFormat::Normal => translated,
-                OutputFormat::Brackets => format!("「{}」", translated),
-                OutputFormat::NameSplit => {
-                    if let Some((name, rest)) = translated.split_once([':', '：']) {
-                        format!("{}\n{}", name.trim(), rest.trim())
-                    } else {
-                        translated
-                    }
-                }
-            },
+            Ok(translated) => self.manual_options.format_output(translated),
             Err(err) => format!("[오류] {}", err),
         };
         self.set_dest_text(&result);

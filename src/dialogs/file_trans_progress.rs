@@ -47,12 +47,16 @@ struct ProgressState {
     total_lines: i32,
     current_line: i32,
     list_size: i32,
+    terminal: bool,
 }
 
 const PROGRESS_POLL_TIMER: usize = 1;
 
 impl ProgressState {
     fn apply(&mut self, event: &ProgressEvent) {
+        if self.terminal {
+            return;
+        }
         match event {
             ProgressEvent::TotalFiles(value) => self.total_files = *value,
             ProgressEvent::TotalLines(value) => self.total_lines = *value,
@@ -60,7 +64,8 @@ impl ProgressState {
             ProgressEvent::FileLines(value) => self.list_size = *value,
             ProgressEvent::FileProgress(_) => {}
             ProgressEvent::TotalProgress(value) => self.current_line = *value,
-            ProgressEvent::FileName(_) | ProgressEvent::Complete | ProgressEvent::Error(_) => {}
+            ProgressEvent::Complete | ProgressEvent::Error(_) => self.terminal = true,
+            ProgressEvent::FileName(_) => {}
         }
     }
 }
