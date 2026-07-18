@@ -9,9 +9,13 @@ use windows::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThread
 
 use super::{FileTransJobData, ProgressEvent, WriteType, validate_job_paths};
 use crate::translation::{
+    TranslationEngine,
     http_common::shared_client,
     worker::{TranslationDispatch, TranslationRequest},
 };
+
+const EZTRANS_BATCH_MAX_LINES: usize = 256;
+const EZTRANS_BATCH_MAX_CHARS: usize = 96 * 1024;
 
 /// 작업 중 시스템 절전만 막고 화면 절전은 허용하는 RAII 가드.
 struct SleepBlocker;
@@ -420,33 +424,151 @@ fn process_single_file(
 
     report(ProgressEvent::FileLines(line_count as i32));
 
-    let mut prev = read_input_line(&mut reader, input_path, true)?;
+    let mut next_line = read_input_line(&mut reader, input_path, true)?;
     let mut idx: usize = 0;
 
-    while let Some(line) = prev.take() {
-        let next = read_input_line(&mut reader, input_path, false)?;
+    while next_line.is_some() {
+        let mut lines = Vec::new();
+        let mut batch_chars = 0usize;
+
+        while let Some(line) = next_line.take() {
+            let separator_chars = usize::from(!lines.is_empty());
+            let line_chars = line.text.chars().count();
+            let exceeds_batch = !lines.is_empty()
+                && job_data.engine == TranslationEngine::EzTrans
+                && (lines.len() >= EZTRANS_BATCH_MAX_LINES
+                    || batch_chars
+                        .saturating_add(separator_chars)
+                        .saturating_add(line_chars)
+                        > EZTRANS_BATCH_MAX_CHARS);
+            if exceeds_batch {
+                next_line = Some(line);
+                break;
+            }
+
+            batch_chars = batch_chars
+                .saturating_add(separator_chars)
+                .saturating_add(line_chars);
+            lines.push(line);
+            next_line = read_input_line(&mut reader, input_path, false)?;
+
+            if job_data.engine != TranslationEngine::EzTrans {
+                break;
+            }
+        }
+
         if job_data.cancel_token.load(Ordering::SeqCst) {
             return Err("사용자가 취소했습니다.".to_string());
         }
-        let translated = translate_line(&line.text, job_data, translation)?;
-        write_output(
-            pending_output.writer(),
-            &line.text,
-            &translated,
-            job_data.write_type,
-            line.ending,
-            next.is_some(),
-        )?;
+        let translated_lines = translate_lines(&lines, job_data, translation)?;
 
-        idx += 1;
-        *global_current += 1;
-        report(ProgressEvent::FileProgress(idx as i32));
-        report(ProgressEvent::TotalProgress(*global_current));
+        let batch_len = lines.len();
+        for (line_index, (line, translated)) in lines.into_iter().zip(translated_lines).enumerate()
+        {
+            write_output(
+                pending_output.writer(),
+                &line.text,
+                &translated,
+                job_data.write_type,
+                line.ending,
+                line_index + 1 < batch_len || next_line.is_some(),
+            )?;
 
-        prev = next;
+            idx += 1;
+            *global_current += 1;
+            report(ProgressEvent::FileProgress(idx as i32));
+            report(ProgressEvent::TotalProgress(*global_current));
+        }
     }
 
     pending_output.persist()
+}
+
+fn translate_lines(
+    lines: &[InputLine],
+    job_data: &FileTransJobData,
+    translation: &TranslationContext<'_>,
+) -> Result<Vec<String>, String> {
+    if job_data.engine != TranslationEngine::EzTrans || lines.len() <= 1 {
+        return lines
+            .iter()
+            .map(|line| translate_line(&line.text, job_data, translation))
+            .collect();
+    }
+
+    let translated_indices = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| should_translate_line(&line.text, job_data.no_trans_linefeed))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if translated_indices.len() <= 1 {
+        return lines
+            .iter()
+            .map(|line| translate_line(&line.text, job_data, translation))
+            .collect();
+    }
+
+    let originals = translated_indices
+        .iter()
+        .map(|&index| lines[index].text.as_str())
+        .collect::<Vec<_>>();
+    let combined = originals.join("\n");
+    let translated = translate_line(&combined, job_data, translation)?;
+
+    let Some(parts) = split_eztrans_batch(&translated, &originals) else {
+        tracing::warn!(
+            input_lines = originals.len(),
+            output_lines = translated.split('\n').count(),
+            "EzTrans batch changed line boundaries; retrying one line at a time"
+        );
+        return lines
+            .iter()
+            .map(|line| translate_line(&line.text, job_data, translation))
+            .collect();
+    };
+
+    let mut results = lines
+        .iter()
+        .map(|line| line.text.clone())
+        .collect::<Vec<_>>();
+    for (index, translated) in translated_indices.into_iter().zip(parts) {
+        results[index] = translated;
+    }
+    Ok(results)
+}
+
+fn should_translate_line(line: &str, no_trans_linefeed: bool) -> bool {
+    !line.is_empty() && !(no_trans_linefeed && line.trim().is_empty())
+}
+
+/// EzTrans는 다중 줄 입력의 줄바꿈 양옆에 공백 하나를 삽입한다. 원문 경계에
+/// 이미 공백이 있으면 추가하지 않으므로, 원문에 없던 경계 공백만 제거한다.
+fn split_eztrans_batch(translated: &str, originals: &[&str]) -> Option<Vec<String>> {
+    let mut parts = translated
+        .split('\n')
+        .map(|part| part.strip_suffix('\r').unwrap_or(part).to_string())
+        .collect::<Vec<_>>();
+    if parts.len() != originals.len() {
+        return None;
+    }
+
+    let last = parts.len().saturating_sub(1);
+    for (index, (part, original)) in parts.iter_mut().zip(originals).enumerate() {
+        if index > 0
+            && !original.starts_with(char::is_whitespace)
+            && let Some(stripped) = part.strip_prefix(' ')
+        {
+            *part = stripped.to_string();
+        }
+        if index < last
+            && !original.ends_with(char::is_whitespace)
+            && let Some(stripped) = part.strip_suffix(' ')
+        {
+            part.truncate(stripped.len());
+        }
+    }
+    Some(parts)
 }
 
 /// 라인 번역.
@@ -458,12 +580,8 @@ fn translate_line(
     translation: &TranslationContext<'_>,
 ) -> Result<String, String> {
     // 빈 줄은 엔진에 보내지 않는다.
-    if line.is_empty() {
-        return Ok(line.to_string());
-    }
-
     // 옵션이 켜지면 공백만 있는 단락 구분 줄도 유지한다.
-    if job_data.no_trans_linefeed && line.trim().is_empty() {
+    if !should_translate_line(line, job_data.no_trans_linefeed) {
         return Ok(line.to_string());
     }
 

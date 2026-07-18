@@ -1,4 +1,7 @@
-use super::{LineEnding, PendingOutput, read_input_line, validate_and_count_reader, write_output};
+use super::{
+    LineEnding, PendingOutput, read_input_line, split_eztrans_batch, validate_and_count_reader,
+    write_output,
+};
 use std::io::{BufReader, Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -128,6 +131,33 @@ fn output_modes_preserve_final_newline_presence() {
             }
         }
     }
+}
+
+#[test]
+fn eztrans_batch_split_removes_only_inserted_boundary_spaces() {
+    let originals = [
+        "これは一行目です。",
+        "  これは二行目です。",
+        "これは三行目です。  ",
+        "「台詞です」",
+    ];
+    let translated =
+        "이것은 1행째입니다. \n   이것은 2행째입니다. \n 이것은 3행째입니다.   \n 「대사입니다」";
+
+    assert_eq!(
+        split_eztrans_batch(translated, &originals),
+        Some(vec![
+            "이것은 1행째입니다.".into(),
+            "   이것은 2행째입니다.".into(),
+            "이것은 3행째입니다.   ".into(),
+            "「대사입니다」".into(),
+        ])
+    );
+}
+
+#[test]
+fn eztrans_batch_split_rejects_changed_line_boundaries() {
+    assert_eq!(split_eztrans_batch("하나\n둘\n셋", &["一", "二"]), None);
 }
 
 #[test]
