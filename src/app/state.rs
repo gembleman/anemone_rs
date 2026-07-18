@@ -113,6 +113,26 @@ pub(super) struct AppState {
     pub client_size: ClientSize,
     pub current_text: String,
     pub pending_translation: Option<PendingTranslation>,
+    pub clipboard_debounce: ClipboardDebounce,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ClipboardDebounce {
+    pending: Option<String>,
+}
+
+impl ClipboardDebounce {
+    pub(super) fn submit(&mut self, text: String) {
+        self.pending = Some(text);
+    }
+
+    pub(super) fn take(&mut self) -> Option<String> {
+        self.pending.take()
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.pending = None;
+    }
 }
 
 #[cfg(test)]

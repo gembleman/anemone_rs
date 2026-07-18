@@ -13,7 +13,7 @@ use windows::Win32::{
     },
 };
 
-use super::{APP, App, COMPOSITION_RETRY_TIMER};
+use super::{APP, App, CLIPBOARD_DEBOUNCE_TIMER, COMPOSITION_RETRY_TIMER};
 use crate::constants::{
     MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
     WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
@@ -54,7 +54,7 @@ fn reentry_policy(msg: u32, taskbar_created_msg: u32) -> ReentryPolicy {
         WM_DPICHANGED => ReentryPolicy::ApplyDpiThenResize,
         WM_PAINT => ReentryPolicy::ValidatePaintThenRepaint,
         WM_CLOSE | WM_SIZE | WM_DISPLAYCHANGE | WM_RBUTTONUP | WM_NCRBUTTONUP | WM_COMMAND
-        | WM_HOTKEY | WM_TRAY_ICON | WM_CLIPBOARDUPDATE => ReentryPolicy::DeferOwned,
+        | WM_HOTKEY | WM_TRAY_ICON | WM_CLIPBOARDUPDATE | WM_TIMER => ReentryPolicy::DeferOwned,
         _ if matches!(
             msg,
             WM_APP_REFRESH
@@ -172,6 +172,11 @@ impl App {
                     if let Err(e) = self.paint() {
                         tracing::warn!("composition retry paint failed: {e}");
                     }
+                    Some(LRESULT(0))
+                }
+
+                WM_TIMER if wparam.0 == CLIPBOARD_DEBOUNCE_TIMER => {
+                    self.handle_clipboard_debounce_timer();
                     Some(LRESULT(0))
                 }
 

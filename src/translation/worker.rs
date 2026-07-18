@@ -5,6 +5,8 @@
 //!
 //! 구조:
 //! - 프로세스 전역에 워커 스레드/tokio 런타임이 하나만 존재한다.
+//! - 런타임의 명령 루프는 hwnd별 task를 관리한다. 같은 hwnd의 새 요청은 이전
+//!   future를 abort하고 서로 다른 hwnd는 동시에 실행한다.
 //! - 호출자(메인 윈도우, 번역 다이얼로그 등)는 `translate(hwnd, …)` 헬퍼
 //!   (또는 `dispatch().request(hwnd, …)`) 로 자신의 hwnd 를 함께 전달한다.
 //! - 워커는 응답 도착 시 hwnd 별 원자 슬롯(`latest_snapshot`)으로 stale 을 거른 뒤
@@ -15,13 +17,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use isolang::Language;
 use thiserror::Error;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::task::{AbortHandle, JoinSet};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
@@ -121,6 +124,11 @@ pub struct TranslationResponse {
 struct DispatchJob {
     hwnd_raw: usize,
     req: TranslationRequest,
+}
+
+enum WorkerCommand {
+    Request(DispatchJob),
+    Unregister(usize),
 }
 
 /// 내부 상태
@@ -231,7 +239,7 @@ impl DispatchShared {
 pub struct TranslationDispatch {
     /// `Option` 인 이유: shutdown 시 `take()` 로 drop 시켜 채널을 닫고
     /// 워커 스레드의 `rx.recv()` 가 `Err` 를 반환해 자연 종료되도록 한다.
-    sender: Mutex<Option<Sender<DispatchJob>>>,
+    sender: Mutex<Option<UnboundedSender<WorkerCommand>>>,
     shared: Arc<DispatchShared>,
     /// 워커 스레드 핸들 (shutdown 시 join 용)
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -254,6 +262,11 @@ pub fn unregister_hwnd(hwnd: HWND) {
     dispatch().unregister_hwnd(hwnd);
 }
 
+/// 창은 유지하되 현재 요청과 아직 수거하지 않은 응답만 취소한다.
+pub fn cancel(hwnd: HWND) {
+    dispatch().cancel(hwnd);
+}
+
 /// 프로세스 종료 직전 호출. 워커 스레드를 정상 종료시켜 detached 백그라운드
 /// 스레드가 남지 않도록 한다.
 ///
@@ -267,7 +280,7 @@ pub fn shutdown() {
 
 impl TranslationDispatch {
     fn spawn() -> Self {
-        let (tx, rx) = mpsc::channel::<DispatchJob>();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<WorkerCommand>();
         let shared = Arc::new(DispatchShared::new());
         let worker_shared = shared.clone();
 
@@ -285,16 +298,11 @@ impl TranslationDispatch {
 
     /// 채널 sender 를 drop 해 워커 스레드를 종료시키고 join.
     ///
-    /// 워커는 `rt.block_on(async { while let Ok(job) = rx.recv() })` 로 블록되어
-    /// 있어, 모든 sender 가 drop 되면 `Err` 를 받고 루프를 빠져나와 tokio 런타임
-    /// (및 그 아래 워커 스레드 풀) 까지 자연 종료된다.
-    ///
-    /// join 은 짧은 timeout 이 없는 단순 join 이지만, 워커는 즉시 빠져나오므로
-    /// 실무상 즉시 끝난다. 만에 하나 join 이 오래 걸리면 프로세스 종료를 막을
-    /// 위험이 있으므로 호출자는 충분히 짧은 시간을 기대해야 한다.
+    /// 모든 sender가 drop되면 async 명령 루프가 모든 in-flight task를 abort하고
+    /// join한 뒤 종료한다. 외부 join은 2초를 상한으로 하며, abort할 수 없는
+    /// EzTrans spawn_blocking도 runtime shutdown timeout으로 제한한다.
     fn shutdown(&self) {
-        // 1. sender drop → 워커의 rx.recv() 가 Err 를 반환해 루프 탈출 → tokio
-        //    runtime drop → 워커 스레드 자연 종료.
+        // 1. sender drop → 명령 루프가 채널 종료를 받고 모든 task abort/drain.
         {
             let mut s = self.sender.lock().expect("dispatch sender poisoned");
             *s = None;
@@ -342,16 +350,16 @@ impl TranslationDispatch {
         let send_result = {
             let s = self.sender.lock().expect("dispatch sender poisoned");
             match s.as_ref() {
-                Some(tx) => tx.send(DispatchJob { hwnd_raw, req }),
+                Some(tx) => tx.send(WorkerCommand::Request(DispatchJob { hwnd_raw, req })),
                 None => {
                     let _ = latest.compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire);
                     return Err(TranslationRequestError::WorkerUnavailable);
                 }
             }
         };
-        if let Err(error) = send_result {
+        if send_result.is_err() {
             let _ = latest.compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire);
-            tracing::error!("Failed to send translation request: {error}");
+            tracing::error!("translation worker command channel is closed");
             return Err(TranslationRequestError::WorkerUnavailable);
         }
 
@@ -367,20 +375,30 @@ impl TranslationDispatch {
     /// 다이얼로그가 닫히는 등 hwnd 가 사라질 때 호출
     pub fn unregister_hwnd(&self, hwnd: HWND) {
         let hwnd_raw = hwnd.0 as usize;
+        self.cancel_raw(hwnd_raw);
+        self.shared.drop_latest_atomic(hwnd_raw);
+    }
+
+    pub fn cancel(&self, hwnd: HWND) {
+        self.cancel_raw(hwnd.0 as usize);
+    }
+
+    fn cancel_raw(&self, hwnd_raw: usize) {
         {
             let mut st = self.shared.state.lock().expect("dispatch state poisoned");
             st.drop_hwnd(hwnd_raw);
         }
-        self.shared.drop_latest_atomic(hwnd_raw);
+        if let Some(latest) = self.shared.latest_atomic_lookup(hwnd_raw) {
+            latest.store(0, Ordering::Release);
+        }
+        let sender = self.sender.lock().expect("dispatch sender poisoned");
+        if let Some(sender) = sender.as_ref() {
+            let _ = sender.send(WorkerCommand::Unregister(hwnd_raw));
+        }
     }
 
     /// 워커 스레드 진입점
-    fn worker_thread(rx: Receiver<DispatchJob>, shared: Arc<DispatchShared>) {
-        // current_thread 런타임. 디스패치는 "recv → translate_async await → 다음 recv"
-        // 의 엄격한 직렬 처리라 멀티스레드 풀이 불필요하다. spawn_blocking 은
-        // current_thread 런타임에서도 별도 blocking pool 로 분리되어 EzTrans 경로가
-        // 그대로 동작한다. multi_thread 대비 worker thread 풀 1세트 + 관련 코드 경로
-        // 가 빠진다.
+    fn worker_thread(rx: UnboundedReceiver<WorkerCommand>, shared: Arc<DispatchShared>) {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -392,66 +410,98 @@ impl TranslationDispatch {
             }
         };
 
-        rt.block_on(async {
-            let client = super::http_common::shared_client();
+        rt.block_on(Self::worker_loop(rx, shared));
+        // abort할 수 없는 spawn_blocking(EzTrans)이 비정상적으로 오래 걸려도 종료를
+        // 무기한 막지 않는다. HTTP future는 worker_loop에서 이미 abort/drain된다.
+        rt.shutdown_timeout(Duration::from_secs(2));
+    }
 
-            while let Ok(job) = rx.recv() {
-                let DispatchJob { hwnd_raw, req } = job;
+    async fn worker_loop(mut rx: UnboundedReceiver<WorkerCommand>, shared: Arc<DispatchShared>) {
+        let client = super::http_common::shared_client();
+        let mut tasks: JoinSet<(usize, u64)> = JoinSet::new();
+        let mut active: HashMap<usize, (u64, AbortHandle)> = HashMap::new();
 
-                // 큐에서 꺼낸 시점에 같은 hwnd 의 더 최신 요청이 있으면 스킵.
-                // (자동 클립보드 번역의 텍스트 폭주 대응)
-                let latest = shared
-                    .latest_atomic_lookup(hwnd_raw)
-                    .map(|a| a.load(Ordering::Acquire))
-                    .unwrap_or(0);
-                if req.id < latest {
-                    tracing::debug!("요청 #{} 폐기 (더 최신 요청 존재)", req.id);
-                    continue;
-                }
-
-                let result = Self::translate_async(&req, &client).await;
-
-                // 응답 도착 시점에도 stale 재확인. LLM 같은 느린 엔진 대응.
-                let latest = shared
-                    .latest_atomic_lookup(hwnd_raw)
-                    .map(|a| a.load(Ordering::Acquire))
-                    .unwrap_or(0);
-                if req.id < latest {
-                    tracing::debug!("응답 #{} 폐기 (stale)", req.id);
-                    continue;
-                }
-
-                // hwnd 가 unregister 된 경우 (다이얼로그 폐기 등) 도 폐기
-                if shared.latest_atomic_lookup(hwnd_raw).is_none() {
-                    tracing::debug!("응답 #{} 폐기 (대상 hwnd 등록 해제)", req.id);
-                    continue;
-                }
-
-                // 응답 저장 후 PostMessage
-                {
-                    let mut st = shared.state.lock().expect("dispatch state poisoned");
-                    st.push_response(PendingEntry {
-                        req_id: req.id,
-                        hwnd_raw,
-                        response: TranslationResponse { result },
-                    });
-                }
-
-                // SAFETY: hwnd_raw 는 호출자가 등록 시 넘긴 원래의 HWND 비트 표현이며,
-                // unregister_hwnd 가 호출되지 않은 한 윈도우는 살아 있다. 위에서
-                // latest_atomic_lookup 으로 그 유효성을 확인했다. PostMessageW 는
-                // 모든 스레드에서 호출 안전하다.
-                unsafe {
-                    let hwnd = HWND(hwnd_raw as *mut std::ffi::c_void);
-                    let _ = PostMessageW(
-                        Some(hwnd),
-                        WM_TRANSLATION_COMPLETE,
-                        WPARAM(req.id as usize),
-                        LPARAM(0),
-                    );
+        loop {
+            tokio::select! {
+                biased;
+                command = rx.recv() => match command {
+                    Some(WorkerCommand::Request(job)) => {
+                        let DispatchJob { hwnd_raw, req } = job;
+                        let latest = shared
+                            .latest_atomic_lookup(hwnd_raw)
+                            .map(|slot| slot.load(Ordering::Acquire))
+                            .unwrap_or(0);
+                        if req.id < latest {
+                            continue;
+                        }
+                        if let Some((_, previous)) = active.remove(&hwnd_raw) {
+                            previous.abort();
+                        }
+                        let req_id = req.id;
+                        let task_shared = shared.clone();
+                        let task_client = client.clone();
+                        let abort = tasks.spawn(async move {
+                            Self::process_job(hwnd_raw, req, task_shared, task_client).await;
+                            (hwnd_raw, req_id)
+                        });
+                        active.insert(hwnd_raw, (req_id, abort));
+                    }
+                    Some(WorkerCommand::Unregister(hwnd_raw)) => {
+                        if let Some((_, task)) = active.remove(&hwnd_raw) {
+                            task.abort();
+                        }
+                    }
+                    None => {
+                        tasks.abort_all();
+                        while tasks.join_next().await.is_some() {}
+                        break;
+                    }
+                },
+                completion = tasks.join_next(), if !tasks.is_empty() => {
+                    if let Some(Ok((hwnd_raw, req_id))) = completion
+                        && active.get(&hwnd_raw).map(|entry| entry.0) == Some(req_id)
+                    {
+                        active.remove(&hwnd_raw);
+                    }
                 }
             }
-        });
+        }
+    }
+
+    async fn process_job(
+        hwnd_raw: usize,
+        req: TranslationRequest,
+        shared: Arc<DispatchShared>,
+        client: reqwest::Client,
+    ) {
+        let result = Self::translate_async(&req, &client).await;
+        let latest = shared
+            .latest_atomic_lookup(hwnd_raw)
+            .map(|slot| slot.load(Ordering::Acquire));
+        if latest != Some(req.id) {
+            return;
+        }
+
+        {
+            let mut state = shared.state.lock().expect("dispatch state poisoned");
+            state.push_response(PendingEntry {
+                req_id: req.id,
+                hwnd_raw,
+                response: TranslationResponse { result },
+            });
+        }
+
+        // SAFETY: 등록 해제되지 않은 호출자의 원래 HWND 비트 표현이다. 실패한
+        // PostMessage는 응답 큐에만 남고 메모리 안전성에는 영향을 주지 않는다.
+        unsafe {
+            let hwnd = HWND(hwnd_raw as *mut std::ffi::c_void);
+            let _ = PostMessageW(
+                Some(hwnd),
+                WM_TRANSLATION_COMPLETE,
+                WPARAM(req.id as usize),
+                LPARAM(0),
+            );
+        }
     }
 
     /// 최대 재시도 횟수
@@ -497,7 +547,12 @@ impl TranslationDispatch {
                 Ok(s) => return Ok(s),
                 Err(e) => {
                     if Self::deepl_should_fallback(&e) && offset + 1 < keys.len() {
-                        tracing::warn!("DeepL 키 #{} 실패(폴백): {}", idx, e);
+                        tracing::warn!(
+                            key_index = idx,
+                            category = e.log_category(),
+                            status_code = ?e.log_status_code(),
+                            "DeepL key failed; trying fallback"
+                        );
                         last_err = Some(e);
                         continue;
                     }
@@ -512,7 +567,9 @@ impl TranslationDispatch {
     /// 한도 초과/인증 실패는 다음 키로 폴백, 그 외(파싱/네트워크 등)는 즉시 반환
     fn deepl_should_fallback(err: &TranslationError) -> bool {
         match err {
-            TranslationError::Api { code, .. } => matches!(code, 429 | 456 | 403),
+            TranslationError::Api { code, .. } | TranslationError::RateLimited { code, .. } => {
+                matches!(code, 429 | 456 | 403)
+            }
             _ => false,
         }
     }
@@ -530,21 +587,34 @@ impl TranslationDispatch {
 
         for attempt in 0..=Self::MAX_RETRIES {
             if attempt > 0 {
-                let delay = Self::INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1);
-                tracing::warn!(
-                    "번역 재시도 ({}/{}), {}ms 후...",
-                    attempt,
-                    Self::MAX_RETRIES,
-                    delay
+                let exponential =
+                    Duration::from_millis(Self::INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1));
+                let server_delay = last_err
+                    .as_ref()
+                    .and_then(TranslationError::retry_after)
+                    .unwrap_or(exponential);
+                let jitter = Duration::from_millis(
+                    (req.id.wrapping_mul(37).wrapping_add(attempt as u64 * 101)) % 251,
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                let delay = server_delay.saturating_add(jitter);
+                tracing::warn!(
+                    attempt,
+                    max_retries = Self::MAX_RETRIES,
+                    delay_ms = delay.as_millis(),
+                    "translation retry scheduled"
+                );
+                tokio::time::sleep(delay).await;
             }
 
             match Self::translate_once(req, client).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
                     if e.is_retryable() && attempt < Self::MAX_RETRIES {
-                        tracing::warn!("재시도 가능한 에러: {}", e);
+                        tracing::warn!(
+                            category = e.log_category(),
+                            status_code = ?e.log_status_code(),
+                            "retryable translation failure"
+                        );
                         last_err = Some(e);
                         continue;
                     }

@@ -1,5 +1,4 @@
-// 진단 중 — stdout 로그 확인용으로 console 서브시스템 유지.
-// #![windows_subsystem = "windows"]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod backlog;
@@ -11,9 +10,12 @@ mod d2d;
 mod dialogs;
 mod dpi;
 mod file_trans;
+mod fs_util;
 mod hotkey;
+mod logging;
 mod magnetic;
 mod menu;
+mod runtime;
 mod settings_model;
 mod translation;
 mod tray;
@@ -61,26 +63,6 @@ fn init_com_sta() {
     }
 }
 
-fn init_tracing() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let exe_path = std::env::current_exe()?;
-    let exe_dir = exe_path
-        .parent()
-        .ok_or_else(|| std::io::Error::other("실행파일 폴더를 확인할 수 없습니다"))?;
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(exe_dir.join("anemone.log"))?;
-
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_target(false)
-        .with_ansi(false)
-        .with_writer(std::sync::Mutex::new(log_file))
-        .try_init()?;
-
-    Ok(())
-}
-
 fn main() {
     // 가장 먼저 DLL 검색 경로를 잠근다 (다른 의존성 초기화 전에).
     harden_dll_search_path();
@@ -94,9 +76,8 @@ fn main() {
         cli::CliOutcome::Gui => {}
     }
 
-    if let Err(e) = init_tracing() {
-        eprintln!("로그 초기화 실패: {e}");
-        return;
+    if let Err(error) = logging::init() {
+        logging::report_init_failure(error.as_ref());
     }
 
     // UI 스레드 COM(STA) 1회 초기화 — 모든 다이얼로그/셸 호출의 공통 전제.

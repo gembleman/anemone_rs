@@ -1,8 +1,18 @@
 use super::{
-    AppCommand, ClientSize, MagneticAction, PendingTranslation, correlate_translation,
-    magnetic_action,
+    AppCommand, ClientSize, ClipboardDebounce, MagneticAction, PendingTranslation,
+    correlate_translation, magnetic_action,
 };
 use crate::menu;
+
+#[test]
+fn clipboard_debounce_keeps_only_the_last_submission() {
+    let mut debounce = ClipboardDebounce::default();
+    for index in 0..20 {
+        debounce.submit(format!("text-{index}"));
+    }
+    assert_eq!(debounce.take().as_deref(), Some("text-19"));
+    assert!(debounce.take().is_none());
+}
 
 #[test]
 fn menu_ids_map_to_distinct_commands() {

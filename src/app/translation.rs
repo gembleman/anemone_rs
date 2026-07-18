@@ -2,6 +2,21 @@ use super::{App, state};
 use crate::dialogs::{LogEntry, add_to_backlog};
 use crate::translation::{request_translation, take_response};
 
+fn log_clipboard_metadata(text: &str) {
+    tracing::debug!(
+        clipboard_chars = text.chars().count(),
+        "clipboard text detected"
+    );
+}
+
+fn log_translation_failure(error: &crate::translation::TranslationError) {
+    tracing::error!(
+        category = error.log_category(),
+        status_code = ?error.log_status_code(),
+        "translation failed"
+    );
+}
+
 impl App {
     pub(super) fn handle_clipboard_change(&mut self) {
         if let Some(text) = self.clipboard.on_clipboard_update() {
@@ -18,12 +33,59 @@ impl App {
                 }
             }
 
-            // 클립보드 텍스트 처리
-            tracing::debug!("Clipboard: {}", text);
+            log_clipboard_metadata(&text);
 
-            // 자동 번역 처리 (비동기)
+            self.schedule_clipboard_translation(text);
+        }
+    }
+
+    fn schedule_clipboard_translation(&mut self, text: String) {
+        use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
+
+        let debounce_ms = self.config.borrow().translation.llm.debounce_ms;
+        self.state.clipboard_debounce.submit(text);
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
+        }
+        if debounce_ms == 0 {
+            self.handle_clipboard_debounce_timer();
+            return;
+        }
+
+        let timer = unsafe {
+            SetTimer(
+                Some(self.hwnd),
+                super::CLIPBOARD_DEBOUNCE_TIMER,
+                debounce_ms,
+                None,
+            )
+        };
+        if timer == 0 {
+            tracing::warn!(
+                "clipboard debounce timer could not be created; dispatching immediately"
+            );
+            self.handle_clipboard_debounce_timer();
+        }
+    }
+
+    pub(super) fn handle_clipboard_debounce_timer(&mut self) {
+        use windows::Win32::UI::WindowsAndMessaging::KillTimer;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
+        }
+        if let Some(text) = self.state.clipboard_debounce.take() {
             self.request_translation_async(&text);
         }
+    }
+
+    pub(super) fn cancel_clipboard_translation(&mut self) {
+        use windows::Win32::UI::WindowsAndMessaging::KillTimer;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
+        }
+        self.state.clipboard_debounce.clear();
+        self.state.pending_translation = None;
+        crate::translation::cancel_translation(self.hwnd);
     }
 
     /// 비동기 번역 요청
@@ -100,7 +162,7 @@ impl App {
                 Some(translated)
             }
             Err(err) => {
-                tracing::error!("Translation error: {}", err);
+                log_translation_failure(&err);
                 self.state.current_text = completion.original.clone();
                 None
             }
@@ -117,3 +179,7 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/app/translation.rs"]
+mod tests;

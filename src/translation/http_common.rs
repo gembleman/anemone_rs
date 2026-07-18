@@ -53,12 +53,24 @@ pub fn shared_client() -> reqwest::Client {
 /// 성공이면 body 문자열을 반환, 실패면 `TranslationError::Api`를 반환.
 pub async fn send_and_read_body(response: reqwest::Response) -> Result<String, TranslationError> {
     let status = response.status();
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_retry_after);
     let body = response
         .text()
         .await
         .map_err(|e| TranslationError::Network(e.to_string()))?;
 
     if !status.is_success() {
+        if status.as_u16() == 429 {
+            return Err(TranslationError::RateLimited {
+                code: status.as_u16(),
+                message: body,
+                retry_after,
+            });
+        }
         return Err(TranslationError::Api {
             code: status.as_u16(),
             message: body,
@@ -68,10 +80,35 @@ pub async fn send_and_read_body(response: reqwest::Response) -> Result<String, T
     Ok(body)
 }
 
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    const MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
+    let duration = if let Ok(seconds) = value.trim().parse::<u64>() {
+        Duration::from_secs(seconds)
+    } else {
+        httpdate::parse_http_date(value)
+            .ok()?
+            .duration_since(std::time::SystemTime::now())
+            .unwrap_or_default()
+    };
+    Some(duration.min(MAX_RETRY_AFTER))
+}
+
 /// 빈 텍스트 검증
 pub fn validate_not_empty(text: &str) -> Result<(), TranslationError> {
     if text.is_empty() {
         return Err(TranslationError::EmptyText);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_seconds_is_bounded() {
+        assert_eq!(parse_retry_after("7"), Some(Duration::from_secs(7)));
+        assert_eq!(parse_retry_after("9999"), Some(Duration::from_secs(120)));
+        assert_eq!(parse_retry_after("invalid"), None);
+    }
 }

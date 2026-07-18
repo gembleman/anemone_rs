@@ -33,6 +33,7 @@ const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
 const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
 const WINDOW_TITLE: PCWSTR = w!("아네모네");
 pub(super) const COMPOSITION_RETRY_TIMER: usize = 0xD2D0;
+pub(super) const CLIPBOARD_DEBOUNCE_TIMER: usize = 0xD2D1;
 
 pub struct App {
     hwnd: HWND,
