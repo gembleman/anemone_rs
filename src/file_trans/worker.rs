@@ -835,3 +835,7 @@ fn send_filename(path: &Path, report: &impl Fn(ProgressEvent)) {
 #[cfg(test)]
 #[path = "../../tests/unit/file_trans/worker.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "benchmark"))]
+#[path = "../../benchmark/file_trans/worker.rs"]
+mod benchmarks;

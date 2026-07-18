@@ -9,7 +9,7 @@ if ($LineCount -lt 1 -or $UniqueLineCount -lt 1 -or $UniqueLineCount -gt $LineCo
 }
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$largeOutputPath = Join-Path $repositoryRoot 'tests\large_japanese_translation_sample.txt'
+$largeOutputPath = Join-Path $repositoryRoot 'benchmark\large_japanese_translation_sample.txt'
 $uniqueOutputPath = Join-Path $repositoryRoot 'benchmark\unique_japanese_translation_sample.txt'
 $encoding = [System.Text.UTF8Encoding]::new($false)
 

@@ -209,3 +209,7 @@ pub(crate) fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, S
 #[cfg(test)]
 #[path = "../../tests/unit/file_trans/mod.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "benchmark"))]
+#[path = "../../benchmark/file_trans/mod.rs"]
+mod benchmarks;
