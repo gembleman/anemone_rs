@@ -106,16 +106,8 @@ impl App {
                 drop(cfg);
                 self.paint()?;
             }
-            // EXIT 처리는 RefCell mutable borrow 가 활성인 상태에서 실행된다.
-            // DestroyWindow 를 직접 부르면 같은 스레드에서 WM_DESTROY 가 동기 send
-            // 되어 wndproc 가 재진입하는데, 그 시점 borrow_mut 이 실패해
-            // dispatch_message 의 WM_DESTROY 분기 (PostQuitMessage 호출처) 를 못 타고
-            // DefWindowProcW 로 빠진다 → 프로세스 hang.
-            //
-            // PostMessageW(WM_CLOSE) 로 메시지 큐에 넣어두면, 현재 wndproc 가
-            // 끝나고 borrow 가 풀린 뒤 메시지 루프의 다음 패스에서 WM_CLOSE →
-            // 기본 DefWindowProcW 처리 → DestroyWindow → WM_DESTROY → PostQuitMessage
-            // 흐름이 정상 작동한다.
+            // DestroyWindow의 동기 재진입은 RefCell borrow와 충돌한다. WM_CLOSE를
+            // queue에 넣어 borrow가 풀린 다음 정상 종료 흐름을 시작한다.
             state::AppCommand::Exit => unsafe {
                 if let Err(e) = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) {
                     tracing::error!("PostMessageW(WM_CLOSE) failed: {e}");
@@ -125,15 +117,12 @@ impl App {
         Ok(())
     }
 
-    /// 대화상자 열기 헬퍼
-    ///
-    /// 이미 열려있으면 포커스, 아니면 새로 생성
+    /// 기존 dialog에는 focus하고 없으면 새로 만든다.
     fn open_dialog_generic<F, E>(hwnd_storage: &mut Option<HWND>, dialog_name: &str, create_fn: F)
     where
         F: FnOnce() -> std::result::Result<HWND, E>,
         E: std::fmt::Display,
     {
-        // 이미 열려있으면 포커스
         if let Some(hwnd) = *hwnd_storage {
             // SAFETY: hwnd was previously returned by a successful dialog creation call.
             // IsWindow validates it is still a valid window before use.
@@ -145,7 +134,6 @@ impl App {
             }
         }
 
-        // 새 대화상자 열기
         match create_fn() {
             Ok(hwnd) => {
                 *hwnd_storage = Some(hwnd);
@@ -201,9 +189,7 @@ impl App {
         });
     }
 
-    /// Apply all config-backed Win32 runtime policy: magnetic hook, click-through,
-    /// topmost, visibility, and clipboard watching. Rendering/text/dialog lifetime is
-    /// intentionally owned by their dedicated handlers.
+    /// Config 기반 magnetic, click-through, topmost, visibility, clipboard 정책을 적용한다.
     pub(super) fn sync_window_state(&mut self) {
         let cfg = self.config.borrow();
         let click_through = cfg.click_through;
@@ -213,9 +199,7 @@ impl App {
         let magnetic_enabled = cfg.magnetic_mode;
         drop(cfg);
 
-        // `magnetic_mode` is a persistent desired state. At startup and after any external
-        // config refresh we try to attach to the current foreground window. If that is not
-        // possible, both the setting and the dialog checkbox are rolled back to disabled.
+        // Magnetic 연결 실패 시 저장값과 checkbox를 모두 비활성화한다.
         let active_before = self.magnetic.is_some();
         if let Err(error) = self.set_magnetic_enabled(magnetic_enabled) {
             tracing::error!("Failed to synchronize magnetic mode: {error}");

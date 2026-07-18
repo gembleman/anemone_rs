@@ -1,7 +1,4 @@
-//! 설정 대화상자
-//!
-//! 탭 기반 설정 대화상자. 외관/표시·윈도우/번역 3개 탭으로 분리.
-//! Win32 SysTabControl32를 사용하여 탭 전환 시 컨트롤을 표시/숨김.
+//! 외관, 창, 번역 탭으로 구성된 Win32 설정 대화상자.
 
 mod ctrl_id;
 mod handlers;
@@ -265,8 +262,7 @@ impl SettingsDialog {
         Ok(hwnd)
     }
 
-    /// Reflect the live magnetic runtime state after the main window accepted or rejected
-    /// a settings request.
+    /// 주 창이 설정 요청을 처리한 뒤 실제 magnetic 상태를 반영한다.
     pub(crate) fn set_magnetic_checked(dialog_hwnd: HWND, enabled: bool) {
         unsafe {
             let _ = CheckDlgButton(
@@ -307,7 +303,7 @@ impl SettingsDialog {
         Some(argb)
     }
 
-    /// WM_DRAWITEM 처리: 색상 버튼에 색상 스왓치 + 텍스트를 그린다
+    /// 색상 버튼에 swatch와 text를 그린다.
     fn draw_color_button(&self, dis: &DRAWITEMSTRUCT) {
         let id = dis.CtlID as u16;
         let Some(argb) = self.color_for_button(id) else {
@@ -443,8 +439,7 @@ impl SettingsDialog {
 
     /// 탭에 따라 다이얼로그 클라이언트 높이를 조정 (빈 공간 최소화)
     fn adjust_dialog_size_for_tab(&mut self, tab: usize) {
-        // 디자인 클라이언트 높이. 닫기 버튼은 target_height - 65 에 배치되므로,
-        // 각 탭 마지막 그룹박스 하단 아래로 닫기 버튼이 오도록 잡는다.
+        // 각 탭의 마지막 group 아래에 닫기 button이 오도록 높이를 잡는다.
         let target_height = match tab {
             TAB_APPEARANCE => 505,
             TAB_DISPLAY => 305,
@@ -474,8 +469,7 @@ impl SettingsDialog {
             let work_width = work.right - work.left;
             let work_height = work.bottom - work.top;
 
-            // 디자인 좌표는 클라이언트 기준. SetWindowPos 는 윈도우 전체 크기를
-            // 받으므로 타이틀/테두리만큼 더해 환산해야 닫기 버튼이 안 잘린다.
+            // Client 디자인 크기를 title/border를 포함한 window 크기로 바꾼다.
             let (_, desired_height) =
                 super::helpers::design_to_window_size(self.hwnd, Self::WIDTH, target_height);
             let needs_scroll = desired_height > work_height;
@@ -489,8 +483,7 @@ impl SettingsDialog {
                 let _ = SetWindowLongPtrW(self.hwnd, GWL_STYLE, new_style as _);
             }
 
-            // 세로 스크롤바가 클라이언트 폭을 잠식하지 않도록 스타일 변경 후
-            // 전체 윈도우 크기를 다시 계산한다.
+            // Scrollbar가 client 폭을 줄이지 않도록 전체 크기를 다시 계산한다.
             let (desired_width, desired_height) =
                 super::helpers::design_to_window_size(self.hwnd, Self::WIDTH, target_height);
             let win_width = desired_width.min(work_width);
@@ -516,8 +509,7 @@ impl SettingsDialog {
                 win_height,
                 SWP_NOZORDER | SWP_FRAMECHANGED,
             );
-            // 탭 컨트롤도 같이 늘리기 (탭 헤더 ~ 닫기 버튼 위까지).
-            // 폭은 리소스와 동일하게 클라이언트 폭 - 좌우 5px = 475.
+            // Tab은 header부터 닫기 button 위까지 늘린다.
             if let Ok(tab_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32) {
                 let _ = SetWindowPos(
                     tab_hwnd,
@@ -529,7 +521,7 @@ impl SettingsDialog {
                     SWP_NOMOVE | SWP_NOZORDER,
                 );
             }
-            // 닫기 버튼 재배치 (다이얼로그 하단). 클라 폭 485 → 우측 정렬 X=370.
+            // 닫기 button을 dialog 오른쪽 아래로 옮긴다.
             if let Ok(close_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
                 let _ = SetWindowPos(
                     close_hwnd,
@@ -584,9 +576,7 @@ impl SettingsDialog {
         }
     }
 
-    /// 현재 보이는 영역 밖에 있는 컨트롤까지 포함해 모든 직접 자식을 이동한다.
-    /// `ScrollWindowEx(SW_SCROLLCHILDREN)`는 스크롤 사각형과 교차하는 자식만
-    /// 옮기므로, 화면 아래에 완전히 가려진 컨트롤에는 사용할 수 없다.
+    /// 화면 밖의 항목도 빠지지 않도록 모든 직접 자식을 이동한다.
     unsafe fn offset_scroll_children(&self, delta: i32) {
         unsafe fn offset(parent: HWND, child: HWND, delta: i32) {
             let mut rect = RECT::default();
@@ -751,12 +741,8 @@ impl SettingsDialog {
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         match msg {
             WM_CTLCOLORSTATIC => {
-                // 탭 컨트롤 본문은 비주얼 스타일이 흰색(COLOR_WINDOW)으로 그리는데
-                // 그 위에 올라간 STATIC/체크박스/라디오 자식은 다이얼로그의 회색
-                // brush(COLOR_BTNFACE)로 칠해져 흰 본문 위 회색 사각형으로 도드라진다.
-                // Settings 의 거의 모든 라벨이 탭 위에 있으므로 일괄 흰 brush 반환.
-                // SAFETY: wparam 은 OS 가 넘긴 유효 HDC. SetBkMode/GetSysColorBrush
-                // 는 표준 GDI 호출.
+                // Tab 본문과 child control 배경을 모두 COLOR_WINDOW로 맞춘다.
+                // SAFETY: wparam은 OS가 전달한 유효 HDC다.
                 unsafe {
                     let hdc = HDC(wparam.0 as *mut _);
                     let _ = SetBkMode(hdc, TRANSPARENT);

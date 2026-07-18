@@ -25,18 +25,15 @@ impl App {
         #[cfg(feature = "benchmark")]
         use super::bench::{PhaseField, phase_now, phase_record};
 
-        // phase 측정 hook 의 시작 시점. recorder 비활성 시 phase_now() 는 0 반환,
-        // phase_record() 는 no-op (None 체크 1 회) — 정상 paint 경로 overhead 거의 0.
+        // Recorder가 꺼져 있으면 phase hook은 사실상 no-op이다.
         #[cfg(feature = "benchmark")]
         let t = phase_now();
-        // 합성 렌더러 lazy init — 첫 paint 시 부착.
-        // hwnd 가 보이는 시점 (`ShowWindow` 이후) 이어야 클라이언트 사이즈가 양수다.
+        // 클라이언트 크기가 생기는 첫 paint에서 합성 렌더러를 붙인다.
         if self.composition.is_none() {
             if self.composition_retry_scheduled {
                 return Ok(());
             }
-            // D2DRenderer 의 factory 를 공유해 합성 경로의 device 를 같은 factory
-            // 위에서 만든다 → brush/geometry/text-layout 의 factory 일치 보장.
+            // D2D factory를 공유해 모든 그리기 자원의 호환성을 보장한다.
             let Some(d2d_renderer) = self.d2d_renderer.as_ref() else {
                 tracing::warn!("paint: d2d_renderer 미초기화 — 합성 렌더러 부착 보류");
                 return Ok(());
@@ -107,9 +104,7 @@ impl App {
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Setup, t);
 
-        // waitable swap chain: 다음 back buffer 가 사용 가능해질 때까지 명시
-        // 대기. UI 스레드를 장시간 막지 않도록 한 프레임만 기다린다. timeout은
-        // paint를 다시 예약하고, API failure는 handle을 포함한 스택을 재생성한다.
+        // 한 프레임만 기다린다. Timeout은 재예약하고 API 오류는 스택을 재생성한다.
         match composition.wait_for_back_buffer(Self::FRAME_WAIT_TIMEOUT_MS) {
             WaitOutcome::Ready => {}
             WaitOutcome::Timeout => {
@@ -139,10 +134,7 @@ impl App {
         // 한 프레임 시작 — brush 캐시 reset + AA 모드.
         renderer.configure_frame(ctx);
 
-        // 배경 클리어. 배경 비활성 시 ARGB=0 으로 완전 투명. DComp 합성
-        // 경로는 hit-testing 이 윈도우 단위라 layered 시절의 "α=1 트릭"
-        // (완전 투명이면 클릭이 통과되지 않음 방지) 은 더 이상 필요/유효하지
-        // 않다 — α 0 픽셀이든 1 픽셀이든 윈도우 사각 전체가 클릭을 잡는다.
+        // 배경 비활성 시 완전 투명. DComp 히트 테스트는 알파와 무관하게 창 단위다.
         let clear_color = if background_visible {
             background_color
         } else {
@@ -192,16 +184,8 @@ impl App {
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Text, t);
 
-        // EndDraw + Present. EndDraw 가 내부적으로 GPU 명령 큐를 flush 하므로
-        // 별도 Flush 호출은 두지 않는다.
-        // sync_interval=0: 응답성 우선 (paint 는 이벤트 기반이라 매 프레임 호출되지
-        // 않으므로 GPU 큐 백프레셔 위험 낮음). baseline 의 UpdateLayeredWindow 도
-        // vsync 미대기였으니 동일 정책.
-        //
-        // device-lost (`D2DERR_RECREATE_TARGET` / `DXGI_ERROR_DEVICE_REMOVED` /
-        // `DXGI_ERROR_DEVICE_RESET`) 감지 시 즉시 종료하고 self.handle_device_lost()
-        // 로 캐시·합성 렌더러를 폐기. 다음 paint 가 lazy-init 분기에서 다시
-        // 만든다.
+        // EndDraw가 flush하므로 바로 Present한다. 이벤트 기반 paint라 vsync는 기다리지 않는다.
+        // Device loss면 캐시와 합성 스택을 버리고 다음 paint에서 다시 만든다.
         if let Err(e) = composition.end_draw() {
             if Self::is_device_lost(&e) {
                 tracing::warn!("DComp end_draw: device lost ({e}), recreating stack");
@@ -231,18 +215,12 @@ impl App {
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Present, t);
 
-        // hit_region 갱신 — `&mut self.d2d_renderer` 와 충돌하지 않도록 본
-        // 블록의 가변 borrow 가 풀린 뒤 별도 호출. `background_visible=true`
-        // 또는 텍스트가 비어 있으면 빈 Vec → WM_NCHITTEST 가 윈도우 사각
-        // 전체를 HTCAPTION 으로 잡는 기존 동작 유지.
+        // 렌더러 borrow가 끝난 뒤 hit region을 갱신한다. 빈 값은 창 전체를 뜻한다.
         self.hit_region.clear();
         if !background_visible && !self.state.current_text.is_empty() {
             let max_width = Self::text_layout_extent(self.state.client_size.width, margin_x);
             let max_height = Self::text_layout_extent(self.state.client_size.height, margin_y);
-            // shadow 가 그림자 방향으로만 확장되므로 양방향 inflate 의 보수적
-            // 상한으로 abs 합. outline 은 텍스트 주변 전 방향이라 그대로 합산.
-            // i32::MIN 에 가까운 값이 들어오면 unsigned_abs() as i32 가
-            // 음수로 뒤집히므로 saturating_abs 로 안전 변환.
+            // Outline과 양방향 shadow 상한을 합산하며 최솟값에서도 포화시킨다.
             let shadow_inflate = if render_style.shadow_enabled {
                 render_style
                     .shadow_offset_x
@@ -279,11 +257,7 @@ impl App {
         Ok(())
     }
 
-    /// end_draw/present 의 에러가 D2D/DXGI 디바이스 손실인지 판정.
-    ///
-    /// 손실 시 D2D context 와 swap chain 의 모든 GPU 객체가 무효 — 같은
-    /// device 위에서 재시도해 봐야 같은 에러가 반복된다. 새 device 와
-    /// swap chain 으로 스택을 통째로 다시 만들어야 한다.
+    /// EndDraw/Present 오류가 렌더 스택 재생성이 필요한 device loss인지 판정한다.
     fn is_device_lost(e: &Error) -> bool {
         let code = e.code();
         code == D2DERR_RECREATE_TARGET
@@ -291,10 +265,7 @@ impl App {
             || code == DXGI_ERROR_DEVICE_RESET
     }
 
-    /// device-lost 복구: 합성 렌더러를 폐기하고 D2D 캐시(brush/text/outline)
-    /// 를 비운다. 다음 paint 의 lazy-init 분기가 새 device 위에서
-    /// `CompositionRenderer` 를 다시 만들고, D2DRenderer 는 새 RT 에
-    /// 맞춰 캐시를 재구축한다.
+    /// Device loss 복구를 위해 합성 렌더러와 장치 종속 캐시를 비운다.
     fn handle_device_lost(&mut self) {
         self.composition = None;
         if let Some(d2d) = self.d2d_renderer.as_mut() {
@@ -303,17 +274,14 @@ impl App {
     }
 
     pub(super) fn resize(&mut self, width: i32, height: i32) -> Result<()> {
-        // 0 사이즈 (minimize) 는 paint/resize 모두 스킵 — DXGI ResizeBuffers 가
-        // 0 사이즈를 거부하며, 어차피 그릴 면적도 없다.
+        // DXGI가 거부하는 최소화 상태의 0 크기는 무시한다.
         let Some(size) = state::ClientSize::drawable(width, height) else {
             return Ok(());
         };
 
         self.state.client_size = size;
 
-        // 합성 렌더러가 이미 부착된 상태면 swap chain 도 따라 키운다.
-        // 첫 paint 전 (lazy init 직전) 의 WM_SIZE 는 self.composition 이 None 이라
-        // 자연 무시된다 — 다음 paint 의 lazy init 이 새 사이즈로 swap chain 을 만든다.
+        // 첫 paint 전이면 lazy init이 현재 크기로 만들고, 이후에는 swap chain을 조정한다.
         let resize_failed = if let Some(composition) = self.composition.as_mut() {
             match composition.resize(width as u32, height as u32) {
                 Ok(()) => false,

@@ -1,14 +1,4 @@
-//! 번역 엔진 모듈
-//!
-//! 지원 엔진:
-//! - EzTrans (eztrans-rs 라이브러리 사용)
-//! - Google Translate (HTTPS API)
-//! - DeepL (HTTPS API)
-//! - Papago (Naver HTTPS API)
-//!
-//! 비동기 번역 지원:
-//! - `worker::TranslationDispatch`: 프로세스 단일 워커 스레드 + tokio 런타임
-//! - 호출자별 불투명 대상 라우팅. 완료 통지 방식은 UI 어댑터가 제공
+//! EzTrans, Google, DeepL, Papago, LLM 번역 엔진과 비동기 dispatch를 제공한다.
 
 pub mod deepl;
 mod eztrans;
@@ -282,8 +272,7 @@ impl std::str::FromStr for TranslationEngine {
     }
 }
 
-/// Ncloud Papago Text Translation의 29개 지원 언어쌍.
-/// 공식 표가 양방향 쌍으로 정의되어 있으므로 순서를 정규화하지 않고 대칭 검사한다.
+/// Ncloud Papago의 양방향 지원 언어쌍.
 fn papago_supports_pair(source: Language, target: Language) -> bool {
     let paired = |anchor, others: &[Language]| {
         (source == anchor && others.contains(&target))
@@ -556,17 +545,12 @@ pub mod lang_utils {
 /// 번역 결과 타입
 pub type TranslationResult = Result<String, TranslationError>;
 
-/// EzTrans 인스턴스 보관용 글로벌 매니저.
-///
-/// EzTrans 는 외부 32-bit DLL 을 mmap 하는 무거운 객체라서 프로세스당 하나만
-/// 유지한다. 다른 엔진(Google/DeepL/Papago/LLM)은 stateless 한 HTTP 호출이라
-/// 보관할 필요가 없다.
+/// 무거운 32-bit EzTrans DLL 인스턴스를 하나만 유지하는 전역 관리자.
 struct EzTransState {
     engine: Option<EzTransTranslator>,
-    /// 현재 로드된 엔진의 (dll_path, dat_path). 동일하면 재로드 스킵, 다르면 폐기 후 재로드.
+    /// 현재 DLL/data 경로. 같으면 재사용하고 다르면 다시 로드한다.
     loaded_paths: Option<(String, String)>,
-    /// `SetDefaultDllDirectories(... USER_DIRS)` 환경에서 EzTrans DLL 의 같은 폴더
-    /// 의존성을 찾기 위해 등록한 DLL 검색 폴더들.
+    /// EzTrans 인접 DLL 탐색을 위해 등록한 검색 경로.
     registered_dll_dirs: Vec<String>,
 }
 
@@ -579,11 +563,7 @@ impl EzTransState {
         }
     }
 
-    /// EzTrans 초기화.
-    ///
-    /// 동일한 경로로 이미 초기화되어 있으면 스킵. 경로가 바뀌었으면 기존 엔진을
-    /// 폐기하고 새 경로로 재로드한다. 사용자가 설정 다이얼로그에서 dll/dat 경로를
-    /// 바꿔도 즉시 반영되도록 하기 위함.
+    /// EzTrans를 초기화하거나 경로가 바뀌면 다시 로드한다.
     pub fn init(&mut self, dll_path: &str, dat_path: &str) -> Result<(), String> {
         if let Some((loaded_dll, loaded_dat)) = &self.loaded_paths {
             if loaded_dll == dll_path && loaded_dat == dat_path && self.engine.is_some() {
@@ -736,10 +716,7 @@ pub fn prepare_eztrans(dll_path: &str, dat_path: &str) -> Result<(), String> {
     eztrans_actor().init(dll_path, dat_path)
 }
 
-/// EzTrans 로 번역 수행 (워커 스레드에서 호출용).
-///
-/// 글로벌 매니저의 EzTrans 인스턴스를 사용한다. 초기화되어 있지 않으면
-/// `EngineNotInitialized` 를 돌려준다.
+/// 전역 EzTrans 인스턴스로 번역하며 미초기화 시 `EngineNotInitialized`를 반환한다.
 pub fn translate_with_eztrans(text: &str, source: Language, target: Language) -> TranslationResult {
     eztrans_actor().translate(text, source, target)
 }

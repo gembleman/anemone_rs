@@ -1,7 +1,4 @@
-//! 색상 선택 대화상자
-//!
-//! CHOOSECOLOR 다이얼로그에 알파 채널(불투명도) 컨트롤을 추가한 확장 버전.
-//! 실시간으로 색상 변경사항을 메인 윈도우에 반영할 수 있도록 지원.
+//! Alpha control과 실시간 callback을 추가한 `CHOOSECOLOR` dialog.
 
 use std::cell::RefCell;
 use std::mem::zeroed;
@@ -78,8 +75,7 @@ pub struct ColorDialog;
 impl ColorDialog {
     /// 색상 선택 대화상자 표시
     pub fn show(hwnd: HWND, config: ColorDialogConfig) -> Option<ColorResult> {
-        // SAFETY: hwnd is a valid window handle from the caller. show_impl handles all
-        // Win32 dialog setup with valid parameters.
+        // SAFETY: 호출자가 유효한 hwnd를 제공한다.
         unsafe { Self::show_impl(hwnd, config) }
     }
 
@@ -96,10 +92,7 @@ impl ColorDialog {
     }
 
     unsafe fn show_impl(hwnd: HWND, config: ColorDialogConfig) -> Option<ColorResult> {
-        // SAFETY: hwnd is a valid window handle from the caller. CHOOSECOLORW is initialized
-        // with correct lStructSize, valid owner handle, and valid custom colors pointer.
-        // The hook procedure pointer is a valid extern "system" fn. zeroed() produces a
-        // valid default state for the CHOOSECOLORW struct.
+        // SAFETY: 구조체 크기, owner, color buffer와 hook pointer가 모두 유효하다.
         unsafe {
             let alpha = ((config.initial_color >> 24) & 0xFF) as i32;
             let r = ((config.initial_color >> 16) & 0xFF) as u8;
@@ -172,9 +165,7 @@ impl ColorDialog {
 
     /// 다이얼로그에서 ARGB 색상 읽기
     fn read_dialog_argb(hdlg: HWND) -> u32 {
-        // SAFETY: hdlg is a valid dialog handle provided by the CHOOSECOLOR hook. The
-        // control IDs (COLOR_RED/GREEN/BLUE_EDIT, IDC_ALPHA_EDIT) are valid dialog item
-        // IDs within this dialog. The buffer is stack-allocated with sufficient size.
+        // SAFETY: hook의 dialog와 control ID가 유효하고 buffer가 충분하다.
         unsafe {
             let mut buf = [0u16; 32];
 
@@ -203,11 +194,7 @@ impl ColorDialog {
     }
 
     /// CHOOSECOLOR 훅 프로시저
-    // SAFETY: This is a CHOOSECOLOR hook procedure called by the system. hdlg is a valid
-    // dialog handle provided by Windows. All child window creation uses valid parent handle
-    // and module instance. Pointer casts for HMENU IDs and RECT* from lparam are valid per
-    // the Win32 hook contract. Thread-local HOOK_CONTEXT access is safe because the dialog
-    // runs on the same thread that set it up.
+    // SAFETY: Windows가 유효한 dialog와 message pointer로 같은 thread에서 호출한다.
     unsafe extern "system" fn hook_proc(
         hdlg: HWND,
         msg: u32,
@@ -250,9 +237,7 @@ impl ColorDialog {
                         None,
                     );
 
-                    // 라벨 생성 — 트랙바·에디트(X=540, W=25, 중심 552) 기준으로 가운데 정렬.
-                    // 기존 X=528, W=150 은 트랙바보다 좌측으로 12px 튀어나오고 우측으로 +103px
-                    // 넘어가 다이얼로그 우측 경계(확장 +60px 만) 를 침범하던 결함을 해소.
+                    // Trackbar와 edit 중심에 맞춘 label.
                     let label = CreateWindowExW(
                         WINDOW_EX_STYLE::default(),
                         w!("STATIC"),

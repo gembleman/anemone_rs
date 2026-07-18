@@ -1,6 +1,4 @@
-//! 폰트 선택 대화상자
-//!
-//! CHOOSEFONT 다이얼로그 래퍼.
+//! `CHOOSEFONT` dialog wrapper.
 
 use std::mem::zeroed;
 
@@ -88,16 +86,12 @@ pub struct FontDialog;
 impl FontDialog {
     /// 폰트 선택 대화상자 표시
     pub fn show(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> {
-        // SAFETY: hwnd is a valid window handle from the caller. show_impl handles all
-        // Win32 dialog setup with valid parameters.
+        // SAFETY: 호출자가 유효한 hwnd를 제공한다.
         unsafe { Self::show_impl(hwnd, config) }
     }
 
     unsafe fn show_impl(hwnd: HWND, config: FontDialogConfig) -> Option<FontResult> {
-        // SAFETY: hwnd is a valid window handle. CHOOSEFONTW is initialized with correct
-        // lStructSize, valid owner handle, and valid lpLogFont pointer to stack-allocated
-        // LOGFONTW. zeroed() produces valid default state. The hook procedure pointer
-        // (if set) is a valid extern "system" fn.
+        // SAFETY: 구조체 크기, owner, stack LOGFONT와 hook pointer가 유효하다.
         unsafe {
             let mut lf: LOGFONTW = zeroed();
 
@@ -148,10 +142,7 @@ impl FontDialog {
     }
 
     /// WS_EX_NOACTIVATE 훅 프로시저
-    // SAFETY: This is a CHOOSEFONT hook procedure called by the system. hdlg is a valid
-    // dialog handle provided by Windows. GetWindowLongW/SetWindowLongW use the valid hdlg.
-    // The RECT pointer from lparam in WM_MOVING/WM_SIZING is valid per the Win32 contract.
-    // Null check is performed before dereferencing.
+    // SAFETY: Windows가 유효한 dialog와 message pointer로 호출하며 null을 확인한다.
     unsafe extern "system" fn hook_proc_noactivate(
         hdlg: HWND,
         msg: u32,

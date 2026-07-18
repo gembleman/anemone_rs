@@ -1,10 +1,4 @@
-//! paint() 마이크로벤치마크
-//!
-//! `ANEMONE_BENCH_PAINT=<N>` 환경변수를 설정하면 앱 시작 시 paint() 본체를
-//! N 회 반복 측정하여 평균/min/p50/max 를 tracing 으로 출력한다. D2D 합성
-//! 경로 재작성 (HwndRT / DComp) 결정을 위한 baseline 측정용.
-//!
-//! `next_steps.md` 1 항 권장 절차에 대응.
+//! 환경 변수로 제어하는 `paint()` 마이크로벤치마크.
 
 use std::time::{Duration, Instant};
 
@@ -25,8 +19,7 @@ impl BenchAccumulator {
         self.samples.push(elapsed);
     }
 
-    /// 통계 출력 — tracing 으로 로그하고, GUI 서브시스템이라 콘솔이 없어도
-    /// 결과를 잃지 않도록 실행파일 옆 `bench_paint.log` 에 append 한다.
+    /// 통계를 tracing과 실행 파일 옆 `bench_paint.log`에 기록한다.
     pub fn report(&mut self, label: &str) {
         if self.samples.is_empty() {
             tracing::info!("[bench {label}] (샘플 없음)");
@@ -81,14 +74,9 @@ pub fn paint_bench_iters() -> Option<usize> {
     if n == 0 { None } else { Some(n) }
 }
 
-/// paint() 내부의 phase 별 비용을 누적하는 thread-local 슬롯.
+/// 활성화된 동안 `paint()` 단계별 시간을 누적하는 thread-local 슬롯.
 ///
-/// `BenchPhaseRecorder::activate()` 로 켜진 동안에만 paint() 코드의 hook
-/// 지점 (`record_phase!`) 이 실제 측정을 수행하고, 비활성 시에는 None 체크
-/// 1 회 + early return 으로 overhead 가 거의 0 이다. 정상 운용 paint 경로에
-/// 이 인프라가 끼어들지 않게 하는 게 핵심.
-///
-/// **phase 구성 (정의 순서)**:
+/// 단계 순서:
 /// - `lazy_init` — CompositionRenderer 첫 부착 (정상 케이스는 0)
 /// - `swap_chain_wait` — frame latency wait (waitable swap chain)
 /// - `setup` — config 읽기 + render style 준비
@@ -176,7 +164,7 @@ pub fn phase_end() -> Option<PhaseRecord> {
     PHASE_RECORDER.with(|cell| cell.borrow_mut().take())
 }
 
-/// hook 지점에서 호출. recorder 가 활성화된 동안만 측정을 수행한다.
+/// 활성 recorder에 직전 시점 이후의 경과 시간을 기록한다.
 ///
 /// 사용 패턴:
 /// ```ignore
@@ -208,8 +196,7 @@ pub fn phase_record(field: PhaseField, since: Option<Instant>) -> Option<Instant
     })
 }
 
-/// detailed phase 벤치 누적기. 한 번의 paint 마다 각 phase 시간을 별도 vec 에
-/// 모아 paint 전체 분포와 별개로 phase 별 통계를 낼 수 있게 한다.
+/// 전체 paint와 각 단계의 분포를 따로 모은다.
 pub struct PhasedBenchAccumulator {
     pub lazy_init: BenchAccumulator,
     pub swap_chain_wait: BenchAccumulator,
@@ -267,29 +254,17 @@ impl PhasedBenchAccumulator {
     }
 }
 
-/// `ANEMONE_BENCH_PAINT_DETAILED` 환경변수에서 반복 횟수를 읽는다. 미설정/0 이면 None.
+/// 상세 벤치 반복 횟수를 읽는다. 미설정/0이면 `None`이다.
 ///
-/// `ANEMONE_BENCH_PAINT` 와 동시에 설정되면 detailed 측정만 수행한다 (이쪽이
-/// 더 많은 정보를 제공하므로). detailed 측정은 paint() 내부 hook 의 RefCell
-/// borrow + thread_local 접근 overhead 가 있어 paint 전체 시간 자체는 일반
-/// bench 보다 약간 더 느리게 측정될 수 있다 — phase 별 비율 비교용으로만
-/// 해석해야 한다.
+/// 일반 벤치와 함께 설정하면 상세 벤치만 수행한다. Hook 오버헤드가 있으므로
+/// 상세 벤치의 전체 시간은 단계별 비율 비교에만 사용한다.
 pub fn paint_bench_detailed_iters() -> Option<usize> {
     let raw = std::env::var("ANEMONE_BENCH_PAINT_DETAILED").ok()?;
     let n: usize = raw.trim().parse().ok()?;
     if n == 0 { None } else { Some(n) }
 }
 
-/// 벤치 측정 시 outline/shadow 를 강제 비활성화한다. `text`/`end_draw`
-/// 비용의 출처가 outline/shadow geometry 인지 텍스트 본문 (`DrawTextLayout`)
-/// 인지 분리 측정하기 위한 토글.
-///
-/// 효과:
-/// - `style.outline1_size = 0`
-/// - `style.outline2_size = 0`
-/// - `style.shadow_enabled = false`
-///
-/// 정상 동작 paint 에는 영향 없음 — bench 함수 내부에서만 임시 override.
+/// 상세 벤치에서 outline과 shadow를 꺼 본문 렌더링 비용을 분리한다.
 pub fn bench_disable_outline() -> bool {
     matches!(
         std::env::var("ANEMONE_BENCH_PAINT_NO_OUTLINE")
@@ -299,17 +274,7 @@ pub fn bench_disable_outline() -> bool {
     )
 }
 
-/// 벤치 측정 시 매 iteration 마다 텍스트를 살짝 바꿔 outline 비트맵 /
-/// layout / outline geometry 캐시 (항목 8, 10) 를 강제 miss 시킨다. 항목
-/// 10 알려진 한계 — "텍스트가 ms 단위로 폭주 변경되면 매 paint 가 캐시
-/// miss 가 되어 baseline 보다 느려질 위험" — 의 실측 검증용.
-///
-/// 효과 (`run_paint_bench_detailed` 측정 루프 안에서):
-/// - 매 iteration 진입 직전 `current_text` 끝에 카운터 (`#0`, `#1`, …)
-///   를 붙여 캐시 키를 매번 다르게 만든다.
-/// - 측정 종료 후 원래 텍스트로 복구한다.
-///
-/// 정상 paint 경로는 무변경 — bench 함수 안에서만 임시 mutate.
+/// 상세 벤치에서 매회 텍스트를 바꿔 렌더링 캐시 miss 비용을 측정한다.
 pub fn bench_force_cache_miss() -> bool {
     matches!(
         std::env::var("ANEMONE_BENCH_PAINT_CACHE_MISS")

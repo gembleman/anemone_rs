@@ -71,10 +71,7 @@ fn reentry_policy(msg: u32, taskbar_created_msg: u32) -> ReentryPolicy {
 }
 
 impl App {
-    /// WndProc에서 호출되는 메시지 디스패처
-    ///
-    /// `Some(LRESULT)`를 반환하면 해당 값을 wndproc 반환값으로 사용.
-    /// `None`을 반환하면 DefWindowProcW로 위임.
+    /// 처리 결과를 반환하거나 `None`으로 `DefWindowProcW`에 위임한다.
     ///
     /// # Safety
     /// Win32 메시지 파라미터가 유효해야 한다.
@@ -85,8 +82,7 @@ impl App {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<LRESULT> {
-        // SAFETY: All Win32 API calls use valid parameters from the system-provided
-        // hwnd/wparam/lparam. Pointer casts are valid for their respective message types.
+        // SAFETY: system이 message별로 유효한 hwnd와 인자를 제공한다.
         unsafe {
             match msg {
                 _ if self.taskbar_created_msg != 0 && msg == self.taskbar_created_msg => {
@@ -95,9 +91,7 @@ impl App {
                 }
                 WM_DESTROY => {
                     DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().clear());
-                    // 클립보드 자동 번역으로 등록된 라우팅 슬롯 정리. shutdown()
-                    // 이전 in-flight 응답이 죽은 HWND 로 PostMessage 시도하는 것을
-                    // 막는다. (PostMessage 자체는 안전하지만 silent fail.)
+                    // 죽은 hwnd로 완료 message를 보내지 않도록 routing을 먼저 해제한다.
                     unregister_translation_hwnd(hwnd);
                     PostQuitMessage(0);
                     Some(LRESULT(0))
@@ -122,9 +116,7 @@ impl App {
                 }
 
                 WM_DPICHANGED => {
-                    // Per-Monitor V2: 모니터 간 이동 또는 OS DPI 변경 시 호출된다.
-                    // 자식 컨트롤이 없는 합성 윈도우이므로 권장 RECT 로 위치/크기만 갱신.
-                    // 위치/크기 변경은 WM_SIZE 를 유발해 거기서 swap chain resize + paint 가 이어진다.
+                    // 권장 RECT 적용 후 WM_SIZE가 swap chain resize와 paint를 잇는다.
                     Self::apply_dpi_rect(hwnd, lparam);
                     self.sync_client_size(hwnd);
                     Some(LRESULT(0))
@@ -271,9 +263,7 @@ impl App {
         DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().push_back(message));
     }
 
-    /// Drain only after the current `RefMut<App>` has been dropped. Each deferred message owns
-    /// all of its parameters; messages whose LPARAM points to temporary system memory are never
-    /// put in this queue.
+    /// `RefMut<App>` 해제 후, 임시 system pointer를 포함하지 않은 message만 처리한다.
     pub(super) fn drain_deferred_messages(app: &Rc<RefCell<App>>) {
         while let Some(message) = DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().pop_front()) {
             let Ok(mut app_ref) = app.try_borrow_mut() else {

@@ -84,9 +84,7 @@ impl App {
     }
 
     unsafe fn run_inner() -> Result<()> {
-        // SAFETY: All Win32 API calls use valid parameters; GetModuleHandleW(None) returns the
-        // current process handle, CreateWindowExW creates windows with valid class/instance,
-        // and the message loop runs on the main thread as required by Win32.
+        // SAFETY: 유효한 class/instance로 창을 만들고 주 thread에서 message loop를 돈다.
         unsafe {
             let instance = GetModuleHandleW(None)?;
 
@@ -114,10 +112,7 @@ impl App {
                 main: None,
             };
 
-            // 메인 윈도우 생성 (DComp 합성 경로).
-            // - WS_EX_NOREDIRECTIONBITMAP: DWM 이 redirection surface 미할당 → DComp visual 노출
-            // - WS_EX_LAYERED 와 상호 배타. layered 시절의 픽셀 단위 알파는 swap chain
-            //   premultiplied alpha + DComp 가 동등 표현 제공.
+            // Redirection surface 없이 DComp premultiplied-alpha visual을 노출한다.
             let hwnd = CreateWindowExW(
                 WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 CLASS_NAME,
@@ -144,8 +139,6 @@ impl App {
 
             // 설정 로드 (파일이 없으면 기본값)
             let config = Rc::new(RefCell::new(Config::load_or_default()));
-
-            // 번역 디스패치는 프로세스 전역 싱글톤. 첫 요청 시 자동 spawn.
 
             let app = Rc::new(RefCell::new(App {
                 hwnd,
@@ -179,10 +172,7 @@ impl App {
                 *cell.borrow_mut() = Some(app.clone());
             });
 
-            // 초기화 — 트레이/핫키 등 paint 와 무관한 셋업.
-            // 합성 경로는 client size > 0 (윈도우가 보인 후) 에서만 부착 가능하므로
-            // 첫 paint 는 ShowWindow 이후로 미룬다. 더블버퍼/UpdateLayeredWindow
-            // 의존이 사라져 ShowWindow 전에 픽셀을 채울 필요가 없다.
+            // Tray와 hotkey를 준비하고 합성 renderer는 표시 후 첫 paint에서 붙인다.
             let should_start_clipboard = {
                 let mut app_ref = app.borrow_mut();
 
@@ -201,9 +191,7 @@ impl App {
             };
             Self::drain_deferred_messages(&app);
 
-            // AddClipboardFormatListener can synchronously re-enter wndproc while the watcher
-            // is mutably borrowed through App. The common deferred-message queue captures any
-            // owned app message and is drained immediately after this borrow ends.
+            // Listener 등록 중 재진입한 message는 mutable borrow가 끝난 뒤 처리한다.
             if should_start_clipboard {
                 let mut app_ref = app.borrow_mut();
                 app_ref.clipboard.start();
@@ -212,16 +200,14 @@ impl App {
 
             {
                 let mut app_ref = app.borrow_mut();
-                // Apply persisted runtime policy before the main window can become the
-                // foreground target itself. Visibility is applied by sync_window_state().
+                // 주 창이 foreground가 되기 전에 저장된 runtime 정책을 적용한다.
                 app_ref.sync_window_state();
                 if let Err(e) = app_ref.paint() {
                     tracing::warn!("initial paint failed: {e}");
                 }
                 #[cfg(feature = "benchmark")]
                 {
-                    // 벤치마크 모드: 환경변수로 켜진 경우 paint() N 회 측정.
-                    // detailed 모드가 켜져 있으면 그쪽이 우선 (phase 정보 더 많음).
+                    // 환경 변수로 켠 benchmark는 상세 측정을 우선한다.
                     let ran_bench = if let Some(iters) = bench::paint_bench_detailed_iters() {
                         app_ref.run_paint_bench_detailed(iters);
                         true
@@ -232,9 +218,7 @@ impl App {
                         false
                     };
 
-                    // 벤치 측정 후에는 메시지 루프에 진입하지 않고 즉시 종료한다.
-                    // (벤치는 일회성 측정이므로 GUI 를 띄워둘 이유가 없음 — 외부에서
-                    // taskkill 로 죽일 필요 없이 프로세스가 스스로 정리하고 끝난다.)
+                    // Benchmark 뒤에는 message loop 없이 종료한다.
                     if ran_bench {
                         PostQuitMessage(0);
                     }
@@ -243,8 +227,7 @@ impl App {
             Self::drain_deferred_messages(&app);
             let _ = UpdateWindow(hwnd);
 
-            // 릴리스 smoke test가 전체 GUI 초기화와 데이터 파일 생성을 검증한 뒤
-            // 사용자 상호작용 없이 정상 종료할 수 있게 한다.
+            // Release smoke test는 GUI 초기화 뒤 자동 종료한다.
             if std::env::var_os("ANEMONE_SMOKE_EXIT").as_deref() == Some(std::ffi::OsStr::new("1"))
             {
                 PostQuitMessage(0);
@@ -262,8 +245,7 @@ impl App {
                     tracing::error!("GetMessageW failed: {error}");
                     return Err(error);
                 }
-                // 리소스 기반 모델리스 창의 Tab/Shift+Tab/기본 버튼 처리를
-                // 다이얼로그 매니저에 먼저 맡긴다.
+                // Modeless dialog가 keyboard navigation을 먼저 처리한다.
                 if dispatch_resource_dialog_message(&msg) {
                     continue;
                 }
@@ -276,9 +258,7 @@ impl App {
     }
 
     fn register_class(instance: HMODULE, class_name: PCWSTR, wndproc: WNDPROC) -> Result<()> {
-        // SAFETY: instance is a valid module handle from GetModuleHandleW, class_name is a
-        // static wide string, and wndproc is a valid function pointer. RegisterClassExW is
-        // called with a properly initialized WNDCLASSEXW struct.
+        // SAFETY: module, static class name, wndproc와 WNDCLASSEXW가 유효하다.
         unsafe {
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,

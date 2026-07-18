@@ -1,11 +1,5 @@
-//! 자석 모드
-//!
-//! 게임 윈도우에 부착되어 함께 이동하는 기능.
-//! WinEvent 훅을 사용하여 타겟 윈도우의 위치 변화를 감지.
-//!
-//! 단일 thread_local `MagneticState` 가 진리의 원천. WinEvent 콜백은
-//! `WINEVENT_OUTOFCONTEXT` 로 등록되어 등록 스레드(메인 UI 스레드)에서만
-//! 호출되므로 thread_local 접근이 안전하다.
+//! WinEvent hook으로 주 창을 foreground target에 붙여 이동한다.
+//! Callback은 등록 UI thread에서만 실행되므로 상태는 thread-local이다.
 
 use std::cell::RefCell;
 use std::ptr;
@@ -77,8 +71,7 @@ impl MagneticManager {
             });
         });
 
-        // SAFETY: SetWinEventHook is called with valid event range and a valid callback function
-        // pointer. WINEVENT_OUTOFCONTEXT means the callback runs in our thread context.
+        // SAFETY: event 범위와 callback이 유효하며 callback은 등록 thread에서 실행된다.
         unsafe {
             self.event_hook = SetWinEventHook(
                 EVENT_SYSTEM_MINIMIZESTART,
@@ -122,8 +115,7 @@ impl MagneticManager {
 
     /// 현재 위치로 오프셋 계산
     fn calculate_offset(&self, target: HWND) -> Result<(i32, i32)> {
-        // SAFETY: target and self.main_hwnd are valid window handles. GetWindowRect writes
-        // to properly initialized RECT structs.
+        // SAFETY: 두 hwnd와 출력 RECT가 유효하다.
         unsafe {
             let mut target_rect = RECT::default();
             let mut main_rect = RECT::default();
@@ -139,9 +131,7 @@ impl MagneticManager {
     }
 
     /// WinEvent 콜백
-    // SAFETY: This is a WinEvent callback registered via SetWinEventHook. The system
-    // guarantees valid parameters. Thread-local data is accessed only from the registering
-    // thread (WINEVENT_OUTOFCONTEXT).
+    // SAFETY: system이 유효한 인자를 등록 thread에 전달한다.
     unsafe extern "system" fn win_event_proc(
         _hook: HWINEVENTHOOK,
         event: u32,

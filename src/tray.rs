@@ -77,11 +77,10 @@ impl TrayIcon {
     }
 }
 
-/// `NOTIFYICONDATAW.szTip` ([u16; 128]) 채우기. 항상 null 종결을 보장한다.
+/// `szTip`을 null-terminated UTF-16으로 채운다.
 ///
 /// # Safety
-/// `ptr` 은 `[u16; 128]` 을 가리키는 유효한 쓰기 가능 포인터여야 한다. 정렬은
-/// 요구하지 않는다 (packed struct 필드 대응을 위해 `write_unaligned` 사용).
+/// `ptr`은 쓰기 가능한 `[u16; 128]`을 가리켜야 하며 정렬은 필요 없다.
 unsafe fn set_sz_tip(ptr: *mut [u16; 128], tip: &str) {
     const CAP: usize = 128;
     let base = ptr as *mut u16;

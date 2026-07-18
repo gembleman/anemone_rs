@@ -1,9 +1,4 @@
-//! LLM 기반 번역 엔진
-//!
-//! 백엔드별 모듈:
-//! - `openai_compat`: OpenAI 호환 chat completions (OpenAI, Grok, OpenRouter)
-//! - `anthropic`: Anthropic Claude messages API
-//! - `gemini`: Google AI Studio generateContent
+//! OpenAI 호환, Anthropic, Gemini 기반 LLM 번역 engine.
 
 pub mod anthropic;
 pub mod gemini;

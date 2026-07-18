@@ -1,14 +1,7 @@
-//! 번역 디스패치 (프로세스 단일 워커)
+//! 단일 worker thread에서 비동기 번역을 실행하는 platform 독립 dispatcher.
 //!
-//! 별도 스레드에서 tokio 런타임을 실행하여 async 번역을 수행한다.
-//! UI 스레드를 블로킹하지 않고 주입된 완료 알림 어댑터로 결과를 전달한다.
-//!
-//! 구조:
-//! - 프로세스 전역에 워커 스레드/tokio 런타임이 하나만 존재한다.
-//! - 런타임의 명령 루프는 대상별 task를 관리한다. 같은 대상의 새 요청은 이전
-//!   future를 abort하고 서로 다른 대상은 동시에 실행한다.
-//! - 워커는 응답 도착 시 대상별 원자 슬롯으로 stale 응답을 거른 뒤 notifier를 깨운다.
-//! - UI 핸들 및 네이티브 메시지 게시 방식은 이 모듈 밖의 어댑터가 소유한다.
+//! 대상별 최신 요청만 유지하고 서로 다른 대상은 병렬 실행한다. 완료 통지는 외부
+//! adapter에 위임하므로 UI handle이나 native message는 다루지 않는다.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -41,10 +34,7 @@ pub enum DeepLStrategy {
     RoundRobin,
 }
 
-/// 엔진별 자격증명
-///
-/// 엔진이 늘어나도 `TranslationRequest`에 옵션 필드가 폭발하지 않도록 enum으로 묶는다.
-/// 잘못된 조합(예: EzTrans에 API 키 전달)은 매칭 패턴 단계에서 명확히 드러난다.
+/// 엔진과 자격 증명의 잘못된 조합을 막는 요청별 인증 정보.
 #[derive(Clone, Default)]
 pub enum EngineCredentials {
     /// 자격증명 불필요 (EzTrans, Google 비공식)
@@ -83,11 +73,7 @@ impl std::fmt::Debug for EngineCredentials {
     }
 }
 
-/// 번역 요청
-///
-/// `text` 는 `Arc<str>` — 큐를 가로지를 때 본문이 한 번도 복제되지 않는다.
-/// EzTrans 의 `spawn_blocking` 같이 본문을 소유해야 하는 경로에서도 `clone()`
-/// 은 refcount 증가만 일으켜 0-alloc.
+/// 큐와 blocking task가 원문을 복사 없이 공유하는 번역 요청.
 #[derive(Debug, Clone)]
 pub struct TranslationRequest {
     /// 요청 ID (응답과 매칭용; 디스패치가 할당)
@@ -138,9 +124,7 @@ struct DispatchJob {
     cancellation: watch::Receiver<u64>,
 }
 
-/// 대상 ID 재사용과 요청 취소를 함께 처리하는 등록 세대.
-/// unregister 후 같은 ID가 다시 등록되면 새로운 `Arc<RouteSlot>`이 생기므로
-/// 이전 소비자의 작업은 새 소비자에 결과를 전달할 수 없다.
+/// 대상 ID를 재등록해도 이전 작업이 새 소비자에게 전달되지 않게 하는 등록 세대.
 struct RouteSlot {
     latest_id: Arc<AtomicU64>,
     cancellation: watch::Sender<u64>,
@@ -167,14 +151,10 @@ impl RouteSlot {
     }
 }
 
-/// 내부 상태
-///
-/// stale 응답 폐기는 `latest_snapshot` 의 원자 슬롯이 담당하므로 여기서는
-/// 단조 증가하는 ID 카운터와 아직 take 되지 않은 응답 큐만 들고 있다.
+/// 요청 ID와 아직 소비하지 않은 응답을 보관하는 내부 상태.
 struct DispatchState {
     next_id: u64,
-    /// FIFO 응답 큐. push_back / pop_front amortized O(1). 응답 폭주 시 앞쪽
-    /// drain 비용도 일반 Vec 보다 가볍다.
+    /// 아직 소비하지 않은 FIFO 응답.
     pending: VecDeque<PendingEntry>,
 }
 
@@ -229,8 +209,7 @@ impl DispatchState {
 ///
 struct DispatchShared {
     state: Mutex<DispatchState>,
-    /// 대상별 현재 등록 세대. map 잠금은 응답 저장/완료 통지와 unregister를
-    /// 원자화하는 장벽으로도 사용한다.
+    /// 대상별 등록 세대. Lock은 응답 저장과 unregister 사이의 장벽이기도 하다.
     routes: Mutex<HashMap<usize, Arc<RouteSlot>>>,
     notifier: Arc<dyn CompletionNotifier>,
 }
@@ -272,8 +251,7 @@ impl DispatchShared {
 
 /// 프로세스 단일 디스패치
 pub struct TranslationDispatch {
-    /// `Option` 인 이유: shutdown 시 `take()` 로 drop 시켜 채널을 닫고
-    /// 워커 스레드의 `rx.recv()` 가 `Err` 를 반환해 자연 종료되도록 한다.
+    /// Shutdown 시 `take()`하여 channel을 닫는다.
     sender: Mutex<Option<Sender<DispatchJob>>>,
     shared: Arc<DispatchShared>,
     /// 워커 스레드 핸들 (shutdown 시 join 용)
@@ -286,7 +264,7 @@ impl TranslationDispatch {
         let shared = Arc::new(DispatchShared::new(notifier));
         let worker_shared = shared.clone();
 
-        // shutdown() 이 join 할 수 있도록 핸들 보관.
+        // Shutdown에서 join할 수 있도록 보관한다.
         let handle = thread::spawn(move || {
             Self::worker_thread(rx, worker_shared);
         });
@@ -298,19 +276,14 @@ impl TranslationDispatch {
         }
     }
 
-    /// 채널 sender 를 drop 해 워커 스레드를 종료시키고 join.
-    ///
-    /// 모든 sender가 drop되면 async 명령 루프가 모든 in-flight task를 abort하고
-    /// join한 뒤 종료한다. 외부 join은 2초를 상한으로 하며, abort할 수 없는
-    /// EzTrans spawn_blocking도 runtime shutdown timeout으로 제한한다.
+    /// Channel을 닫고 실행 중인 task를 취소한 뒤 worker thread를 join한다.
     pub(crate) fn shutdown(&self) {
-        // 1. sender drop → 명령 루프가 채널 종료를 받고 모든 task abort/drain.
+        // Sender drop이 명령 loop의 task 정리를 시작한다.
         {
             let mut s = self.sender.lock().expect("dispatch sender poisoned");
             *s = None;
         }
-        // 2. 워커 스레드 join (안전망: in-flight HTTP 요청 등으로 runtime drop 이
-        //    오래 걸리면 짧은 polling 후 detach. 정상 케이스는 수 ms 안에 끝남).
+        // 제한 시간 안에 join하지 못하면 shutdown이 멈추지 않도록 detach한다.
         let handle = {
             let mut w = self.worker.lock().expect("dispatch worker poisoned");
             w.take()
@@ -331,7 +304,7 @@ impl TranslationDispatch {
         }
     }
 
-    /// 번역 요청 송신. ID 를 즉시 반환하여 호출자가 응답 매칭에 사용할 수 있다.
+    /// 번역 요청을 보내고 응답 매칭용 ID를 즉시 반환한다.
     pub(crate) fn request(
         &self,
         target: TargetId,
@@ -346,7 +319,7 @@ impl TranslationDispatch {
         let route = self.shared.route(target);
         let cancellation = route.set_latest(id);
 
-        // shutdown 이 진행됐다면 sender 가 None — 조용히 폐기.
+        // Shutdown 중인 요청은 조용히 버린다.
         let send_result = {
             let s = self.sender.lock().expect("dispatch sender poisoned");
             match s.as_ref() {
@@ -383,7 +356,7 @@ impl TranslationDispatch {
         Ok(id)
     }
 
-    /// 호출자(메인 윈도우 / 다이얼로그)가 자기 응답을 꺼낸다
+    /// 호출자가 자신의 응답을 꺼낸다.
     pub(crate) fn take_response(&self, req_id: u64) -> Option<TranslationResponse> {
         let mut st = self.shared.state.lock().expect("dispatch state poisoned");
         st.take_response(req_id)
@@ -400,8 +373,7 @@ impl TranslationDispatch {
 
     /// 워커 스레드 진입점
     fn worker_thread(rx: Receiver<DispatchJob>, shared: Arc<DispatchShared>) {
-        // 수신은 이 전용 스레드에서 직렬화하되 실제 HTTP future는 제한된 동시성으로
-        // 실행한다. 느린 consumer 하나가 다른 창의 번역을 막지 않는다.
+        // 명령 수신은 직렬화하고 실제 번역은 제한된 동시성으로 실행한다.
         let rt = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
             .enable_all()
@@ -431,7 +403,7 @@ impl TranslationDispatch {
             });
         }
 
-        // 종료 시 실행 중인 HTTP/EzTrans 작업을 무한정 기다리지 않는다.
+        // 종료 시 실행 중인 작업을 제한 시간만 기다린다.
         rt.shutdown_timeout(Duration::from_secs(2));
     }
 
@@ -489,8 +461,7 @@ impl TranslationDispatch {
         req_id: u64,
         result: TranslationResult,
     ) {
-        // 이 잠금은 unregister와 동일한 장벽이다. 현재 등록 세대와 최신 요청을
-        // 확인한 상태에서 응답 저장과 완료 통지를 끝내므로 TOCTOU 구간이 없다.
+        // 같은 lock 안에서 세대 확인, 응답 저장, 통지를 끝내 TOCTOU를 막는다.
         let routes = shared.routes.lock().expect("routes poisoned");
         let Some(current) = routes.get(&target.get()) else {
             tracing::debug!("응답 #{} 폐기 (대상 등록 해제)", req_id);
@@ -523,10 +494,7 @@ impl TranslationDispatch {
     /// 초기 재시도 대기 시간 (밀리초)
     const INITIAL_BACKOFF_MS: u64 = 500;
 
-    /// DeepL 다중 키 호출 (failover / round-robin)
-    ///
-    /// 한도 초과(HTTP 429, 456) 또는 인증 실패(403) 발생 시 다음 키로 재시도한다.
-    /// 모든 키가 실패하면 마지막 에러를 반환한다.
+    /// DeepL key를 전략에 따라 선택하고 한도/인증 오류면 다음 key로 넘어간다.
     async fn translate_deepl_multi_key(
         client: &reqwest::Client,
         text: &str,
@@ -588,11 +556,7 @@ impl TranslationDispatch {
         }
     }
 
-    /// 비동기 번역 수행 (재시도 포함)
-    ///
-    /// 디스패치 큐를 우회해 직접 한 건을 번역할 때도 쓸 수 있도록 `pub(crate)` 노출.
-    /// 파일 번역처럼 라인 단위 동기 호출이 필요한 곳에서 자체 tokio 런타임 위에
-    /// 이 함수를 `block_on` 하는 식으로 재사용한다.
+    /// 재시도를 포함한 비동기 번역. 별도 runtime에서도 직접 호출할 수 있다.
     pub(crate) async fn translate_async(
         req: &TranslationRequest,
         client: &reqwest::Client,
@@ -660,8 +624,7 @@ impl TranslationDispatch {
     ) -> TranslationResult {
         match req.engine {
             TranslationEngine::EzTrans => {
-                // Arc<str> 의 clone 은 refcount 증가만 — 큰 본문도 0-alloc 으로 blocking
-                // 태스크에 이동시킨다.
+                // Arc clone으로 본문 복사 없이 blocking task에 넘긴다.
                 let text = Arc::clone(&req.text);
                 let source = req.source_lang;
                 let target = req.target_lang;

@@ -1,6 +1,4 @@
-//! 다이얼로그 공통 헬퍼
-//!
-//! 리소스 다이얼로그 생명주기, DPI, 텍스트와 ListBox 공통 처리.
+//! Resource dialog 수명, DPI, text와 ListBox 공통 helper.
 
 use std::collections::HashMap;
 
@@ -96,10 +94,7 @@ pub unsafe fn center_dialog_on_monitor(hwnd: HWND, parent: HWND) {
     }
 }
 
-/// 지정 DPI 용 다이얼로그 폰트.
-///
-/// 컨트롤은 DPI 변경 시 새 폰트를 다시 받아야 하므로 DPI 별로 캐시한다.
-/// 프로세스 종료 시 OS 가 정리하므로 명시적 해제는 하지 않는다.
+/// DPI별로 cache하며 process 종료 시 OS가 정리하는 dialog font.
 pub fn dialog_font_for_dpi(dpi: u32) -> HFONT {
     thread_local! {
         static CACHED: std::cell::RefCell<HashMap<u32, isize>> =
@@ -142,12 +137,8 @@ pub fn dialog_font_for_dpi(dpi: u32) -> HFONT {
     })
 }
 
-/// `(width, height)` 를 클라이언트 영역 크기로 보고 타이틀/테두리를 더한
-/// 전체 윈도우 크기로 변환한다. DPI 와 윈도우 스타일을 함께 반영해, 자식
-/// 컨트롤이 디자인 좌표 (96 DPI, 클라이언트 기준) 그대로 배치돼도 잘리지
-/// 않도록 보장한다.
-///
-/// 실패 시(예: 매우 옛 OS) DPI 스케일링만 적용한 값을 폴백으로 돌려준다.
+/// 96-DPI client 디자인 크기를 title/border를 포함한 window 크기로 바꾼다.
+/// API 실패 시 DPI scale만 적용한다.
 fn client_size_to_window_size(
     width: i32,
     height: i32,
@@ -173,11 +164,7 @@ fn client_size_to_window_size(
     }
 }
 
-/// 다이얼로그의 현재 스타일·DPI 기준으로 디자인 좌표(96 DPI 클라이언트
-/// 크기)를 윈도우 전체 픽셀 크기로 변환한다.
-///
-/// 리소스 다이얼로그의 디자인 크기로 창을 재조정할 때 타이틀과 테두리를
-/// 포함한 전체 크기를 계산하는 공용 헬퍼.
+/// Dialog의 현재 style과 DPI로 96-DPI client 크기를 전체 pixel 크기로 바꾼다.
 pub fn design_to_window_size(hwnd: HWND, design_w: i32, design_h: i32) -> (i32, i32) {
     let dpi = crate::dpi::dpi_for_window(hwnd);
     // SAFETY: hwnd 는 유효 윈도우. GetWindowLongPtrW 는 표준 GDI 호출.

@@ -48,20 +48,14 @@ pub struct App {
     backlog_store: Rc<RefCell<BacklogStore>>,
     magnetic: Option<MagneticManager>,
     d2d_renderer: Option<D2DRenderer>,
-    /// DComp 합성 렌더러. lazy init: hwnd 가 보이는 시점 (`ShowWindow` 후)
-    /// 의 첫 paint 에서 만든다. client size 가 0 이면 swap chain 생성이
-    /// 실패하기 때문.
+    /// 창이 표시된 뒤 첫 paint에서 만드는 DComp renderer.
     composition: Option<CompositionRenderer>,
     /// D3D/DComp 초기화가 연속 실패할 때 paint마다 전체 스택 생성과 로그를
     /// 반복하지 않도록 timer 기반 backoff를 적용한다.
     composition_init_failures: u32,
     composition_retry_scheduled: bool,
-    /// 텍스트가 차지하는 라인 단위 사각형 (클라이언트 좌표).
-    ///
-    /// 비어 있으면 `WM_NCHITTEST` 가 윈도우 사각 전체를 `HTCAPTION` 으로
-    /// 잡는다 (현재 동작). 비어 있지 않으면 점이 사각형 합집합에 들면
-    /// `HTCAPTION`, 아니면 `HTTRANSPARENT`. 채워지는 조건은
-    /// `background_visible=false` 이고 `current_text` 가 비어있지 않을 때.
+    /// 투명 배경에서 `WM_NCHITTEST`가 사용하는 client 좌표 text 사각형.
+    /// 비어 있으면 창 전체를 drag 영역으로 취급한다.
     hit_region: Vec<RECT>,
 }
 

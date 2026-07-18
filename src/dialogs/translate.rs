@@ -1,8 +1,4 @@
-//! 번역 대화상자
-//!
-//! 수동 번역 입력을 위한 대화상자.
-//! Edit 컨트롤 서브클래싱(Comctl32 v6 `SetWindowSubclass`)으로 Ctrl+A 전체 선택 지원.
-//! 번역 엔진 선택 (EzTrans, Google, DeepL) 및 언어 선택 지원.
+//! Engine과 언어를 선택해 수동 번역하는 dialog.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -613,10 +609,7 @@ impl TranslateDialog {
         }
     }
 
-    /// Edit 서브클래스 프로시저 (Ctrl+A 지원)
-    ///
-    /// Comctl32 v6 `SetWindowSubclass`용 SUBCLASSPROC. `DefSubclassProc`가 다음 서브클래스/
-    /// 원본 wndproc로 자동 체이닝해주고, 컨트롤 파괴 시 OS가 서브클래스를 정리한다.
+    /// Ctrl+A를 추가하는 edit control subclass procedure.
     // SAFETY: This is a subclassed Win32 window procedure. The system provides valid params.
     unsafe extern "system" fn edit_subclass_proc(
         hwnd: HWND,

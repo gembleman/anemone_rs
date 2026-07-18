@@ -3,20 +3,15 @@
 use super::{App, bench};
 
 impl App {
-    /// paint() 1 회 비용을 N 회 반복 측정해 통계를 로그로 출력.
-    ///
-    /// `ANEMONE_BENCH_PAINT=<N>` 환경변수가 설정된 경우 초기 paint 직후 1 회
-    /// 호출된다. D2D 합성 경로 (DCRenderTarget → HwndRT/DComp) 재작성 결정의
-    /// baseline 측정용.
+    /// `paint()`를 N회 측정해 통계를 기록한다.
     pub(super) fn run_paint_bench(&mut self, iters: usize) {
-        // 벤치 루프 중 클립보드 이벤트가 re-entrant borrow 를 유발해 패닉하는 것을
-        // 방지한다. 루프 종료 후 원래 상태로 복구.
+        // 재진입 borrow를 막기 위해 벤치 동안 클립보드 감시를 멈춘다.
         let was_watching = self.clipboard.is_watching();
         if was_watching {
             self.clipboard.stop();
         }
 
-        // 워밍업 (캐시 / 셰이더 컴파일 등의 1 회성 비용 제거)
+        // 캐시와 셰이더의 최초 비용을 제거한다.
         const WARMUP: usize = 16;
         for _ in 0..WARMUP {
             if let Err(e) = self.paint() {
@@ -44,27 +39,18 @@ impl App {
         }
     }
 
-    /// paint() 의 phase 별 비용을 분리 측정. `ANEMONE_BENCH_PAINT_DETAILED=<N>`
-    /// 환경변수가 설정된 경우 초기 paint 직후 1 회 호출된다.
-    ///
-    /// 결과 라벨: `paint_detailed_<phase>` — `setup`, `begin_clear`, `border`,
-    /// `text`, `end_draw`, `present`, `hit_region`, `lazy_init`, `total`.
-    /// Present 경로 최적화 작업의 ROI 판단 (어느 phase 가 floor 를 만드는가)
-    /// 용도. paint() 내부 hook 의 thread_local borrow overhead 가 있어 total
-    /// 자체는 일반 `paint` 벤치보다 약간 더 느릴 수 있다.
+    /// `paint()`의 단계별 비용을 N회 측정한다.
+    /// Hook 오버헤드 때문에 `total`은 일반 벤치보다 약간 클 수 있다.
     pub(super) fn run_paint_bench_detailed(&mut self, iters: usize) {
         const WARMUP: usize = 16;
 
-        // 벤치 루프 중 클립보드 이벤트가 re-entrant borrow 를 유발해 패닉하는 것을
-        // 방지한다. 루프 종료 후 원래 상태로 복구.
+        // 재진입 borrow를 막기 위해 벤치 동안 클립보드 감시를 멈춘다.
         let was_watching = self.clipboard.is_watching();
         if was_watching {
             self.clipboard.stop();
         }
 
-        // `ANEMONE_BENCH_PAINT_NO_OUTLINE=1` 토글 — text/end_draw 비용의 출처가
-        // outline/shadow geometry 인지 텍스트 본문인지 분리 측정. config 를
-        // 임시로 수정하고 측정 후 원복한다 (production paint 경로는 무변경).
+        // 선택적으로 outline/shadow를 꺼 본문 비용을 분리한다.
         let no_outline = bench::bench_disable_outline();
         let saved_style = if no_outline {
             let mut cfg = self.config.borrow_mut();
@@ -77,9 +63,7 @@ impl App {
             None
         };
 
-        // `ANEMONE_BENCH_PAINT_CACHE_MISS=1` 토글 — 매 iteration 마다
-        // current_text 끝에 카운터를 붙여 outline 비트맵 / layout /
-        // geometry 캐시를 강제 miss 시킨다. 항목 10 의 "miss 폭주" 위험 실측용.
+        // 선택적으로 매회 캐시 key를 바꿔 miss 비용을 측정한다.
         let force_cache_miss = bench::bench_force_cache_miss();
         let saved_text = if force_cache_miss {
             Some(self.state.current_text.clone())
@@ -105,9 +89,7 @@ impl App {
 
         let mut phased = bench::PhasedBenchAccumulator::with_capacity(iters);
         for i in 0..iters {
-            // 매 iteration 마다 텍스트 변경 → 캐시 miss 강제.
-            // 카운터는 텍스트 끝 ("…#0", "#1", …) 에 붙여 layout box 크기
-            // 변동을 최소화 (자릿수 1 → 2 → 3 자리 전환점에서만 폭 변화).
+            // 접미사만 바꿔 layout 변화는 줄이고 cache miss를 만든다.
             if let Some(orig) = saved_text.as_ref() {
                 self.state.current_text = format!("{}#{}", orig, i);
             }

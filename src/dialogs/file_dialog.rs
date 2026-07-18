@@ -1,8 +1,4 @@
-//! 모던 파일 다이얼로그 헬퍼 (Common Item Dialog, Vista+)
-//!
-//! `IFileOpenDialog` / `IFileSaveDialog` 기반. 레거시 `GetOpenFileNameW`/
-//! `GetSaveFileNameW` 를 대체한다. Win10 셸 모양 그대로 표시되고
-//! MAX_PATH 제약 없이 긴 경로/유니코드를 지원한다.
+//! 긴 Unicode 경로를 지원하는 Vista+ Common Item Dialog helper.
 
 use std::path::PathBuf;
 
@@ -18,10 +14,7 @@ use windows::core::{HRESULT, PCWSTR, Result};
 
 use crate::util::to_wide;
 
-/// 파일 필터 한 항목.
-///
-/// `name` 예: "텍스트 파일", `spec` 예: "*.txt".
-/// 여러 확장자는 ";" 로 구분한다 ("*.txt;*.log").
+/// 파일 filter 한 항목. 여러 확장자는 `;`로 구분한다.
 pub struct FileFilter<'a> {
     pub name: &'a str,
     pub spec: &'a str,
@@ -53,12 +46,9 @@ fn build_filters(filters: &[FileFilter]) -> FilterStorage {
     FilterStorage { _wide: wide, specs }
 }
 
-/// IShellItem 에서 파일 시스템 경로를 추출한다.
-///
-/// SAFETY: 호출자는 `item` 이 유효한 COM 인터페이스임을 보장해야 한다.
+/// 유효한 `IShellItem`에서 파일 system 경로를 추출한다.
 unsafe fn shell_item_to_path(item: &IShellItem) -> Result<PathBuf> {
-    // SAFETY: GetDisplayName 은 유효한 COM 호출이며, 반환된 포인터는
-    // CoTaskMemFree 로 해제한다.
+    // SAFETY: 반환된 display-name pointer를 CoTaskMemFree로 해제한다.
     unsafe {
         let path_ptr = item.GetDisplayName(SIGDN_FILESYSPATH)?;
         let path = path_ptr.to_string().map(PathBuf::from);
@@ -79,8 +69,7 @@ fn show_was_accepted(result: Result<()>) -> Result<bool> {
 ///
 /// `title`/`filters`는 비어 있어도 된다. `Ok(None)`은 사용자 취소다.
 pub fn open_file(hwnd: HWND, title: &str, filters: &[FileFilter]) -> Result<Option<PathBuf>> {
-    // SAFETY: UI 스레드는 main()에서 STA 로 1회 초기화되어 있다. 모든 COM
-    // 인터페이스는 이 함수 안에서만 사용되고 Drop 시 자동 Release 된다.
+    // SAFETY: UI thread는 STA이며 COM interface는 이 scope 안에서만 쓴다.
     unsafe {
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
 
@@ -105,9 +94,7 @@ pub fn open_file(hwnd: HWND, title: &str, filters: &[FileFilter]) -> Result<Opti
     }
 }
 
-/// "열기" 다이얼로그 (다중 선택).
-///
-/// `Ok(None)`은 사용자 취소다.
+/// 다중 선택 열기 dialog. `Ok(None)`은 사용자 취소다.
 pub fn open_files_multi(
     hwnd: HWND,
     title: &str,
@@ -166,10 +153,7 @@ pub fn pick_folder(hwnd: HWND, title: &str) -> Result<Option<PathBuf>> {
     }
 }
 
-/// "저장" 다이얼로그.
-///
-/// `default_ext` 는 점 없이 ("txt"). `initial` 이 주어지면 그 경로의
-/// 폴더와 파일명을 기본값으로 채운다.
+/// 저장 dialog. `default_ext`는 점 없이 전달하며 `initial`은 초기 경로다.
 pub fn save_file(
     hwnd: HWND,
     title: &str,

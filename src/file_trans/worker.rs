@@ -1,6 +1,4 @@
-//! 파일 번역 백그라운드 작업
-//!
-//! 파일 읽기/쓰기, 번역 처리, 진행률 업데이트.
+//! 파일 번역과 진행률 보고를 수행하는 백그라운드 작업.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -15,20 +13,12 @@ use crate::translation::{
     worker::{TranslationDispatch, TranslationRequest},
 };
 
-/// 시스템 절전 진입을 차단하는 RAII 가드.
-///
-/// 생성 시 `ES_CONTINUOUS | ES_SYSTEM_REQUIRED` 로 sleep 을 막고,
-/// drop 시 `ES_CONTINUOUS` 로 복원해 다시 OS 기본 동작에 맡긴다.
-/// `ES_DISPLAY_REQUIRED` 는 일부러 빼서 모니터 절전은 허용한다 — 사용자가
-/// 자리를 비웠을 때까지 화면 켜두는 건 과한 동작이라 판단.
+/// 작업 중 시스템 절전만 막고 화면 절전은 허용하는 RAII 가드.
 struct SleepBlocker;
 
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// 최종 경로와 같은 디렉터리의 임시 출력 파일.
-///
-/// `persist` 전까지는 Drop 시 임시 파일을 제거하므로 번역 오류와 취소가 기존
-/// 결과 파일에 영향을 주지 않는다.
+/// 성공 시에만 최종 경로로 교체되는 임시 출력 파일.
 struct PendingOutput {
     final_path: PathBuf,
     temp_path: PathBuf,
@@ -141,13 +131,12 @@ impl Drop for SleepBlocker {
 
 /// 파일 번역 작업을 실행한다.
 ///
-/// 진행 이벤트는 호출자가 제공한 콜백으로 전달한다. 코어는 콜백의 구체적인
-/// 소비자가 Win32 다이얼로그인지 CLI인지 알 필요가 없다.
+/// 진행 이벤트는 UI 종류와 무관한 호출자 콜백으로 전달한다.
 pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
-    // 긴 배치 번역 중 OS 가 절전으로 진입하지 않도록 함수 전체 동안 가드 유지.
+    // 작업이 끝날 때까지 시스템 절전을 막는다.
     let _sleep_guard = SleepBlocker::new();
 
-    // 입출력 파일 수 확인
+    // 입력과 출력은 일대일이어야 한다.
     if job_data.input_files.len() != job_data.output_files.len() {
         report(ProgressEvent::Error(
             "입력 파일과 출력 파일 수가 일치하지 않습니다.".to_string(),
@@ -160,8 +149,7 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
         return;
     }
 
-    // 비동기 HTTP 엔진 호출용 자체 tokio runtime. 디스패치 워커를 거치지 않고
-    // 라인 단위로 동기적 응답이 필요하기 때문에 별도 런타임을 둔다.
+    // 라인별 HTTP 응답을 동기적으로 기다릴 전용 runtime이다.
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -172,15 +160,14 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
             return;
         }
     };
-    // 디스패치 워커와 동일한 프로세스 전역 클라이언트를 공유한다 — connection pool /
-    // TLS 세션 재사용으로 라인 단위 동기 호출의 DNS·핸드셰이크 비용 제거.
+    // 전역 client를 공유해 connection pool과 TLS session을 재사용한다.
     let http_client = shared_client();
     let translation = TranslationContext {
         runtime: &rt,
         http_client: &http_client,
     };
 
-    // UTF-8 검증과 파일별 줄 수 계산을 한 번의 사전 검사로 수행한다.
+    // 한 번의 사전 검사에서 UTF-8과 줄 수를 확인한다.
     let file_line_counts = match preflight_inputs(&job_data.input_files) {
         Ok(counts) => counts,
         Err(error) => {
@@ -202,32 +189,26 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
         }
     };
 
-    // 전체 파일 수 및 라인 수 전송
     report(ProgressEvent::TotalFiles(job_data.input_files.len() as i32));
     report(ProgressEvent::TotalLines(total_lines));
 
     let mut global_current_line = 0;
 
-    // 파일별 순차 처리
     for (idx, (input_path, output_path)) in job_data
         .input_files
         .iter()
         .zip(job_data.output_files.iter())
         .enumerate()
     {
-        // 취소 체크
         if job_data.cancel_token.load(Ordering::SeqCst) {
             report(ProgressEvent::Error("사용자가 취소했습니다.".to_string()));
             return;
         }
 
-        // 파일 인덱스 업데이트
         report(ProgressEvent::FileIndex((idx + 1) as i32));
 
-        // 파일명 전송
         send_filename(input_path, &report);
 
-        // 단일 파일 처리
         match process_single_file(
             input_path,
             output_path,
@@ -245,7 +226,6 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
         }
     }
 
-    // 완료
     report(ProgressEvent::Complete);
 }
 
@@ -284,7 +264,6 @@ fn process_single_file(
     translation: &TranslationContext<'_>,
     report: &impl Fn(ProgressEvent),
 ) -> Result<(), String> {
-    // 입력 파일 열기
     let input_file = File::open(input_path).map_err(|e| {
         format!(
             "입력 파일을 열 수 없습니다: {}\n{}",
@@ -297,18 +276,15 @@ fn process_single_file(
     // 최종 파일은 전체 번역과 flush가 성공한 뒤에만 교체한다.
     let mut pending_output = PendingOutput::create(output_path)?;
 
-    // UTF-8 BOM 쓰기
+    // 출력은 UTF-8 BOM을 유지한다.
     pending_output
         .writer()
         .write_all(&[0xEF, 0xBB, 0xBF])
         .map_err(|e| e.to_string())?;
 
-    // 리스트 크기 전송
     report(ProgressEvent::FileLines(line_count as i32));
 
-    // 스트리밍 라인 처리. 마지막 라인 판정을 위해 1-라인 lookahead 패턴 사용 —
-    // `prev` 가 직전에 읽은 라인이고, 새 라인이 도착하면 prev 를 "마지막 아님"
-    // 으로 출력한다. 루프 종료 후 남은 prev 가 진짜 마지막 라인.
+    // 한 줄 lookahead로 마지막 줄의 개행 여부를 보존한다.
     let mut lines_iter = reader.lines();
 
     let mut prev = lines_iter.next().transpose().map_err(|e| {
@@ -317,8 +293,7 @@ fn process_single_file(
             input_path.display()
         )
     })?;
-    // 첫 줄이 UTF-8 BOM 으로 시작하면 떼어낸다. 사전 검증에서 인코딩은
-    // 확인되었지만, BOM 자체는 본문에 섞이지 않도록 명시적으로 제거.
+    // 첫 줄의 UTF-8 BOM은 본문에서 제외한다.
     if let Some(first) = prev.as_mut()
         && let Some(stripped) = first.strip_prefix('\u{FEFF}')
     {
@@ -333,7 +308,6 @@ fn process_single_file(
                 input_path.display()
             )
         })?;
-        // 취소 체크
         if job_data.cancel_token.load(Ordering::SeqCst) {
             return Err("사용자가 취소했습니다.".to_string());
         }
@@ -381,35 +355,25 @@ fn process_single_file(
 
 /// 라인 번역.
 ///
-/// 빈/공백 라인은 그대로 통과시킨다. 그 외 라인은 작업의 엔진 설정에 따라
-/// 동기적으로 한 줄씩 호출한다. EzTrans 는 글로벌 매니저를 통해 동기 호출,
-/// HTTP 기반 엔진(Google/DeepL/Papago/LLM)은 디스패치의 `translate_async`
-/// (재시도/DeepL 폴백 포함) 를 자체 tokio 런타임 위에서 `block_on` 한다.
-///
-/// 한 줄 실패가 전체 배치를 중단시키지는 않도록, 실패 시에는 `[번역 실패: ...]`
-/// 표식을 반환한다. 호출자는 이 문자열을 결과 파일에 그대로 기록한다.
+/// 한 줄을 동기 번역한다. 빈 줄은 유지하고 실패는 표식으로 바꿔 배치를 계속한다.
 fn translate_line(
     line: &str,
     job_data: &FileTransJobData,
     translation: &TranslationContext<'_>,
 ) -> String {
-    // 빈 라인(길이 0) 은 옵션과 무관하게 통과 — 엔진에 보낼 의미도 없고 EmptyText
-    // 에러만 받는다.
+    // 빈 줄은 엔진에 보내지 않는다.
     if line.is_empty() {
         return line.to_string();
     }
 
-    // no_trans_linefeed: 공백/탭만 있는 "줄바꿈 라인" 도 통과시킨다. 영문 등 일부
-    // 텍스트에서 단락 구분용으로 공백만 있는 줄이 나오는데, 그것까지 번역기에
-    // 넘기면 결과가 어지러워진다.
+    // 옵션이 켜지면 공백만 있는 단락 구분 줄도 유지한다.
     if job_data.no_trans_linefeed && line.trim().is_empty() {
         return line.to_string();
     }
 
     let request = TranslationRequest {
         id: 0,
-        // Arc::from(&str) 은 buffer 한 번 alloc — 이후 워커/엔진 경로 전체에서
-        // 추가 복제 없음.
+        // 한 번 할당한 원문을 워커와 엔진이 공유한다.
         text: std::sync::Arc::from(line),
         engine: job_data.engine,
         source_lang: job_data.source_lang,

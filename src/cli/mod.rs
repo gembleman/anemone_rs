@@ -1,10 +1,4 @@
-//! CLI(headless) 진입점.
-//!
-//! GUI 다이얼로그 없이 번역/설정/파일 번역/메타 조회를 수행할 수 있도록 한다.
-//! 사람이 읽기 좋은 plain text 로 결과를 출력한다.
-//!
-//! Win32/GUI 초기화 경로는 거치지 않으므로 console 서브시스템에서 그대로
-//! 동작하며, `tracing`/COM/D2D 초기화도 생략한다.
+//! GUI, tracing, COM, D2D 초기화 없이 번역과 설정을 다루는 headless CLI.
 
 mod config;
 mod file_trans;
@@ -96,10 +90,7 @@ pub enum CliOutcome {
     Gui,
 }
 
-/// CLI 진입점.
-///
-/// 결과 출력은 stdout/stderr 로 흘려보내고, 종료 코드는
-/// `CliOutcome::Done(code)` 로 알린다.
+/// 결과를 표준 stream에 쓰고 종료 여부와 code를 반환한다.
 pub fn run() -> CliOutcome {
     let argv: Vec<OsString> = std::env::args_os().collect();
     if argv.len() <= 1 {

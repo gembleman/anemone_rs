@@ -16,19 +16,10 @@ use super::{
     outline_text_renderer::OutlineTextRenderer,
 };
 
-/// Direct2D 기반 렌더러.
+/// 호출자가 관리하는 render target에 그리는 Direct2D 렌더러.
 ///
-/// 그리기 메서드들은 `&ID2D1RenderTarget` 을 받아 호출 측이 보유한
-/// render target (현재는 `CompositionRenderer` 의 `ID2D1DeviceContext`)
-/// 위에 그린다. `BeginDraw`/`EndDraw`/`Present` 는 호출 측이 책임지며,
-/// 본 타입은 한 프레임 시작 시 [`Self::configure_frame`] 으로 AA 모드를
-/// 설정한다. device-bound 캐시는 device-lost까지 프레임 간 재사용한다.
-///
-/// `d2d_factory` 는 [`ID2D1Factory1`] 로 보관한다 — `CreateDevice` 가
-/// 필요한 `CompositionRenderer` 가 [`Self::factory`] 로 받아 같은 factory
-/// 위에 D2D Device 를 만들도록 한다. 같은 factory 트리 안에 머물러야
-/// brush/geometry/text-layout 같은 본 렌더러의 객체들이 합성 경로의
-/// `ID2D1DeviceContext` 위에서 거부되지 않는다 (D2DERR_WRONG_FACTORY 방지).
+/// `BeginDraw`/`EndDraw`/`Present`는 호출자가 담당한다. Factory를 합성 렌더러와
+/// 공유하며 장치 종속 cache는 device loss 전까지 재사용한다.
 pub struct D2DRenderer {
     pub(super) d2d_factory: ID2D1Factory1,
     pub(super) dwrite_factory: IDWriteFactory,
@@ -36,19 +27,9 @@ pub struct D2DRenderer {
     pub(super) brush_cache: HashMap<u32, ID2D1SolidColorBrush>,
     /// 외곽선 스트로크 스타일 캐시 (불변이므로 한 번만 생성)
     pub(super) stroke_style: Option<ID2D1StrokeStyle>,
-    /// 텍스트 layout + outline geometry 캐시 (크기 1 LRU).
-    ///
-    /// 현재 앱은 한 번에 한 텍스트만 표시하므로 1 entry 로 충분. 키가
-    /// 일치하면 layout/geometry 재사용 → DirectWrite text shaping 과
-    /// glyph outline → PathGeometry 변환 (paint 핫패스의 다수 비용)
-    /// 을 건너뛴다.
+    /// 현재 표시 중인 text layout과 outline geometry cache.
     pub(super) text_cache: Option<TextLayoutCache>,
-    /// outline+shadow 비트맵 캐시 (크기 1 LRU).
-    ///
-    /// paint 1 회의 GPU 명령을 9 개 (Clear + 3×DrawGeometry +
-    /// 3×FillGeometry + 2×DrawTextLayout) 에서 3 개
-    /// (Clear + DrawBitmap + DrawTextLayout) 로 줄인다. paint floor 의 ~95% 를
-    /// 차지하던 outline stroke+fill 비용 제거가 핵심.
+    /// 현재 outline과 shadow를 합성한 bitmap cache.
     pub(super) outline_bitmap: Option<OutlineBitmap>,
     /// 캐시 miss 비율 추적 — 폭주 시 비트맵 경로 우회.
     pub(super) miss_tracker: MissTracker,
@@ -64,9 +45,7 @@ impl D2DRenderer {
                 D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dwrite_factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
 
-            // Factory1::CreateStrokeStyle 은 STROKE_STYLE_PROPERTIES1 을 받는다 —
-            // 본 모듈은 base 필드만 사용하므로 부모 인터페이스 메서드를 명시 호출해
-            // STROKE_STYLE_PROPERTIES (base) 그대로 통과시킨다.
+            // Base 속성을 받는 부모 interface의 CreateStrokeStyle을 호출한다.
             let parent_factory: &ID2D1Factory = &d2d_factory;
             let stroke_style = parent_factory.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
@@ -93,20 +72,12 @@ impl D2DRenderer {
         }
     }
 
-    /// 본 렌더러가 보유한 D2D factory 를 노출한다.
-    ///
-    /// `CompositionRenderer::new` 에 넘겨주면 같은 factory 위에 D2D Device 를
-    /// 만들어, 본 렌더러의 brush/geometry/text-layout 이 합성 경로의
-    /// device context 에서도 거부되지 않는다.
+    /// 합성 렌더러와 공유할 D2D factory를 반환한다.
     pub fn factory(&self) -> &ID2D1Factory1 {
         &self.d2d_factory
     }
 
-    /// ARGB 색상으로 SolidColorBrush를 가져온다 (프레임 내 캐시 활용).
-    ///
-    /// `target` 은 `ID2D1RenderTarget` 으로 받는다 — DCRenderTarget 과
-    /// DeviceContext 둘 다 이 인터페이스를 상속하므로 Deref coercion
-    /// (`&dc_target` 또는 `&device_context`) 으로 전달 가능.
+    /// ARGB 색상의 brush를 장치 수명 cache에서 가져온다.
     pub(super) fn get_or_create_brush(
         &mut self,
         target: &ID2D1RenderTarget,
@@ -130,11 +101,7 @@ impl D2DRenderer {
         Ok(brush)
     }
 
-    /// 캐시 hit 면 기존 layout, miss 면 새로 만들어 캐시 교체 후 반환.
-    /// 키가 바뀌면 outline geometry 도 같이 무효화된다.
-    ///
-    /// hit 판정은 [`LayoutKeyRef`] 로 alloc 없이 처리 — `Arc::from(&str)` 은
-    /// miss 시 새 캐시 엔트리 생성 시점에만 발생한다.
+    /// Layout cache를 조회하고 miss면 outline geometry와 함께 교체한다.
     pub(super) fn get_or_create_layout(
         &mut self,
         text: &str,
@@ -157,10 +124,7 @@ impl D2DRenderer {
         Ok(layout)
     }
 
-    /// outline geometry 캐시 진입. 같은 키의 layout 기준으로 한 번만
-    /// `text_layout.Draw(OutlineTextRenderer)` 를 돌리고 그 결과를 보관.
-    /// outline 은 layout 원점 (0, 0) 기준으로 만들어 두고, 그리기 측에서
-    /// `SetTransform` 으로 (x, y) 평행이동만 곱해 재사용한다.
+    /// Layout 원점 기준 outline geometry를 만들거나 cache에서 가져온다.
     pub(super) fn get_or_create_outline_geometry(
         &mut self,
         text: &str,
@@ -245,35 +209,16 @@ impl D2DRenderer {
 
     // ── 퍼블릭 렌더링 API ───────────────────────────────
 
-    /// device-bound 캐시 (brush, text layout, outline bitmap) 를 모두 폐기.
-    ///
-    /// 호출 시점:
-    /// - device-lost (`D2DERR_RECREATE_TARGET`) 복구 직후 — 캐시된 D2D
-    ///   객체들은 옛 device 에 묶여 있어 새 RT 에서 거부됨.
-    /// - render target 의 디바이스가 바뀌는 경우 (예: 합성 경로 재초기화).
-    ///
-    /// `App::paint` 가 `flush` / `end_draw` / `present` 의 device-lost
-    /// HRESULT 를 감지하면 호출. 캐시 일괄 폐기 후 `CompositionRenderer` 를
-    /// drop 하면 다음 paint 의 lazy-init 분기가 새 device 위에서 다시
-    /// 만든다 (`App::handle_device_lost`).
+    /// Device loss나 render target 교체 후 모든 장치 종속 cache를 비운다.
     pub fn invalidate_device_caches(&mut self) {
         self.brush_cache.clear();
         self.text_cache = None;
         self.outline_bitmap = None;
-        // miss_tracker.last_key 는 비트맵 의존이 아니므로 유지해도 무해하나,
-        // 정합성 차원에서 같이 reset.
+        // 추적 상태도 함께 초기화한다.
         self.miss_tracker = MissTracker::new();
     }
 
-    /// 호출자가 매 프레임 호출하는 단일 진입점.
-    ///
-    /// target 의 안티앨리어싱 모드를 grayscale 로 설정한다. `BeginDraw` 자체는
-    /// `CompositionRenderer::begin_draw` 가 이미 호출했다고 가정.
-    ///
-    /// **brush_cache 는 프레임 간 재사용한다** — 합성 경로의
-    /// `ID2D1DeviceContext` 는 단일 인스턴스를 모든 paint 에서 재사용하므로
-    /// brush 도 device 가 살아 있는 한 유효. device-lost 시에만
-    /// [`Self::invalidate_device_caches`] 로 일괄 폐기.
+    /// 활성 frame의 antialiasing을 설정한다. Brush cache는 frame 사이에도 유지한다.
     pub fn configure_frame(&mut self, target: &ID2D1RenderTarget) {
         // SAFETY: target is a valid render target between BeginDraw/EndDraw (caller's responsibility).
         unsafe {

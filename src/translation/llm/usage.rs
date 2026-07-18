@@ -1,12 +1,5 @@
-//! LLM 일일 사용량 카운터
-//!
-//! 사용자 데이터 디렉터리의 `llm_usage.json`에 날짜별 호출 수와 누적
-//! 입력/출력 바이트를 기록한다.
-//! 모든 LLM 호출의 성공 응답 시점에서 [`record`] 를 부른다. 일일 임계 초과 시
-//! 프로세스 수명 동안 한 번만 경고 로그를 남긴다.
-//!
-//! 워커 스레드에서 호출되므로 file I/O 는 `Mutex` 로 직렬화한다. LLM 호출 자체가
-//! 수 초 단위라 디스크 쓰기 1회는 상대적으로 무시 가능.
+//! 날짜별 LLM 호출 수와 입출력 byte를 `llm_usage.json`에 기록한다.
+//! File I/O는 mutex로 직렬화하고 일일 임계 초과는 process당 한 번 경고한다.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -77,8 +70,7 @@ impl DateProvider for SystemDateProvider {
     }
 }
 
-/// 오늘 날짜 키 ("YYYY-MM-DD"). 시스템 로컬 타임 기준 — 자정에 카운터가
-/// 리셋되는 게 사용자 관점에서 자연스럽기 때문.
+/// 사용자 기준 자정에 초기화되도록 local 날짜 key를 반환한다.
 fn today_key(provider: &impl DateProvider) -> String {
     let date = provider.today();
     format!(

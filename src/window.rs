@@ -4,11 +4,7 @@ use std::sync::Arc;
 use crate::config::TextAlign;
 use windows::Win32::{Foundation::*, Graphics::Gdi::ScreenToClient, UI::WindowsAndMessaging::*};
 
-/// 텍스트 렌더링 스타일.
-///
-/// `font_face` 는 렌더 호출 동안 안정적으로 소유되는 폰트 이름이다. 현재
-/// config의 `String`에서 스타일 snapshot을 만들 때 `Arc` 할당 1회가
-/// 발생하고, 이후 캐시 키 조회는 문자열을 빌려 allocation 없이 처리한다.
+/// Font 이름을 공유해 cache 조회에서 재할당하지 않는 text render style.
 #[derive(Clone, Debug)]
 pub struct TextRenderStyle {
     pub font_size: i32,
@@ -124,11 +120,7 @@ pub fn set_min_track_size(mm: &mut MINMAXINFO, min_width: i32, min_height: i32) 
     mm.ptMinTrackSize.y = min_height;
 }
 
-/// 스크린 좌표 (x, y) 를 hwnd 의 클라이언트 좌표로 변환해, 사각형 합집합
-/// 중 하나라도 포함하면 true.
-///
-/// DComp 합성 경로의 `background_visible=false` 상태에서 텍스트 라인
-/// 사각형 외의 투명 영역 클릭을 통과시키기 위한 보조. 빈 슬라이스면 false.
+/// Screen 점을 client 좌표로 바꿔 주어진 사각형 중 하나에 포함되는지 판정한다.
 pub fn point_in_any_rect(hwnd: HWND, x: i32, y: i32, rects: &[RECT]) -> bool {
     if rects.is_empty() {
         return false;

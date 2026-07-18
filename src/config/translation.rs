@@ -99,7 +99,7 @@ impl TranslationConfig {
         self.target_lang = crate::translation::lang_utils::to_code(lang).to_string();
     }
 
-    // ========== 하위 호환용 메서드들 (UI에서 사용) ==========
+    // UI 호환 API.
 
     /// 엔진 문자열을 u8로 변환 (UI 호환용)
     pub fn engine_as_u8(&self) -> Result<u8, crate::translation::EnumParseError> {
@@ -133,9 +133,7 @@ impl TranslationConfig {
         }
     }
 
-    /// 워커로 넘길 DeepL 키 목록 (보조 키가 있으면 그것을, 없으면 단일 키만)
-    ///
-    /// 빈 키는 제거해서 워커가 건너뛸 필요가 없게 한다.
+    /// 빈 값을 뺀 DeepL key 목록. 보조 key가 있으면 legacy 단일 key보다 우선한다.
     pub fn deepl_effective_keys(&self) -> Vec<String> {
         let mut keys: Vec<String> = if !self.deepl_keys.is_empty() {
             self.deepl_keys

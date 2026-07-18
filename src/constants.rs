@@ -1,7 +1,4 @@
-//! 앱 전역 상수
-//!
-//! WM_USER 기반 사용자 정의 메시지 ID, Win32 누락 상수,
-//! 윈도우 기본값 등을 중앙에서 관리한다.
+//! 사용자 message ID, 빠진 Win32 상수와 창 기본값.
 
 use windows::Win32::UI::WindowsAndMessaging::{WM_APP, WM_USER};
 
@@ -49,11 +46,7 @@ pub const MAX_RESPONSE_STORAGE: usize = 100;
 
 // ── Win32 누락 상수: TrackBar ───────────────────────────
 
-/// `TBM_GETPOS` (= `WM_USER`).
-///
-/// `windows` 0.62 의 `Win32::UI::Controls` 에 다른 `TBM_*` 상수는 모두 있지만
-/// 정작 `TBM_GETPOS` 만 누락되어 직접 정의한다. 상위 windows crate 가 추가하면
-/// 이 상수를 제거하고 `windows::Win32::UI::Controls::TBM_GETPOS` 로 교체할 것.
+/// `windows` 0.62에 빠진 `TBM_GETPOS` (`WM_USER`).
 pub const TBM_GETPOS_VAL: u32 = 1024;
 
 // ── Win32 누락 상수: 색상 대화상자 ──────────────────────

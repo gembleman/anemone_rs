@@ -180,8 +180,7 @@ impl SettingsDialog {
             // 윈도우 옵션 체크박스
             TOPMOST => toggle_field!(self, BoolSetting::WindowTopmost),
             USE_MAGNETIC => {
-                // The main App owns the live MagneticManager. Ask it to update the runtime
-                // first; it commits or rolls back config and this checkbox together.
+                // 주 App이 runtime 적용 결과에 맞춰 config와 checkbox를 함께 확정한다.
                 let enabled =
                     unsafe { IsDlgButtonChecked(self.hwnd, USE_MAGNETIC as i32) == BST_CHECKED.0 };
                 let posted = unsafe {
@@ -290,7 +289,7 @@ impl SettingsDialog {
         }
     }
 
-    /// DeepL 보조 키 추가 — 입력 Edit 내용을 리스트박스에 추가하고 Config 동기화
+    /// 입력한 DeepL key를 list와 config에 추가한다.
     fn deepl_keys_add(&mut self) {
         let key = self.get_control_text(ctrl_id::DEEPL_KEY_ADD_EDIT);
         let key = key.trim().to_string();
@@ -320,7 +319,7 @@ impl SettingsDialog {
         self.set_control_text(ctrl_id::DEEPL_KEY_ADD_EDIT, "");
     }
 
-    /// DeepL 보조 키 삭제 — 선택된 항목 제거 및 Config 동기화
+    /// 선택한 DeepL key를 list와 config에서 제거한다.
     fn deepl_keys_remove(&mut self) {
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox.
         let sel = unsafe {

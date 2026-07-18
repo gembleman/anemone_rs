@@ -155,12 +155,7 @@ impl App {
         }
     }
 
-    /// 번역 완료 처리
-    ///
-    /// `WM_TRANSLATION_COMPLETE` 의 WPARAM 으로 전달된 `req_id` 에 해당하는
-    /// 응답만 꺼낸다. 디스패치가 hwnd 기준으로 라우팅하므로 다른 다이얼로그의
-    /// 응답이 섞일 일은 없지만, 동일 hwnd 에 누적된 응답 중에서도 정확히
-    /// 매칭된 한 건만 처리한다.
+    /// 완료 message의 request ID와 정확히 일치하는 응답만 처리한다.
     pub(super) fn handle_translation_complete(&mut self, req_id: u64) {
         let Some(response) = take_response(req_id) else {
             return;

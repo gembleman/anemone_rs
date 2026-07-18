@@ -150,9 +150,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// 외부 설정 파일에서 들어온 값을 UI가 허용하는 범위와 동일하게
-    /// 정규화한다. 렌더러, hit testing, 윈도우 크기 계산이 모두 같은 유효
-    /// 값을 보도록 deserialize 경계에서 한 번만 적용한다.
+    /// 외부 설정값을 UI 범위로 정규화해 모든 소비자가 같은 값을 보게 한다.
     pub fn normalize(&mut self) {
         self.border_width = self.border_width.clamp(0, 10);
         self.text_margin_x = self.text_margin_x.clamp(0, 300);
@@ -251,8 +249,7 @@ impl Config {
         let content = toml::to_string_pretty(&normalized)?;
         let _: Config = Self::from_toml_str(&content)?;
 
-        // 교체 전에 마지막으로 파싱 가능한 정상본을 별도로 보존한다. 손상된
-        // 파일은 정상 백업을 덮어쓰지 않는다.
+        // 교체 전에 정상본을 보존하며 손상된 파일로 backup을 덮지 않는다.
         if path.is_file() && Self::load_from_file(path).is_ok() {
             let backup_path = path.with_extension("toml.last-good");
             let previous = std::fs::read(path)?;
@@ -275,7 +272,6 @@ impl Config {
     }
 
     fn load_or_default_from(path: &std::path::Path) -> Self {
-        // 파일이 존재하는지 확인
         if !path.exists() {
             tracing::info!("설정 파일 없음, 기본 설정 생성: {}", path.display());
             let config = Self::default();
@@ -285,20 +281,17 @@ impl Config {
             return config;
         }
 
-        // 파일 로드 시도
         match Self::load_from_file(path) {
             Ok(config) => {
                 tracing::info!("설정 로드됨: {}", path.display());
                 config
             }
             Err(_) => {
-                // TOML 파서 메시지에는 해당 줄 원문(API 키 포함 가능)이 들어갈 수
-                // 있으므로 프로덕션 로그에는 세부 본문을 싣지 않는다.
+                // Parser 오류에 API key가 섞일 수 있으므로 세부 본문은 기록하지 않는다.
                 tracing::error!("설정 파일을 파싱할 수 없습니다");
                 tracing::warn!("기본 설정으로 시작합니다.");
 
-                // 손상된 원문은 덮어쓰지 않고 고유 이름으로 격리한다. 사용자는
-                // 이 파일이나 `.last-good`에서 직접 복구할 수 있다.
+                // 손상본을 격리해 원문이나 `.last-good`에서 복구할 수 있게 한다.
                 match quarantine_corrupt_file(path) {
                     Ok(quarantine) => tracing::warn!(
                         "손상된 설정을 격리했습니다. 복구 파일: {}",
