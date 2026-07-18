@@ -1,4 +1,4 @@
-use super::{PendingOutput, count_reader_lines};
+use super::{LineEnding, PendingOutput, read_input_line, validate_and_count_reader, write_output};
 use std::io::{BufReader, Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -76,9 +76,115 @@ fn failed_persist_removes_the_temporary_output() {
 #[test]
 fn line_read_error_is_returned_instead_of_skipped() {
     let reader = BufReader::new(Cursor::new(vec![0xFF, b'\n']));
+    let cancel = std::sync::atomic::AtomicBool::new(false);
 
-    let error = count_reader_lines(reader, Path::new("invalid.txt")).unwrap_err();
+    let error = validate_and_count_reader(reader, Path::new("invalid.txt"), &cancel).unwrap_err();
 
     assert!(error.contains("invalid.txt"));
-    assert!(error.contains("입력 파일을 읽을 수 없습니다"));
+    assert!(error.contains("UTF-8 디코딩 실패"));
+}
+
+#[test]
+fn input_line_preserves_lf_crlf_and_eof() {
+    let mut reader = BufReader::new(Cursor::new(b"\xEF\xBB\xBFone\r\ntwo\nthree"));
+    let one = read_input_line(&mut reader, Path::new("input.txt"), true)
+        .unwrap()
+        .unwrap();
+    let two = read_input_line(&mut reader, Path::new("input.txt"), false)
+        .unwrap()
+        .unwrap();
+    let three = read_input_line(&mut reader, Path::new("input.txt"), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!((one.text.as_str(), one.ending), ("one", LineEnding::CrLf));
+    assert_eq!((two.text.as_str(), two.ending), ("two", LineEnding::Lf));
+    assert_eq!(
+        (three.text.as_str(), three.ending),
+        ("three", LineEnding::None)
+    );
+}
+
+#[test]
+fn output_modes_preserve_final_newline_presence() {
+    for write_type in [
+        super::WriteType::TranslationOnly,
+        super::WriteType::OriginalAndTrans,
+        super::WriteType::OriginalTransNewline,
+    ] {
+        for ending in [LineEnding::None, LineEnding::Lf, LineEnding::CrLf] {
+            let mut output = Vec::new();
+            write_output(
+                &mut output,
+                "original",
+                "translated",
+                write_type,
+                ending,
+                false,
+            )
+            .unwrap();
+            assert_eq!(output.ends_with(b"\n"), ending != LineEnding::None);
+            if ending == LineEnding::CrLf {
+                assert!(!output.windows(2).any(|window| window == b"d\n"));
+            }
+        }
+    }
+}
+
+#[test]
+fn cancellation_aborts_an_in_flight_file_http_request() {
+    use crate::file_trans::FileTransJobData;
+    use crate::translation::llm::{LlmCallParams, LlmProvider};
+    use crate::translation::{EngineCredentials, Language, TranslationEngine};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let _ = listener.accept();
+        std::thread::sleep(Duration::from_secs(2));
+    });
+
+    let cancel_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let job = FileTransJobData {
+        input_files: Vec::new(),
+        output_files: Vec::new(),
+        write_type: super::WriteType::TranslationOnly,
+        no_trans_linefeed: false,
+        cancel_token: cancel_token.clone(),
+        engine: TranslationEngine::Llm,
+        source_lang: Language::Jpn,
+        target_lang: Language::Kor,
+        credentials: EngineCredentials::Llm(LlmCallParams {
+            provider: LlmProvider::OpenAi,
+            model: "test".into(),
+            api_key: "test".into(),
+            base_url: format!("http://{address}"),
+            system_prompt: String::new(),
+            temperature: 0.3,
+            max_tokens: 10,
+            glossary: Vec::new(),
+        }),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let client = crate::translation::http_common::shared_client();
+    let context = super::TranslationContext {
+        runtime: &runtime,
+        http_client: &client,
+    };
+    let cancel = cancel_token.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        cancel.store(true, Ordering::SeqCst);
+    });
+
+    let started = Instant::now();
+    let result = super::translate_line("source", &job, &context);
+
+    assert!(result.is_err());
+    assert!(started.elapsed() < Duration::from_secs(1));
 }

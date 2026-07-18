@@ -11,8 +11,95 @@ use windows::{
 };
 
 use super::{App, COMPOSITION_RETRY_TIMER, state};
+use crate::config::{Config, TextStyle, TextType};
 use crate::d2d::{CompositionRenderer, WaitOutcome};
 use crate::window::TextRenderStyle;
+
+struct RenderBlock {
+    text: String,
+    style: TextRenderStyle,
+    top: f32,
+    height: f32,
+}
+
+fn split_name(text: &str) -> Option<(&str, &str)> {
+    text.split_once([':', '：'])
+        .map(|(name, body)| (name.trim(), body.trim()))
+        .filter(|(name, _)| !name.is_empty())
+}
+
+fn display_segments(config: &Config, original: &str, translated: &str) -> Vec<(TextType, String)> {
+    let (original_name, original_body) = if config.separate_name {
+        split_name(original)
+            .map(|(name, body)| (Some(name), body))
+            .unwrap_or((None, original))
+    } else {
+        (None, original)
+    };
+    let (translated_name, translated_body) = if config.separate_name {
+        split_name(translated)
+            .map(|(name, body)| (Some(name), body))
+            .unwrap_or((None, translated))
+    } else {
+        (None, translated)
+    };
+
+    let mut segments = Vec::with_capacity(3);
+    if config.show_name
+        && let Some(name) = translated_name.or(original_name)
+        && !name.is_empty()
+    {
+        segments.push((TextType::Name, name.to_string()));
+    }
+    if config.show_original && !original_body.is_empty() {
+        segments.push((TextType::Original, original_body.to_string()));
+    }
+    if config.show_translation && !translated_body.is_empty() {
+        segments.push((TextType::Translation, translated_body.to_string()));
+    }
+    segments
+}
+
+fn render_style(config: &Config, style: &TextStyle) -> TextRenderStyle {
+    TextRenderStyle {
+        font_size: style.size,
+        font_face: Arc::from(style.font_face.as_str()),
+        font_style: style.font_style,
+        text_align: config.text_align,
+        color: style.color_primary,
+        outline1_size: style.outline1_size,
+        outline1_color: style.color_outline1,
+        outline2_size: style.outline2_size,
+        outline2_color: style.color_outline2,
+        shadow_enabled: style.shadow_enabled,
+        shadow_color: style.color_shadow,
+        shadow_offset_x: config.shadow_offset_x,
+        shadow_offset_y: config.shadow_offset_y,
+    }
+}
+
+fn build_render_blocks(config: &Config, original: &str, translated: &str) -> Vec<RenderBlock> {
+    let mut top = config.text_margin_y as f32;
+    display_segments(config, original, translated)
+        .into_iter()
+        .map(|(text_type, text)| {
+            let style = render_style(config, config.get_text_style(text_type));
+            let line_count = text.lines().count().max(1) as f32;
+            let height = line_count * (style.font_size.max(1) as f32 * 1.35);
+            let block = RenderBlock {
+                text,
+                style,
+                top,
+                height,
+            };
+            top += height;
+            if text_type == TextType::Name {
+                top += config.name_margin as f32;
+            }
+            block
+        })
+        .collect()
+}
 
 impl App {
     const FRAME_WAIT_TIMEOUT_MS: u32 = 16;
@@ -71,26 +158,8 @@ impl App {
         let border_width = cfg.border_width;
         let border_color = cfg.border_color;
 
-        // 텍스트 스타일 정보 가져오기
-        let text_style = &cfg.translation_style;
-        if self.render_font_face.as_ref() != text_style.font_face {
-            self.render_font_face = Arc::from(text_style.font_face.as_str());
-        }
-        let render_style = TextRenderStyle {
-            font_size: text_style.size,
-            font_face: Arc::clone(&self.render_font_face),
-            font_style: text_style.font_style,
-            text_align: cfg.text_align,
-            color: text_style.color_primary,
-            outline1_size: text_style.outline1_size,
-            outline1_color: text_style.color_outline1,
-            outline2_size: text_style.outline2_size,
-            outline2_color: text_style.color_outline2,
-            shadow_enabled: text_style.shadow_enabled,
-            shadow_color: text_style.color_shadow,
-            shadow_offset_x: cfg.shadow_offset_x,
-            shadow_offset_y: cfg.shadow_offset_y,
-        };
+        let render_blocks =
+            build_render_blocks(&cfg, &self.state.original_text, &self.state.translated_text);
         let margin_x = cfg.text_margin_x;
         let margin_y = cfg.text_margin_y;
 
@@ -166,19 +235,21 @@ impl App {
         let t = phase_record(PhaseField::Border, t);
 
         // 텍스트 그리기
-        if !self.state.current_text.is_empty() {
+        for block in &render_blocks {
             let max_width = Self::text_layout_extent(self.state.client_size.width, margin_x);
-            let max_height = Self::text_layout_extent(self.state.client_size.height, margin_y);
+            let max_height = (self.state.client_size.height as f32 - block.top - margin_y as f32)
+                .max(1.0)
+                .min(block.height.max(1.0));
             if let Err(e) = renderer.draw_text(
                 ctx,
-                &self.state.current_text,
+                &block.text,
                 crate::d2d::TextBox {
                     x: margin_x as f32,
-                    y: margin_y as f32,
+                    y: block.top,
                     max_width,
                     max_height,
                 },
-                &render_style,
+                &block.style,
             ) {
                 tracing::error!("D2D draw_text failed: {e}");
                 frame_error = true;
@@ -220,40 +291,43 @@ impl App {
 
         // 렌더러 borrow가 끝난 뒤 hit region을 갱신한다. 빈 값은 창 전체를 뜻한다.
         self.hit_region.clear();
-        if !background_visible && !self.state.current_text.is_empty() {
+        if !background_visible && !render_blocks.is_empty() {
             let max_width = Self::text_layout_extent(self.state.client_size.width, margin_x);
-            let max_height = Self::text_layout_extent(self.state.client_size.height, margin_y);
-            // Outline과 양방향 shadow 상한을 합산하며 최솟값에서도 포화시킨다.
-            let shadow_inflate = if render_style.shadow_enabled {
-                render_style
-                    .shadow_offset_x
-                    .saturating_abs()
-                    .saturating_add(render_style.shadow_offset_y.saturating_abs())
-            } else {
-                0
-            };
-            let inflate = render_style
-                .outline1_size
-                .saturating_add(render_style.outline2_size)
-                .saturating_add(shadow_inflate)
-                .saturating_add(1) as f32;
             if let Some(d2d) = self.d2d_renderer.as_mut() {
-                match d2d.compute_text_line_rects(
-                    &self.state.current_text,
-                    &render_style,
-                    crate::d2d::TextBox {
-                        x: margin_x as f32,
-                        y: margin_y as f32,
-                        max_width,
-                        max_height,
-                    },
-                    inflate,
-                ) {
-                    Ok(rects) => {
-                        self.hit_region.clear();
-                        self.hit_region.extend_from_slice(rects);
+                for block in &render_blocks {
+                    let max_height =
+                        (self.state.client_size.height as f32 - block.top - margin_y as f32)
+                            .max(1.0)
+                            .min(block.height.max(1.0));
+                    let shadow_inflate = if block.style.shadow_enabled {
+                        block
+                            .style
+                            .shadow_offset_x
+                            .saturating_abs()
+                            .saturating_add(block.style.shadow_offset_y.saturating_abs())
+                    } else {
+                        0
+                    };
+                    let inflate = block
+                        .style
+                        .outline1_size
+                        .saturating_add(block.style.outline2_size)
+                        .saturating_add(shadow_inflate)
+                        .saturating_add(1) as f32;
+                    match d2d.compute_text_line_rects(
+                        &block.text,
+                        &block.style,
+                        crate::d2d::TextBox {
+                            x: margin_x as f32,
+                            y: block.top,
+                            max_width,
+                            max_height,
+                        },
+                        inflate,
+                    ) {
+                        Ok(rects) => self.hit_region.extend_from_slice(rects),
+                        Err(e) => tracing::warn!("compute_text_line_rects failed: {e}"),
                     }
-                    Err(e) => tracing::warn!("compute_text_line_rects failed: {e}"),
                 }
             }
         }

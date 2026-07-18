@@ -45,7 +45,8 @@ impl TrayIcon {
             set_sz_tip(addr_of_mut!(self.nid.szTip), "아네모네");
 
             if !Shell_NotifyIconW(NIM_ADD, &self.nid).as_bool() {
-                tracing::warn!("Shell_NotifyIconW(NIM_ADD) failed during create");
+                self.registered = false;
+                return Err(Error::from_thread());
             }
             self.registered = true;
 

@@ -115,7 +115,8 @@ impl AppCommand {
 
 pub(super) struct AppState {
     pub client_size: ClientSize,
-    pub current_text: String,
+    pub original_text: String,
+    pub translated_text: String,
     pub pending_translation: Option<PendingTranslation>,
     pub clipboard_debounce: ClipboardDebounce,
 }

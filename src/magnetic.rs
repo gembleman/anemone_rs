@@ -20,6 +20,7 @@ struct MagneticState {
     offset_x: i32,
     offset_y: i32,
     minimize_with_target: bool,
+    config: Rc<RefCell<Config>>,
 }
 
 thread_local! {
@@ -68,6 +69,7 @@ impl MagneticManager {
                 offset_x,
                 offset_y,
                 minimize_with_target,
+                config: self.config.clone(),
             });
         });
 
@@ -108,8 +110,10 @@ impl MagneticManager {
         MAGNETIC_INSTANCE.with(|cell| *cell.borrow_mut() = None);
 
         // SAFETY: self.main_hwnd is a valid window handle provided during construction.
-        unsafe {
-            let _ = ShowWindow(self.main_hwnd, SW_SHOW);
+        if self.config.borrow().window_visible {
+            unsafe {
+                let _ = ShowWindow(self.main_hwnd, SW_SHOW);
+            }
         }
     }
 
@@ -189,8 +193,10 @@ impl MagneticManager {
                 EVENT_SYSTEM_MINIMIZEEND if hwnd == state.target_hwnd && state.is_minimized => {
                     state.is_minimized = false;
                     // SAFETY: Called within unsafe extern "system" fn
-                    unsafe {
-                        let _ = ShowWindow(state.main_hwnd, SW_SHOWNOACTIVATE);
+                    if state.config.borrow().window_visible {
+                        unsafe {
+                            let _ = ShowWindow(state.main_hwnd, SW_SHOWNOACTIVATE);
+                        }
                     }
 
                     let mut target_rect = RECT::default();

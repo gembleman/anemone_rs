@@ -66,7 +66,7 @@ impl App {
         // 선택적으로 매회 캐시 key를 바꿔 miss 비용을 측정한다.
         let force_cache_miss = bench::bench_force_cache_miss();
         let saved_text = if force_cache_miss {
-            Some(self.state.current_text.clone())
+            Some(self.state.translated_text.clone())
         } else {
             None
         };
@@ -78,7 +78,7 @@ impl App {
                     self.config.borrow_mut().translation_style = s;
                 }
                 if let Some(t) = saved_text {
-                    self.state.current_text = t;
+                    self.state.translated_text = t;
                 }
                 if was_watching {
                     self.clipboard.start();
@@ -91,7 +91,7 @@ impl App {
         for i in 0..iters {
             // 접미사만 바꿔 layout 변화는 줄이고 cache miss를 만든다.
             if let Some(orig) = saved_text.as_ref() {
-                self.state.current_text = format!("{}#{}", orig, i);
+                self.state.translated_text = format!("{}#{}", orig, i);
             }
             bench::phase_begin();
             let started = std::time::Instant::now();
@@ -102,7 +102,7 @@ impl App {
                     self.config.borrow_mut().translation_style = s;
                 }
                 if let Some(t) = saved_text {
-                    self.state.current_text = t;
+                    self.state.translated_text = t;
                 }
                 if was_watching {
                     self.clipboard.start();
@@ -119,7 +119,7 @@ impl App {
             self.config.borrow_mut().translation_style = s;
         }
         if let Some(t) = saved_text {
-            self.state.current_text = t;
+            self.state.translated_text = t;
         }
         if was_watching {
             self.clipboard.start();

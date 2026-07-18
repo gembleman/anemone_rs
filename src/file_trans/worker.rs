@@ -1,7 +1,7 @@
 //! 파일 번역과 진행률 보고를 수행하는 백그라운드 작업.
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -168,7 +168,7 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     };
 
     // 한 번의 사전 검사에서 UTF-8과 줄 수를 확인한다.
-    let file_line_counts = match preflight_inputs(&job_data.input_files) {
+    let file_line_counts = match preflight_inputs(&job_data.input_files, &job_data.cancel_token) {
         Ok(counts) => counts,
         Err(error) => {
             report(ProgressEvent::Error(error));
@@ -235,23 +235,166 @@ struct TranslationContext<'a> {
 }
 
 /// UTF-8 검증과 파일별 줄 수 계산을 결합한 사전 검사.
-fn preflight_inputs(files: &[PathBuf]) -> Result<Vec<usize>, String> {
+fn preflight_inputs(
+    files: &[PathBuf],
+    cancel_token: &std::sync::atomic::AtomicBool,
+) -> Result<Vec<usize>, String> {
     let mut counts = Vec::with_capacity(files.len());
     for path in files {
-        let body = crate::util::read_utf8_translation_input(path)?;
-        counts.push(count_reader_lines(
-            BufReader::new(std::io::Cursor::new(body)),
-            path,
-        )?);
+        let reader = crate::util::open_utf8_translation_input(path)?;
+        counts.push(validate_and_count_reader(reader, path, cancel_token)?);
     }
     Ok(counts)
 }
 
-fn count_reader_lines<R: BufRead>(reader: R, path: &Path) -> Result<usize, String> {
-    reader.lines().try_fold(0usize, |count, line| {
-        line.map(|_| count + 1)
-            .map_err(|e| format!("입력 파일을 읽을 수 없습니다: {}\n{e}", path.display()))
-    })
+fn validate_and_count_reader<R: Read>(
+    mut reader: R,
+    path: &Path,
+    cancel_token: &std::sync::atomic::AtomicBool,
+) -> Result<usize, String> {
+    const CHUNK_SIZE: usize = 64 * 1024;
+    let mut buffer = [0u8; CHUNK_SIZE];
+    let mut pending = Vec::with_capacity(4);
+    let mut total_body_bytes = 0usize;
+    let mut newline_count = 0usize;
+    let mut last_was_newline = false;
+    let mut first_chunk = true;
+
+    loop {
+        if cancel_token.load(Ordering::SeqCst) {
+            return Err("사용자가 취소했습니다.".to_string());
+        }
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|e| format!("입력 파일을 읽을 수 없습니다: {}\n{e}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        let mut chunk = &buffer[..read];
+        if first_chunk {
+            first_chunk = false;
+            chunk = chunk.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(chunk);
+        }
+        total_body_bytes = total_body_bytes.saturating_add(chunk.len());
+        newline_count = newline_count.saturating_add(chunk.iter().filter(|&&b| b == b'\n').count());
+        if let Some(&last) = chunk.last() {
+            last_was_newline = last == b'\n';
+        }
+
+        pending.extend_from_slice(chunk);
+        match std::str::from_utf8(&pending) {
+            Ok(_) => pending.clear(),
+            Err(error) if error.error_len().is_none() => {
+                let tail = pending.split_off(error.valid_up_to());
+                pending = tail;
+            }
+            Err(error) => {
+                let byte = total_body_bytes
+                    .saturating_sub(pending.len())
+                    .saturating_add(error.valid_up_to());
+                return Err(format!(
+                    "UTF-8 디코딩 실패(byte {byte}): UTF-8 또는 UTF-8 BOM 파일만 사용할 수 있습니다. ({})",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if !pending.is_empty() {
+        return Err(format!(
+            "UTF-8 디코딩 실패(byte {}): UTF-8 또는 UTF-8 BOM 파일만 사용할 수 있습니다. ({})",
+            total_body_bytes.saturating_sub(pending.len()),
+            path.display()
+        ));
+    }
+    Ok(newline_count + usize::from(total_body_bytes > 0 && !last_was_newline))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LineEnding {
+    None,
+    Lf,
+    CrLf,
+}
+
+impl LineEnding {
+    fn bytes(self) -> &'static [u8] {
+        match self {
+            Self::None => b"",
+            Self::Lf => b"\n",
+            Self::CrLf => b"\r\n",
+        }
+    }
+
+    fn separator(self) -> &'static [u8] {
+        match self {
+            Self::CrLf => b"\r\n",
+            Self::None | Self::Lf => b"\n",
+        }
+    }
+}
+
+struct InputLine {
+    text: String,
+    ending: LineEnding,
+}
+
+fn read_input_line<R: BufRead>(
+    reader: &mut R,
+    path: &Path,
+    first_line: bool,
+) -> Result<Option<InputLine>, String> {
+    const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    loop {
+        let available = reader
+            .fill_buf()
+            .map_err(|e| format!("입력 파일을 읽을 수 없습니다: {}\n{e}", path.display()))?;
+        if available.is_empty() {
+            break;
+        }
+        let take = available
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        if bytes.len().saturating_add(take) > MAX_LINE_BYTES {
+            return Err(format!(
+                "입력 파일의 한 줄이 허용 크기({MAX_LINE_BYTES}바이트)를 초과했습니다: {}",
+                path.display()
+            ));
+        }
+        let found_newline = available[take - 1] == b'\n';
+        bytes.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if found_newline {
+            break;
+        }
+    }
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+
+    let ending = if bytes.ends_with(b"\r\n") {
+        bytes.truncate(bytes.len() - 2);
+        LineEnding::CrLf
+    } else if bytes.ends_with(b"\n") {
+        bytes.pop();
+        LineEnding::Lf
+    } else {
+        LineEnding::None
+    };
+    if first_line && bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        bytes.drain(..3);
+    }
+    if first_line && bytes.is_empty() && ending == LineEnding::None {
+        return Ok(None);
+    }
+    let text = String::from_utf8(bytes).map_err(|error| {
+        format!(
+            "UTF-8 디코딩 실패: UTF-8 또는 UTF-8 BOM 파일만 사용할 수 있습니다. ({})\n{error}",
+            path.display()
+        )
+    })?;
+    Ok(Some(InputLine { text, ending }))
 }
 
 /// 단일 파일 처리
@@ -264,14 +407,7 @@ fn process_single_file(
     translation: &TranslationContext<'_>,
     report: &impl Fn(ProgressEvent),
 ) -> Result<(), String> {
-    let input_file = File::open(input_path).map_err(|e| {
-        format!(
-            "입력 파일을 열 수 없습니다: {}\n{}",
-            input_path.display(),
-            e
-        )
-    })?;
-    let reader = BufReader::new(input_file);
+    let mut reader = crate::util::open_utf8_translation_input(input_path)?;
 
     // 최종 파일은 전체 번역과 flush가 성공한 뒤에만 교체한다.
     let mut pending_output = PendingOutput::create(output_path)?;
@@ -284,42 +420,22 @@ fn process_single_file(
 
     report(ProgressEvent::FileLines(line_count as i32));
 
-    // 한 줄 lookahead로 마지막 줄의 개행 여부를 보존한다.
-    let mut lines_iter = reader.lines();
-
-    let mut prev = lines_iter.next().transpose().map_err(|e| {
-        format!(
-            "입력 파일을 읽을 수 없습니다: {}\n{e}",
-            input_path.display()
-        )
-    })?;
-    // 첫 줄의 UTF-8 BOM은 본문에서 제외한다.
-    if let Some(first) = prev.as_mut()
-        && let Some(stripped) = first.strip_prefix('\u{FEFF}')
-    {
-        *first = stripped.to_string();
-    }
+    let mut prev = read_input_line(&mut reader, input_path, true)?;
     let mut idx: usize = 0;
 
-    for next in lines_iter {
-        let next = next.map_err(|e| {
-            format!(
-                "입력 파일을 읽을 수 없습니다: {}\n{e}",
-                input_path.display()
-            )
-        })?;
+    while let Some(line) = prev.take() {
+        let next = read_input_line(&mut reader, input_path, false)?;
         if job_data.cancel_token.load(Ordering::SeqCst) {
             return Err("사용자가 취소했습니다.".to_string());
         }
-
-        let line = prev.take().expect("prev primed above");
-        let translated = translate_line(&line, job_data, translation);
+        let translated = translate_line(&line.text, job_data, translation)?;
         write_output(
             pending_output.writer(),
-            &line,
+            &line.text,
             &translated,
             job_data.write_type,
-            false,
+            line.ending,
+            next.is_some(),
         )?;
 
         idx += 1;
@@ -327,27 +443,7 @@ fn process_single_file(
         report(ProgressEvent::FileProgress(idx as i32));
         report(ProgressEvent::TotalProgress(*global_current));
 
-        prev = Some(next);
-    }
-
-    // 남은 마지막 라인.
-    if let Some(line) = prev {
-        if job_data.cancel_token.load(Ordering::SeqCst) {
-            return Err("사용자가 취소했습니다.".to_string());
-        }
-        let translated = translate_line(&line, job_data, translation);
-        write_output(
-            pending_output.writer(),
-            &line,
-            &translated,
-            job_data.write_type,
-            true,
-        )?;
-
-        idx += 1;
-        *global_current += 1;
-        report(ProgressEvent::FileProgress(idx as i32));
-        report(ProgressEvent::TotalProgress(*global_current));
+        prev = next;
     }
 
     pending_output.persist()
@@ -360,15 +456,15 @@ fn translate_line(
     line: &str,
     job_data: &FileTransJobData,
     translation: &TranslationContext<'_>,
-) -> String {
+) -> Result<String, String> {
     // 빈 줄은 엔진에 보내지 않는다.
     if line.is_empty() {
-        return line.to_string();
+        return Ok(line.to_string());
     }
 
     // 옵션이 켜지면 공백만 있는 단락 구분 줄도 유지한다.
     if job_data.no_trans_linefeed && line.trim().is_empty() {
-        return line.to_string();
+        return Ok(line.to_string());
     }
 
     let request = TranslationRequest {
@@ -381,55 +477,80 @@ fn translate_line(
         credentials: job_data.credentials.clone(),
     };
 
-    let result = translation
-        .runtime
-        .block_on(TranslationDispatch::translate_async(
-            &request,
-            translation.http_client,
-        ));
+    let result = translation.runtime.block_on(async {
+        tokio::select! {
+            result = TranslationDispatch::translate_async(&request, translation.http_client) => Some(result),
+            () = wait_for_cancellation(&job_data.cancel_token) => None,
+        }
+    });
 
     match result {
-        Ok(translated) => translated,
-        Err(e) => {
+        None => Err("사용자가 취소했습니다.".to_string()),
+        Some(Ok(translated)) => Ok(translated),
+        Some(Err(e)) => {
             tracing::warn!(
                 category = e.log_category(),
                 status_code = ?e.log_status_code(),
                 input_bytes = line.len(),
                 "file translation line failed"
             );
-            format!("[번역 실패: {}]", e)
+            Ok(format!("[번역 실패: {}]", e))
         }
     }
 }
 
+async fn wait_for_cancellation(token: &std::sync::atomic::AtomicBool) {
+    while !token.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 /// 출력 형식에 따라 쓰기
-fn write_output(
-    writer: &mut BufWriter<File>,
+fn write_output<W: Write>(
+    writer: &mut W,
     original: &str,
     translated: &str,
     write_type: WriteType,
-    is_last: bool,
+    ending: LineEnding,
+    has_more: bool,
 ) -> Result<(), String> {
+    let separator = ending.separator();
     match write_type {
         WriteType::TranslationOnly => {
-            // 번역만
-            writeln!(writer, "{}", translated).map_err(|e| e.to_string())?;
+            writer
+                .write_all(translated.as_bytes())
+                .map_err(|e| e.to_string())?;
+            writer
+                .write_all(ending.bytes())
+                .map_err(|e| e.to_string())?;
         }
         WriteType::OriginalAndTrans => {
-            // 원문 + 번역
-            writeln!(writer, "{}", original).map_err(|e| e.to_string())?;
-            if is_last {
-                write!(writer, "{}", translated).map_err(|e| e.to_string())?;
-            } else {
-                writeln!(writer, "{}", translated).map_err(|e| e.to_string())?;
-            }
+            writer
+                .write_all(original.as_bytes())
+                .map_err(|e| e.to_string())?;
+            writer.write_all(separator).map_err(|e| e.to_string())?;
+            writer
+                .write_all(translated.as_bytes())
+                .map_err(|e| e.to_string())?;
+            writer
+                .write_all(ending.bytes())
+                .map_err(|e| e.to_string())?;
         }
         WriteType::OriginalTransNewline => {
-            // 원문 + 번역 + 개행
-            writeln!(writer, "{}", original).map_err(|e| e.to_string())?;
-            writeln!(writer, "{}", translated).map_err(|e| e.to_string())?;
-            if !is_last {
-                writeln!(writer).map_err(|e| e.to_string())?;
+            writer
+                .write_all(original.as_bytes())
+                .map_err(|e| e.to_string())?;
+            writer.write_all(separator).map_err(|e| e.to_string())?;
+            writer
+                .write_all(translated.as_bytes())
+                .map_err(|e| e.to_string())?;
+            if has_more {
+                writer.write_all(separator).map_err(|e| e.to_string())?;
+                writer.write_all(separator).map_err(|e| e.to_string())?;
+            } else {
+                writer
+                    .write_all(ending.bytes())
+                    .map_err(|e| e.to_string())?;
             }
         }
     }

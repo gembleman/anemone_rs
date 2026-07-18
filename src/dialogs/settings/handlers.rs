@@ -5,8 +5,8 @@ use windows::{
     core::*,
 };
 
-use super::SettingsDialog;
 use super::ctrl_id;
+use super::{SettingsDialog, mask_secret};
 use crate::config::{ColorType, TextAlign, TextType};
 use crate::constants::{WM_APP_REFRESH, WM_APP_SET_MAGNETIC};
 use crate::dialogs::color::ColorDialog;
@@ -308,7 +308,7 @@ impl SettingsDialog {
                 Ok(h) if !h.is_invalid() => h,
                 _ => return,
             };
-            let key_wide = to_wide(&key);
+            let key_wide = to_wide(&mask_secret(&key));
             let _ = SendMessageW(
                 listbox,
                 LB_ADDSTRING,

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
@@ -82,8 +83,10 @@ fn resolve_target_dir() -> Option<PathBuf> {
 
 fn mirror_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
+    let mut source_names = HashSet::new();
     for entry in fs::read_dir(src)? {
         let entry = entry?;
+        source_names.insert(entry.file_name());
         let file_type = entry.file_type()?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
@@ -92,6 +95,18 @@ fn mirror_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
             mirror_dir(&src_path, &dst_path)?;
         } else if file_type.is_file() {
             copy_if_newer(&src_path, &dst_path)?;
+        }
+    }
+    for entry in fs::read_dir(dst)? {
+        let entry = entry?;
+        if source_names.contains(&entry.file_name()) {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(path)?;
+        } else {
+            fs::remove_file(path)?;
         }
     }
     Ok(())

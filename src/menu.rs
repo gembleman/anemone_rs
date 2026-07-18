@@ -113,12 +113,6 @@ impl ContextMenu {
                 w!("파일 번역"),
             )?;
             AppendMenuW(self.hmenu, MF_STRING, id::BACKLOG as usize, w!("백로그"))?;
-            AppendMenuW(
-                self.hmenu,
-                MF_STRING,
-                id::HOOK_SETTINGS as usize,
-                w!("후크 설정"),
-            )?;
             AppendMenuW(self.hmenu, MF_STRING, id::SETTINGS as usize, w!("설정"))?;
             AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
 

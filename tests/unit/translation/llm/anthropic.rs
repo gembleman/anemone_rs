@@ -17,6 +17,25 @@ fn serializes_cache_control_and_borrowed_messages() {
     assert_eq!(value["system"][0]["cache_control"]["type"], "ephemeral");
     assert_eq!(value["messages"][0]["content"], "source");
     assert_eq!(value["max_tokens"], 321);
+    assert_eq!(value["temperature"], 0.5);
+}
+
+#[test]
+fn omits_temperature_for_opus_4_7() {
+    let params = LlmCallParams {
+        provider: super::super::LlmProvider::Anthropic,
+        model: String::new(),
+        api_key: "key".into(),
+        base_url: String::new(),
+        system_prompt: String::new(),
+        temperature: 0.3,
+        max_tokens: 321,
+        glossary: Vec::new(),
+    };
+
+    let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
+    assert_eq!(params.effective_model(), "claude-opus-4-7");
+    assert!(value.get("temperature").is_none());
 }
 
 #[test]

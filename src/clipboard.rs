@@ -53,7 +53,7 @@ impl Drop for OwnedGlobalMemory {
 pub struct ClipboardWatcher {
     hwnd: HWND,
     watching: bool,
-    ignore_next: bool,
+    last_sequence: u32,
 }
 
 impl ClipboardWatcher {
@@ -61,7 +61,7 @@ impl ClipboardWatcher {
         Self {
             hwnd,
             watching: false,
-            ignore_next: false,
+            last_sequence: 0,
         }
     }
 
@@ -76,9 +76,9 @@ impl ClipboardWatcher {
                 }
             }
             self.watching = true;
-            // 일부 환경에서 등록 직후 초기 WM_CLIPBOARDUPDATE 가 들어올 수 있어
-            // 첫 알림은 무시한다.
-            self.ignore_next = true;
+            // 등록 직후 동일 sequence의 초기 알림만 무시한다. 초기 알림이 없는
+            // 환경에서 사용자의 첫 변경을 버리지 않는다.
+            self.last_sequence = unsafe { GetClipboardSequenceNumber() };
         }
     }
 
@@ -99,10 +99,11 @@ impl ClipboardWatcher {
 
     /// WM_CLIPBOARDUPDATE 처리
     pub fn on_clipboard_update(&mut self) -> Option<String> {
-        if self.ignore_next {
-            self.ignore_next = false;
+        let sequence = unsafe { GetClipboardSequenceNumber() };
+        if sequence != 0 && sequence == self.last_sequence {
             return None;
         }
+        self.last_sequence = sequence;
         self.get_text()
     }
 

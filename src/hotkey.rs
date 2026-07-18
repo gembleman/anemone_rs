@@ -26,20 +26,27 @@ impl HotkeyManager {
     }
 
     pub fn register_defaults(&mut self) -> Result<()> {
-        // Ctrl+Shift+A: 윈도우 토글
-        self.register(id::TOGGLE_WINDOW, MOD_CONTROL | MOD_SHIFT, VK_A.0 as u32)?;
+        let registered_before = self.registered.len();
+        let result = (|| {
+            // Ctrl+Shift+A: 윈도우 토글
+            self.register(id::TOGGLE_WINDOW, MOD_CONTROL | MOD_SHIFT, VK_A.0 as u32)?;
 
-        // Ctrl+Shift+Up: 텍스트 크기 증가
-        self.register(id::TEXT_SIZE_UP, MOD_CONTROL | MOD_SHIFT, VK_UP.0 as u32)?;
+            // Ctrl+Shift+Up: 텍스트 크기 증가
+            self.register(id::TEXT_SIZE_UP, MOD_CONTROL | MOD_SHIFT, VK_UP.0 as u32)?;
 
-        // Ctrl+Shift+Down: 텍스트 크기 감소
-        self.register(
-            id::TEXT_SIZE_DOWN,
-            MOD_CONTROL | MOD_SHIFT,
-            VK_DOWN.0 as u32,
-        )?;
+            // Ctrl+Shift+Down: 텍스트 크기 감소
+            self.register(
+                id::TEXT_SIZE_DOWN,
+                MOD_CONTROL | MOD_SHIFT,
+                VK_DOWN.0 as u32,
+            )?;
 
-        Ok(())
+            Ok(())
+        })();
+        if result.is_err() {
+            self.unregister_from(registered_before);
+        }
+        result
     }
 
     pub fn register(&mut self, id: i32, modifiers: HOT_KEY_MODIFIERS, vk: u32) -> Result<()> {
@@ -53,14 +60,18 @@ impl HotkeyManager {
     }
 
     pub fn unregister_all(&mut self) {
-        for &id in &self.registered {
+        self.unregister_from(0);
+    }
+
+    fn unregister_from(&mut self, start: usize) {
+        for &id in self.registered[start..].iter().rev() {
             // SAFETY: self.hwnd is a valid window handle. UnregisterHotKey removes a hotkey
             // previously registered with RegisterHotKey using the same hwnd and id.
             unsafe {
                 let _ = UnregisterHotKey(Some(self.hwnd), id);
             }
         }
-        self.registered.clear();
+        self.registered.truncate(start);
     }
 
     /// 핫키 ID를 메뉴 명령 ID로 변환

@@ -6,6 +6,7 @@ use super::{ColorType, HookConfig, TextAlign, TextStyle, TextType, TranslationCo
 
 /// 애플리케이션 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     // 윈도우 표시
     pub window_visible: bool,
@@ -158,6 +159,7 @@ impl Config {
         self.name_margin = self.name_margin.clamp(0, 300);
         self.shadow_offset_x = self.shadow_offset_x.clamp(0, 20);
         self.shadow_offset_y = self.shadow_offset_y.clamp(0, 20);
+        self.repeat_text_mode = self.repeat_text_mode.min(4);
 
         for style in [
             &mut self.name_style,
@@ -231,7 +233,7 @@ impl Config {
     }
 
     /// 설정 파일에서 로드 (TOML 형식)
-    pub fn load_from_file(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load_from_file(path: &std::path::Path) -> Result<Self, ConfigLoadError> {
         let content = std::fs::read_to_string(path)?;
         Ok(Self::from_toml_str(&content)?)
     }
@@ -286,7 +288,7 @@ impl Config {
                 tracing::info!("설정 로드됨: {}", path.display());
                 config
             }
-            Err(_) => {
+            Err(ConfigLoadError::Decode(_)) => {
                 // Parser 오류에 API key가 섞일 수 있으므로 세부 본문은 기록하지 않는다.
                 tracing::error!("설정 파일을 파싱할 수 없습니다");
                 tracing::warn!("기본 설정으로 시작합니다.");
@@ -303,6 +305,11 @@ impl Config {
                 }
                 Self::default()
             }
+            Err(ConfigLoadError::Io(error)) => {
+                tracing::error!("설정 파일을 읽을 수 없습니다: {error}");
+                tracing::warn!("원본 설정을 보존하고 기본 설정으로 시작합니다.");
+                Self::default()
+            }
         }
     }
 
@@ -313,6 +320,14 @@ impl Config {
         tracing::debug!("설정 저장됨: {}", path.display());
         Ok(())
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigLoadError {
+    #[error("설정 파일 읽기 실패: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("설정 TOML 파싱 실패: {0}")]
+    Decode(#[from] toml::de::Error),
 }
 
 fn quarantine_corrupt_file(path: &std::path::Path) -> std::io::Result<PathBuf> {

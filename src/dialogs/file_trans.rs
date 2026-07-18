@@ -448,16 +448,9 @@ impl FileTransDialog {
 
     /// 파일 미리보기 (처음 7줄). 입력은 UTF-8 / UTF-8 BOM 만 허용한다.
     fn show_preview(&self, path: &Path) {
-        use std::io::{BufRead, BufReader, Cursor};
-
-        let content = match crate::util::read_utf8_translation_input(path) {
-            Ok(body) => {
-                let reader = BufReader::new(Cursor::new(body));
-                match reader.lines().take(7).collect::<std::io::Result<Vec<_>>>() {
-                    Ok(lines) => lines.join("\r\n"),
-                    Err(error) => format!("! 미리보기를 읽을 수 없습니다: {error}"),
-                }
-            }
+        const PREVIEW_BYTE_LIMIT: u64 = 64 * 1024;
+        let content = match crate::util::read_utf8_preview(path, 7, PREVIEW_BYTE_LIMIT) {
+            Ok(content) => content,
             Err(msg) => format!("! {msg}"),
         };
 

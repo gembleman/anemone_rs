@@ -16,12 +16,8 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
 
-    let temp = unique_temp_path(path);
+    let (mut file, temp) = create_unique_temp(path)?;
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)?;
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;
@@ -38,6 +34,27 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&temp);
     }
     result
+}
+
+fn create_unique_temp(path: &Path) -> io::Result<(fs::File, PathBuf)> {
+    const MAX_ATTEMPTS: usize = 100;
+    create_unique_temp_from(std::iter::repeat_with(|| unique_temp_path(path)).take(MAX_ATTEMPTS))
+}
+
+fn create_unique_temp_from(
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> io::Result<(fs::File, PathBuf)> {
+    for temp in candidates {
+        match OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => return Ok((file, temp)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "고유한 원자 저장 임시 파일명을 할당할 수 없습니다",
+    ))
 }
 
 fn unique_temp_path(path: &Path) -> PathBuf {
@@ -90,5 +107,26 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "new contents");
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn atomic_write_retries_a_colliding_temp_name() {
+        let root = std::env::temp_dir().join(format!(
+            "anemone-atomic-collision-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let collision = root.join("collision.tmp");
+        let fallback = root.join("fallback.tmp");
+        fs::write(&collision, b"stale").unwrap();
+
+        let (file, selected) =
+            create_unique_temp_from([collision.clone(), fallback.clone()]).unwrap();
+        drop(file);
+
+        assert_eq!(selected, fallback);
+        assert_eq!(fs::read(&collision).unwrap(), b"stale");
+        fs::remove_dir_all(root).unwrap();
     }
 }

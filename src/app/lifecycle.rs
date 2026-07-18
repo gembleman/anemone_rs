@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::mem::zeroed;
 use std::ptr::null_mut;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use windows::{
     Win32::{
@@ -140,7 +139,6 @@ impl App {
 
             // 설정 로드 (파일이 없으면 기본값)
             let config = Rc::new(RefCell::new(Config::load_or_default()));
-            let render_font_face = Arc::from(config.borrow().translation_style.font_face.as_str());
 
             let app = Rc::new(RefCell::new(App {
                 hwnd,
@@ -149,12 +147,12 @@ impl App {
                         INITIAL_WINDOW_WIDTH,
                         INITIAL_WINDOW_HEIGHT,
                     ),
-                    current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
+                    original_text: String::new(),
+                    translated_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
                     pending_translation: None,
                     clipboard_debounce: state::ClipboardDebounce::default(),
                 },
                 config,
-                render_font_face,
                 tray: TrayIcon::new(),
                 menu: ContextMenu::new()?,
                 hotkey: None,

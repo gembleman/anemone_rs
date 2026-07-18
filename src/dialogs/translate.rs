@@ -169,8 +169,11 @@ unsafe extern "system" fn translate_dialog_proc(
                 if id == IDCANCEL.0 as u16 {
                     let _ = DestroyWindow(hwnd);
                 } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    if id == ctrl_id::SOURCE_EDIT && notify_code == EN_CHANGE && dialog.one_go {
-                        dialog.schedule_auto_translate();
+                    if id == ctrl_id::SOURCE_EDIT && notify_code == EN_CHANGE {
+                        dialog.invalidate_stale_translation();
+                        if dialog.one_go {
+                            dialog.schedule_auto_translate();
+                        }
                     }
                     dialog.handle_command(id, notify_code);
                 }
@@ -758,6 +761,10 @@ impl TranslateDialog {
         if self.in_flight_id != Some(req_id) {
             return;
         }
+        if self.get_source_text() != self.last_submitted_source {
+            self.in_flight_id = None;
+            return;
+        }
         self.in_flight_id = None;
 
         let result = match response.result {
@@ -817,12 +824,26 @@ impl TranslateDialog {
     }
 
     /// 텍스트 초기화
-    fn clear_text(&self) {
+    fn clear_text(&mut self) {
+        self.invalidate_translation_route();
         // SAFETY: source_edit and dest_edit are valid edit control handles.
         unsafe {
             let _ = set_window_text(self.source_edit, "");
             let _ = set_window_text(self.dest_edit, "");
             let _ = SetFocus(Some(self.source_edit));
         }
+    }
+
+    fn invalidate_stale_translation(&mut self) {
+        if self.in_flight_id.is_some() && self.get_source_text() != self.last_submitted_source {
+            self.invalidate_translation_route();
+        }
+    }
+
+    fn invalidate_translation_route(&mut self) {
+        if self.in_flight_id.take().is_some() {
+            crate::translation_ui::cancel_translation(self.hwnd);
+        }
+        self.last_submitted_source.clear();
     }
 }

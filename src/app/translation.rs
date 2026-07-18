@@ -145,12 +145,14 @@ impl App {
             Ok(req_id) => {
                 self.state.pending_translation =
                     Some(state::PendingTranslation::new(req_id, original));
-                self.state.current_text = format!("[번역 중...]\n{text}");
+                self.state.original_text = text.to_string();
+                self.state.translated_text = "[번역 중...]".to_string();
             }
             Err(error) => {
                 tracing::error!("Translation request failed: {error}");
                 self.state.pending_translation = None;
-                self.state.current_text = text.to_string();
+                self.state.original_text = text.to_string();
+                self.state.translated_text.clear();
                 add_to_backlog(&self.backlog_store, LogEntry::new(text.to_string()));
             }
         }
@@ -178,12 +180,14 @@ impl App {
         let original = completion.original;
         let translation = match completion.result {
             Ok(translated) => {
-                self.state.current_text = translated.clone();
+                self.state.original_text = original.to_string();
+                self.state.translated_text = translated.clone();
                 Some(translated)
             }
             Err(err) => {
                 log_translation_failure(&err);
-                self.state.current_text = original.to_string();
+                self.state.original_text = original.to_string();
+                self.state.translated_text.clear();
                 None
             }
         };

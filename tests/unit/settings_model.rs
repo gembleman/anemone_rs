@@ -62,3 +62,13 @@ fn colors_and_fonts_are_applied_as_pure_config_changes() {
     assert_eq!(config.name_style.font_face, "Test Font");
     assert_eq!(config.name_style.font_style, 3);
 }
+
+#[test]
+fn repeat_mode_cycle_is_safe_for_untrusted_u8_values() {
+    let mut config = Config {
+        repeat_text_mode: u8::MAX,
+        ..Config::default()
+    };
+    SettingsEditor::apply(&mut config, SettingsChange::CycleRepeatTextMode);
+    assert_eq!(config.repeat_text_mode, 0);
+}

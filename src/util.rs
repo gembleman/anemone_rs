@@ -1,5 +1,7 @@
 //! 공통 유틸리티 함수
 
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 /// UTF-8 문자열을 null-terminated UTF-16 `Vec<u16>`로 변환한다.
@@ -9,17 +11,16 @@ pub fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// 파일 번역 입력에 허용되는 인코딩. UTF-8 또는 UTF-8 BOM 만 허용한다.
-///
-/// 검증 성공 시 BOM 을 제외한 본문 바이트(`Vec<u8>`) 를 돌려준다. 호출부는
-/// 이 바이트를 그대로 `BufReader::new(Cursor::new(...))` 등으로 다시 줄 단위로
-/// 읽으면 된다. 파일을 두 번 열지 않기 위해 본문 전체를 메모리에 올리는 방식.
-pub fn read_utf8_translation_input(path: &Path) -> Result<Vec<u8>, String> {
-    let bytes = std::fs::read(path)
+/// UTF-8/UTF-8 BOM 입력을 스트리밍으로 읽을 reader를 연다. 인코딩 전체 검증은
+/// 소비자가 읽는 동안 수행하며, 여기서는 잘못된 BOM을 먼저 거른다.
+pub fn open_utf8_translation_input(path: &Path) -> Result<BufReader<File>, String> {
+    let file = File::open(path)
         .map_err(|e| format!("입력 파일을 열 수 없습니다: {} ({e})", path.display()))?;
-
-    // 비-UTF-8 BOM 부터 빠르게 거른다. UTF-16/UTF-32 가 가장 흔한 오인코딩 후보.
-    let kind = detect_non_utf8_bom(&bytes);
+    let mut reader = BufReader::new(file);
+    let prefix = reader
+        .fill_buf()
+        .map_err(|e| format!("입력 파일을 읽을 수 없습니다: {} ({e})", path.display()))?;
+    let kind = detect_non_utf8_bom(prefix);
     if let Some(name) = kind {
         return Err(format!(
             "지원하지 않는 인코딩입니다: {name}. UTF-8 또는 UTF-8 BOM 파일만 사용할 수 있습니다. ({})",
@@ -27,15 +28,36 @@ pub fn read_utf8_translation_input(path: &Path) -> Result<Vec<u8>, String> {
         ));
     }
 
+    Ok(reader)
+}
+
+/// 미리보기는 파일 크기와 무관한 고정 바이트 상한 안에서만 읽는다.
+pub fn read_utf8_preview(path: &Path, max_lines: usize, max_bytes: u64) -> Result<String, String> {
+    let reader = open_utf8_translation_input(path)?;
+    let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024) as usize);
+    reader
+        .take(max_bytes)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("미리보기를 읽을 수 없습니다: {e}"))?;
     let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
-    if let Err(e) = std::str::from_utf8(body) {
-        return Err(format!(
-            "UTF-8 디코딩 실패(byte {}): UTF-8 또는 UTF-8 BOM 파일만 사용할 수 있습니다. ({})",
-            e.valid_up_to(),
-            path.display()
-        ));
-    }
-    Ok(body.to_vec())
+    let valid = match std::str::from_utf8(body) {
+        Ok(text) => text,
+        Err(error) if error.error_len().is_none() => {
+            std::str::from_utf8(&body[..error.valid_up_to()]).unwrap_or_default()
+        }
+        Err(error) => {
+            return Err(format!(
+                "UTF-8 디코딩 실패(byte {}): UTF-8 또는 UTF-8 BOM 파일만 사용할 수 있습니다. ({})",
+                error.valid_up_to(),
+                path.display()
+            ));
+        }
+    };
+    Ok(valid
+        .lines()
+        .take(max_lines)
+        .collect::<Vec<_>>()
+        .join("\r\n"))
 }
 
 fn detect_non_utf8_bom(bytes: &[u8]) -> Option<&'static str> {

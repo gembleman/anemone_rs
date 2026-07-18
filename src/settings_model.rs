@@ -66,7 +66,7 @@ impl SettingsEditor {
         let changed = match change {
             SettingsChange::Toggle(setting) => toggle(config, setting),
             SettingsChange::CycleRepeatTextMode => {
-                let next = (config.repeat_text_mode + 1) % 5;
+                let next = config.repeat_text_mode.checked_add(1).unwrap_or(0) % 5;
                 set_if_changed(&mut config.repeat_text_mode, next)
             }
             SettingsChange::TextAlignment(value) => set_if_changed(&mut config.text_align, value),

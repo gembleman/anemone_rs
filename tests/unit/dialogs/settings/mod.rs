@@ -1,5 +1,13 @@
-use super::should_persist_trackbar;
+use super::{mask_secret, should_persist_trackbar};
 use windows::Win32::UI::Controls::{TB_ENDTRACK, TB_LINEDOWN, TB_THUMBTRACK};
+
+#[test]
+fn secret_mask_never_contains_the_complete_secret() {
+    let masked = mask_secret("super-secret-1234");
+    assert_eq!(masked, "••••1234");
+    assert!(!masked.contains("super-secret"));
+    assert_eq!(mask_secret("abc"), "••••");
+}
 
 #[test]
 fn persists_trackbar_only_when_tracking_ends() {

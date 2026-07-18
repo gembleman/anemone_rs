@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use windows::{
     Win32::Foundation::{HWND, RECT},
@@ -40,8 +39,6 @@ pub struct App {
     hwnd: HWND,
     state: state::AppState,
     config: Rc<RefCell<Config>>,
-    /// paint마다 폰트 이름을 재할당하지 않도록 설정 값과 동기화하는 공유 문자열.
-    render_font_face: Arc<str>,
     tray: TrayIcon,
     menu: ContextMenu,
     hotkey: Option<HotkeyManager>,

@@ -9,6 +9,7 @@ fn out_of_range_toml_is_normalized_at_deserialize_boundary() {
         name_margin: -10,
         shadow_offset_x: -20,
         shadow_offset_y: i32::MAX,
+        repeat_text_mode: u8::MAX,
         ..Config::default()
     };
 
@@ -32,6 +33,7 @@ fn out_of_range_toml_is_normalized_at_deserialize_boundary() {
     assert_eq!(normalized.name_margin, 0);
     assert_eq!(normalized.shadow_offset_x, 0);
     assert_eq!(normalized.shadow_offset_y, 20);
+    assert_eq!(normalized.repeat_text_mode, 4);
     for style in [
         &normalized.name_style,
         &normalized.original_style,
@@ -56,6 +58,20 @@ fn invalid_translation_values_are_rejected_instead_of_defaulted() {
         let text = toml::to_string(&raw).expect("serialize invalid test config");
         assert!(Config::from_toml_str(&text).is_err(), "config: {text}");
     }
+}
+
+#[test]
+fn partial_config_uses_defaults_for_missing_top_level_fields() {
+    let loaded = Config::from_toml_str("window_visible = false\n").unwrap();
+    assert!(!loaded.window_visible);
+    assert_eq!(
+        loaded.clipboard_max_length,
+        Config::default().clipboard_max_length
+    );
+    assert_eq!(
+        loaded.translation.engine,
+        Config::default().translation.engine
+    );
 }
 
 #[test]
@@ -122,6 +138,23 @@ fn corrupt_config_is_quarantined_without_overwrite() {
         std::fs::read_to_string(&quarantines[0]).unwrap(),
         "not = [valid"
     );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn io_error_does_not_quarantine_or_rename_the_source() {
+    let root = unique_test_dir("io-error");
+    let path = root.join("config.toml");
+    std::fs::create_dir_all(&path).unwrap();
+
+    assert!(matches!(
+        Config::load_from_file(&path),
+        Err(ConfigLoadError::Io(_))
+    ));
+    let _ = Config::load_or_default_from(&path);
+
+    assert!(path.is_dir());
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
     std::fs::remove_dir_all(root).unwrap();
 }
 

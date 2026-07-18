@@ -49,14 +49,12 @@ const DISPLAY_IDS: &[u16] = &[
     ctrl_id::PRINT_TRANSTEXT,
     ctrl_id::PRINT_ORGNAME,
     ctrl_id::SEPERATE_NAME,
-    ctrl_id::REPEAT_TEXT,
     ctrl_id::TEXTALIGN_LEFT,
     ctrl_id::TEXTALIGN_MID,
     ctrl_id::TEXTALIGN_RIGHT,
     ctrl_id::TOPMOST,
     ctrl_id::USE_MAGNETIC,
     ctrl_id::MAGNETIC_MINIMIZE,
-    ctrl_id::HIDEWIN,
     ctrl_id::CLIPBOARD_WATCH,
     ctrl_id::WNDCLICK_THROUGH,
 ];
@@ -102,6 +100,13 @@ impl SettingsDialog {
         self.register_engine_controls()?;
         self.initialize_tab_titles()?;
         self.initialize_values()?;
+        // 반복 정책과 임시 숨김은 런타임 계약이 정의될 때까지 노출하지 않는다.
+        for id in [ctrl_id::REPEAT_TEXT, ctrl_id::HIDEWIN] {
+            let control = self.control(id)?;
+            unsafe {
+                let _ = ShowWindow(control, SW_HIDE);
+            }
+        }
 
         for &hwnd in &self.tab_controls[TAB_DISPLAY] {
             unsafe {
@@ -276,7 +281,7 @@ impl SettingsDialog {
         )?;
         let key_list = self.control(ctrl_id::DEEPL_KEYS_LIST)?;
         for key in &config.translation.deepl_keys {
-            let wide = to_wide(key);
+            let wide = to_wide(&mask_secret(key));
             unsafe {
                 let _ = SendMessageW(
                     key_list,

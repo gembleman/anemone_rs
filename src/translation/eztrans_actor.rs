@@ -8,7 +8,7 @@ struct EzTransState {
     /// 현재 DLL/data 경로. 같으면 재사용하고 다르면 다시 로드한다.
     loaded_paths: Option<(String, String)>,
     /// EzTrans 인접 DLL 탐색을 위해 등록한 검색 경로.
-    registered_dll_dirs: Vec<String>,
+    registered_dll_dir: Option<RegisteredDllDirectory>,
 }
 
 impl EzTransState {
@@ -16,7 +16,7 @@ impl EzTransState {
         Self {
             engine: None,
             loaded_paths: None,
-            registered_dll_dirs: Vec::new(),
+            registered_dll_dir: None,
         }
     }
 
@@ -28,20 +28,25 @@ impl EzTransState {
             }
             self.engine = None;
             self.loaded_paths = None;
+            self.registered_dll_dir = None;
         }
-        self.ensure_dll_directory_registered(dll_path)?;
+        let directory = RegisteredDllDirectory::register(dll_path)?;
         let engine = EzTransTranslator::new(dll_path, dat_path)?;
+        self.registered_dll_dir = Some(directory);
         self.engine = Some(engine);
         self.loaded_paths = Some((dll_path.to_string(), dat_path.to_string()));
         Ok(())
     }
+}
 
-    fn ensure_dll_directory_registered(&mut self, dll_path: &str) -> Result<(), String> {
+struct RegisteredDllDirectory {
+    path: String,
+    cookie: usize,
+}
+
+impl RegisteredDllDirectory {
+    fn register(dll_path: &str) -> Result<Self, String> {
         let dir = eztrans_dll_search_dir(dll_path)?;
-        if self.registered_dll_dirs.iter().any(|d| d == &dir) {
-            return Ok(());
-        }
-
         let wide: Vec<u16> = dir.encode_utf16().chain(std::iter::once(0)).collect();
         // SAFETY: `wide` is a null-terminated UTF-16 string valid for this call.
         // Windows copies the directory path into the process DLL directory list.
@@ -53,9 +58,23 @@ impl EzTransState {
                 let err = windows::Win32::Foundation::GetLastError();
                 return Err(format!("EzTrans DLL 폴더 등록 실패: Win32 {}", err.0));
             }
+            Ok(Self {
+                path: dir,
+                cookie: cookie as usize,
+            })
         }
-        self.registered_dll_dirs.push(dir);
-        Ok(())
+    }
+}
+
+impl Drop for RegisteredDllDirectory {
+    fn drop(&mut self) {
+        unsafe {
+            if let Err(error) = windows::Win32::System::LibraryLoader::RemoveDllDirectory(
+                self.cookie as *const std::ffi::c_void,
+            ) {
+                tracing::warn!("EzTrans DLL 폴더 등록 해제 실패 ({}): {error}", self.path);
+            }
+        }
     }
 }
 

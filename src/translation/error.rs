@@ -25,6 +25,9 @@ pub enum TranslationError {
     #[error("네트워크 오류: {0}")]
     Network(String),
 
+    #[error("HTTP 응답이 허용 크기({limit}바이트)를 초과했습니다.")]
+    ResponseTooLarge { limit: usize },
+
     #[error("API 오류 ({code}): {message}")]
     Api {
         code: u16,
@@ -79,6 +82,7 @@ impl TranslationError {
             Self::UnsupportedLanguage { .. } => "unsupported_language",
             Self::MissingApiKey => "missing_api_key",
             Self::Network(_) => "network",
+            Self::ResponseTooLarge { .. } => "response_too_large",
             Self::Api { .. } | Self::RateLimited { .. } => "api",
             Self::OutputTruncated { .. } => "output_truncated",
             Self::Parse(_) => "parse",

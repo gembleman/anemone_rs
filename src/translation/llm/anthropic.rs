@@ -36,7 +36,8 @@ struct Message<'a> {
 struct MessagesRequest<'a> {
     model: &'a str,
     max_tokens: u32,
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
     system: [SystemBlock<'a>; 1],
     messages: [Message<'a>; 1],
 }
@@ -49,7 +50,7 @@ fn request_payload<'a>(
     MessagesRequest {
         model: params.effective_model(),
         max_tokens: params.max_tokens,
-        temperature: params.temperature,
+        temperature: anthropic_sampling_temperature(params),
         system: [SystemBlock {
             kind: "text",
             text: system,
@@ -59,6 +60,17 @@ fn request_payload<'a>(
             role: "user",
             content: text,
         }],
+    }
+}
+
+/// Opus 4.7부터는 기본값이 아닌 sampling parameter를 요청에 포함하면 API가
+/// 거부한다. 모델 별 계약에 맞춰 필드를 값 1.0으로 보내는 대신 완전히 생략한다.
+fn anthropic_sampling_temperature(params: &LlmCallParams) -> Option<f32> {
+    let model = params.effective_model().to_ascii_lowercase();
+    if model.starts_with("claude-opus-4-7") {
+        None
+    } else {
+        Some(params.temperature)
     }
 }
 

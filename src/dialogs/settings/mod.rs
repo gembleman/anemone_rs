@@ -56,6 +56,24 @@ pub(super) fn repeat_mode_label(mode: u8) -> String {
     format!("반복: {}", name)
 }
 
+pub(super) fn mask_secret(secret: &str) -> String {
+    if secret.is_empty() {
+        return String::new();
+    }
+    if secret.chars().count() <= 4 {
+        return "••••".to_string();
+    }
+    let suffix: String = secret
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("••••{suffix}")
+}
+
 fn should_persist_trackbar(code: u32) -> bool {
     code == TB_ENDTRACK
 }
