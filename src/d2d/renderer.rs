@@ -31,6 +31,8 @@ pub struct D2DRenderer {
     pub(super) text_cache: Option<TextLayoutCache>,
     /// 현재 outline과 shadow를 합성한 bitmap cache.
     pub(super) outline_bitmap: Option<OutlineBitmap>,
+    /// 투명 배경의 `WM_NCHITTEST`용 줄별 사각형 cache.
+    pub(super) hit_test_cache: Option<HitTestCache>,
     /// 캐시 miss 비율 추적 — 폭주 시 비트맵 경로 우회.
     pub(super) miss_tracker: MissTracker,
 }
@@ -67,6 +69,7 @@ impl D2DRenderer {
                 stroke_style: Some(stroke_style),
                 text_cache: None,
                 outline_bitmap: None,
+                hit_test_cache: None,
                 miss_tracker: MissTracker::new(),
             })
         }
@@ -214,6 +217,7 @@ impl D2DRenderer {
         self.brush_cache.clear();
         self.text_cache = None;
         self.outline_bitmap = None;
+        self.hit_test_cache = None;
         // 추적 상태도 함께 초기화한다.
         self.miss_tracker = MissTracker::new();
     }

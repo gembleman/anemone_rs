@@ -58,7 +58,7 @@ fn stale_translation_cannot_take_latest_original() {
 
     assert!(stale.is_none());
     assert_eq!(
-        pending.as_ref().map(|p| p.original.as_str()),
+        pending.as_ref().map(|p| p.original.as_ref()),
         Some("latest")
     );
 }
@@ -68,14 +68,14 @@ fn success_and_failure_keep_the_matching_original() {
     let mut success = Some(PendingTranslation::new(7, "first".to_string()));
     let completed = correlate_translation(&mut success, 7, Ok::<_, ()>("translated"))
         .expect("current response");
-    assert_eq!(completed.original, "first");
+    assert_eq!(completed.original.as_ref(), "first");
     assert_eq!(completed.result, Ok("translated"));
     assert!(success.is_none());
 
     let mut failure = Some(PendingTranslation::new(8, "second".to_string()));
     let completed = correlate_translation(&mut failure, 8, Err::<String, _>("failed"))
         .expect("current response");
-    assert_eq!(completed.original, "second");
+    assert_eq!(completed.original.as_ref(), "second");
     assert_eq!(completed.result, Err("failed"));
     assert!(failure.is_none());
 }

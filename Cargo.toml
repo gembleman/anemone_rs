@@ -70,3 +70,10 @@ httpdate = "1.0"
 
 [build-dependencies]
 winresource = "0.1"
+
+[profile.release]
+# 최종 GUI 배포물은 증분 빌드보다 실행 성능과 크기를 우선한다.
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

@@ -541,6 +541,7 @@ impl FileTransDialog {
             }
             return;
         }
+        let (engine, source_lang, target_lang, credentials) = spec.into_parts();
 
         let job_data = FileTransJobData {
             input_files: self.input_files.clone(),
@@ -549,10 +550,10 @@ impl FileTransDialog {
             no_trans_linefeed: self.no_trans_linefeed,
             // runner가 작업별 취소 토큰을 설정한다.
             cancel_token: Default::default(),
-            engine: spec.engine(),
-            source_lang: spec.source_lang(),
-            target_lang: spec.target_lang(),
-            credentials: spec.credentials(),
+            engine,
+            source_lang,
+            target_lang,
+            credentials,
         };
         let task = FileTransRunner::start(job_data);
         if let Err(e) = FileTransProgressDialog::show(self.hwnd, task) {

@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn serializes_borrowed_request_with_the_api_shape() {
+    let params = LlmCallParams {
+        provider: LlmProvider::OpenAi,
+        model: "model".into(),
+        api_key: "key".into(),
+        base_url: String::new(),
+        system_prompt: String::new(),
+        temperature: 0.25,
+        max_tokens: 123,
+        glossary: Vec::new(),
+    };
+    let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
+    assert_eq!(value["model"], "model");
+    assert_eq!(value["messages"][0]["content"], "system");
+    assert_eq!(value["messages"][1]["content"], "source");
+    assert_eq!(value["max_tokens"], 123);
+}
+
+#[test]
 fn parses_plain_string_content() {
     let json = r#"{
         "choices": [{

@@ -530,7 +530,7 @@ impl BacklogDialog {
 /// 저장소에 항목을 추가하고, 백로그 창이 열려 있으면 즉시 화면에도 반영한다.
 pub fn add_to_backlog(store: &Rc<RefCell<BacklogStore>>, entry: LogEntry) {
     let entry_for_render = entry.clone();
-    store.borrow_mut().push(entry);
+    let evicted = store.borrow_mut().push(entry);
     BACKLOG_INSTANCE.with(|cell| {
         let Ok(guard) = cell.try_borrow() else {
             return;
@@ -538,11 +538,15 @@ pub fn add_to_backlog(store: &Rc<RefCell<BacklogStore>>, entry: LogEntry) {
         if let Some(ref dialog) = *guard
             && let Ok(d) = dialog.try_borrow()
         {
-            d.append_styled_texts_to_richedit(BacklogStore::render_entry(
-                &entry_for_render,
-                d.filter,
-                d.add_linefeed,
-            ));
+            if evicted {
+                d.refresh_richedit();
+            } else {
+                d.append_styled_texts_to_richedit(BacklogStore::render_entry(
+                    &entry_for_render,
+                    d.filter,
+                    d.add_linefeed,
+                ));
+            }
         }
     });
 }

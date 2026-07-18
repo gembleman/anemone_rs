@@ -72,6 +72,28 @@ fn active_effect_values_invalidate_bitmap_key() {
 }
 
 #[test]
+fn derived_keys_share_layout_strings() {
+    let base = style();
+    let layout = LayoutKeyRef::from_style("text", &base, 100.0, 50.0).to_owned();
+    let bitmap = OutlineBitmapKeyRef::from_style("text", &base, 100.0, 50.0)
+        .to_owned_reusing_layout(&layout);
+    assert!(std::sync::Arc::ptr_eq(&layout.text, &bitmap.text));
+    assert!(std::sync::Arc::ptr_eq(&layout.font_face, &bitmap.font_face));
+}
+
+#[test]
+fn hit_test_key_tracks_position_and_inflate() {
+    let base = style();
+    let layout = LayoutKeyRef::from_style("text", &base, 100.0, 50.0).to_owned();
+    let key = HitTestKeyRef::from_style("text", &base, 5.0, 7.0, 100.0, 50.0, 3.0)
+        .to_owned_reusing_layout(&layout);
+
+    assert!(HitTestKeyRef::from_style("text", &base, 5.0, 7.0, 100.0, 50.0, 3.0).matches(&key));
+    assert!(!HitTestKeyRef::from_style("text", &base, 6.0, 7.0, 100.0, 50.0, 3.0).matches(&key));
+    assert!(!HitTestKeyRef::from_style("text", &base, 5.0, 7.0, 100.0, 50.0, 4.0).matches(&key));
+}
+
+#[test]
 fn miss_tracker_warms_up_enters_overload_and_recovers() {
     let mut tracker = MissTracker::new();
     for _ in 0..7 {

@@ -1,4 +1,5 @@
 use crate::menu;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ClientSize {
@@ -20,18 +21,21 @@ impl ClientSize {
 #[derive(Debug)]
 pub(super) struct PendingTranslation {
     pub req_id: u64,
-    pub original: String,
+    pub original: Arc<str>,
 }
 
 impl PendingTranslation {
-    pub(super) fn new(req_id: u64, original: String) -> Self {
-        Self { req_id, original }
+    pub(super) fn new(req_id: u64, original: impl Into<Arc<str>>) -> Self {
+        Self {
+            req_id,
+            original: original.into(),
+        }
     }
 }
 
 #[derive(Debug)]
 pub(super) struct TranslationCompletion<T, E> {
-    pub original: String,
+    pub original: Arc<str>,
     pub result: Result<T, E>,
 }
 
