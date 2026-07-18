@@ -53,6 +53,29 @@ fn builds_deepl_credentials_from_the_effective_key_list() {
 }
 
 #[test]
+fn consuming_job_spec_moves_credentials_without_reallocating() {
+    let mut config = TranslationConfig {
+        engine: "llm".into(),
+        ..TranslationConfig::default()
+    };
+    config.llm.api_key = "secret".repeat(32);
+    config.llm.system_prompt = "prompt".repeat(256);
+
+    let spec = TranslationJobSpec::from_config(&config).unwrap();
+    let prompt_ptr = match &spec.credentials {
+        EngineCredentials::Llm(parameters) => parameters.system_prompt.as_ptr(),
+        _ => panic!("expected LLM credentials"),
+    };
+    let (_, _, _, credentials) = spec.into_parts();
+    let moved_ptr = match &credentials {
+        EngineCredentials::Llm(parameters) => parameters.system_prompt.as_ptr(),
+        _ => panic!("expected LLM credentials"),
+    };
+
+    assert_eq!(prompt_ptr, moved_ptr);
+}
+
+#[test]
 fn validates_papago_pairs_from_the_ncloud_contract() {
     let config = TranslationConfig {
         papago_client_id: "id".into(),

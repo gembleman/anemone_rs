@@ -48,7 +48,7 @@ pub(super) fn run(args: Args) -> Result<(), String> {
         target_lang,
     )
     .map_err(|error| error.to_string())?;
-    let translated = run_translation(&spec, &text)?;
+    let translated = run_translation(spec, &text)?;
 
     println!("{translated}");
     Ok(())
@@ -56,8 +56,9 @@ pub(super) fn run(args: Args) -> Result<(), String> {
 
 /// 엔진/언어를 받아 실제 번역을 수행. HTTP 엔진은 별도 tokio 런타임에서
 /// `translate_async` 를 `block_on` 한다 (디스패치 큐 우회).
-fn run_translation(spec: &TranslationJobSpec, text: &str) -> Result<String, String> {
+fn run_translation(spec: TranslationJobSpec, text: &str) -> Result<String, String> {
     spec.prepare().map_err(|error| error.to_string())?;
+    let (engine, source_lang, target_lang, credentials) = spec.into_parts();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -66,10 +67,10 @@ fn run_translation(spec: &TranslationJobSpec, text: &str) -> Result<String, Stri
     let req = TranslationRequest {
         id: 0,
         text: Arc::from(text),
-        engine: spec.engine(),
-        source_lang: spec.source_lang(),
-        target_lang: spec.target_lang(),
-        credentials: spec.credentials(),
+        engine,
+        source_lang,
+        target_lang,
+        credentials,
     };
     rt.block_on(TranslationDispatch::translate_async(&req, &client))
         .map_err(|e| format!("번역 실패: {e}"))

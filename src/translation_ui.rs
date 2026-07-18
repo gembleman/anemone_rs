@@ -46,7 +46,7 @@ fn target(hwnd: HWND) -> TargetId {
 
 pub(crate) fn request_translation(
     hwnd: HWND,
-    text: String,
+    text: Arc<str>,
     engine: TranslationEngine,
     source_lang: Language,
     target_lang: Language,
@@ -56,7 +56,7 @@ pub(crate) fn request_translation(
         target(hwnd),
         TranslationRequest {
             id: 0,
-            text: Arc::from(text),
+            text,
             engine,
             source_lang,
             target_lang,

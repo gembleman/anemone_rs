@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::{App, state};
 use crate::dialogs::{LogEntry, add_to_backlog};
 use crate::translation::TranslationEngine;
@@ -126,20 +128,23 @@ impl App {
 
         drop(config);
 
+        let (engine, source_lang, target_lang, credentials) = spec.into_parts();
+        let original: Arc<str> = Arc::from(text);
+
         // 디스패치에 번역 요청 (워커는 프로세스 전역)
         let request = request_translation(
             self.hwnd,
-            text.to_string(),
-            spec.engine(),
-            spec.source_lang(),
-            spec.target_lang(),
-            spec.credentials(),
+            Arc::clone(&original),
+            engine,
+            source_lang,
+            target_lang,
+            credentials,
         );
 
         match request {
             Ok(req_id) => {
                 self.state.pending_translation =
-                    Some(state::PendingTranslation::new(req_id, text.to_string()));
+                    Some(state::PendingTranslation::new(req_id, original));
                 self.state.current_text = format!("[번역 중...]\n{text}");
             }
             Err(error) => {
@@ -170,6 +175,7 @@ impl App {
             return;
         };
 
+        let original = completion.original;
         let translation = match completion.result {
             Ok(translated) => {
                 self.state.current_text = translated.clone();
@@ -177,12 +183,12 @@ impl App {
             }
             Err(err) => {
                 log_translation_failure(&err);
-                self.state.current_text = completion.original.clone();
+                self.state.current_text = original.to_string();
                 None
             }
         };
 
-        let mut entry = LogEntry::new(completion.original);
+        let mut entry = LogEntry::new(original.to_string());
         if let Some(trans) = translation {
             entry = entry.with_translation(trans);
         }

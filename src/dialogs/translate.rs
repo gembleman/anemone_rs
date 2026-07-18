@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use windows::{
     Win32::{
@@ -729,13 +730,14 @@ impl TranslateDialog {
         }
 
         self.set_dest_text("[번역 중...]");
+        let (engine, source_lang, target_lang, credentials) = spec.into_parts();
         match request_translation(
             self.hwnd,
-            text,
-            spec.engine(),
-            spec.source_lang(),
-            spec.target_lang(),
-            spec.credentials(),
+            Arc::from(text),
+            engine,
+            source_lang,
+            target_lang,
+            credentials,
         ) {
             Ok(req_id) => {
                 self.in_flight_id = Some(req_id);

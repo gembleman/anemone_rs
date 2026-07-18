@@ -61,6 +61,7 @@ pub(super) fn run(args: Args) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
     spec.prepare().map_err(|error| error.to_string())?;
+    let (engine, source_lang, target_lang, credentials) = spec.into_parts();
 
     let job = FileTransJobData {
         input_files: vec![input],
@@ -68,10 +69,10 @@ pub(super) fn run(args: Args) -> Result<(), String> {
         write_type: write_type.into(),
         no_trans_linefeed,
         cancel_token: Arc::new(AtomicBool::new(false)),
-        engine: spec.engine(),
-        source_lang: spec.source_lang(),
-        target_lang: spec.target_lang(),
-        credentials: spec.credentials(),
+        engine,
+        source_lang,
+        target_lang,
+        credentials,
     };
     let total = Cell::new(0usize);
     let error = RefCell::new(None);

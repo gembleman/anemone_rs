@@ -101,15 +101,21 @@ impl TranslationJobSpec {
             .map_err(TranslationPrepareError::EzTransInitialization)
     }
 
+    /// 준비가 끝난 실행 사양을 요청/배치 작업이 복사 없이 소유하도록 분해한다.
+    pub fn into_parts(self) -> (TranslationEngine, Language, Language, EngineCredentials) {
+        (
+            self.engine,
+            self.source_lang,
+            self.target_lang,
+            self.credentials,
+        )
+    }
+
+    #[cfg(test)]
     pub fn engine(&self) -> TranslationEngine {
         self.engine
     }
-    pub fn source_lang(&self) -> Language {
-        self.source_lang
-    }
-    pub fn target_lang(&self) -> Language {
-        self.target_lang
-    }
+    #[cfg(test)]
     pub fn credentials(&self) -> EngineCredentials {
         self.credentials.clone()
     }
