@@ -211,3 +211,52 @@ fn cancellation_cleans_temporary_output_and_preserves_existing_result() {
     );
     assert!(!events.contains(&ProgressEvent::Complete));
 }
+
+#[test]
+#[ignore = "long-running test that translates all 1,000 sample lines with bundled EzTrans"]
+fn translates_japanese_translation_sample_with_eztrans() {
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let input = project_root
+        .join("tests")
+        .join("japanese_translation_sample.txt");
+    let dll_path = project_root.join("eztrans_dll").join("J2KEngine.dll");
+    let dat_path = project_root.join("eztrans_dll").join("Dat");
+    let directory = TestDirectory::new();
+    let output = directory.0.join("japanese_translation_sample_ko.txt");
+    let expected_lines = std::fs::read_to_string(&input).unwrap().lines().count() as i32;
+    let mut sample_job = job(vec![input.clone()], vec![output.clone()]);
+    sample_job.engine = TranslationEngine::EzTrans;
+
+    crate::translation::prepare_eztrans(
+        dll_path.to_str().expect("EzTrans DLL path is valid UTF-8"),
+        dat_path.to_str().expect("EzTrans DAT path is valid UTF-8"),
+    )
+    .expect("bundled EzTrans initializes");
+
+    let task = FileTransRunner::start(sample_job);
+    let events = receive_through_terminal(&task);
+    assert_eq!(events.last(), Some(&ProgressEvent::Complete));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ProgressEvent::Error(_)))
+    );
+    assert!(events.contains(&ProgressEvent::TotalFiles(1)));
+    assert!(events.contains(&ProgressEvent::TotalLines(expected_lines)));
+    assert!(events.contains(&ProgressEvent::FileProgress(expected_lines)));
+    assert!(events.contains(&ProgressEvent::TotalProgress(expected_lines)));
+
+    let output_bytes = std::fs::read(output).unwrap();
+    let translated = output_bytes
+        .strip_prefix(&[0xEF, 0xBB, 0xBF])
+        .expect("translated file has a UTF-8 BOM");
+    let translated = std::str::from_utf8(translated).unwrap();
+
+    assert_eq!(translated.lines().count() as i32, expected_lines);
+    assert!(!translated.contains("[번역 실패:"));
+    assert!(
+        translated
+            .chars()
+            .any(|character| ('가'..='힣').contains(&character))
+    );
+}
