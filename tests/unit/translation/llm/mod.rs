@@ -19,3 +19,25 @@ fn custom_system_prompt_is_preserved_and_expanded() {
     );
     assert_eq!(prompt, "영어 => 한국어");
 }
+
+#[test]
+fn prompt_expands_repeated_placeholders_and_skips_blank_glossary_entries() {
+    let prompt = build_system_prompt_with_glossary(
+        "{source}/{target}/{source}",
+        Language::Eng,
+        Language::Kor,
+        &[
+            GlossaryEntry {
+                source: String::new(),
+                target: "ignored".into(),
+            },
+            GlossaryEntry {
+                source: "Alice".into(),
+                target: "앨리스".into(),
+            },
+        ],
+    );
+    assert!(prompt.starts_with("영어/한국어/영어"));
+    assert!(prompt.contains("Alice → 앨리스"));
+    assert!(!prompt.contains("ignored"));
+}

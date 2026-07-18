@@ -6,6 +6,43 @@
 use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
 use super::super::{Language, TranslationError, TranslationResult};
 use super::{LlmCallParams, LlmProvider, build_system_prompt_with_glossary};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct ChatMessage<'a> {
+    role: &'static str,
+    content: &'a str,
+}
+
+#[derive(Serialize)]
+struct ChatRequest<'a> {
+    model: &'a str,
+    messages: [ChatMessage<'a>; 2],
+    temperature: f32,
+    max_tokens: u32,
+}
+
+fn request_payload<'a>(
+    params: &'a LlmCallParams,
+    system: &'a str,
+    text: &'a str,
+) -> ChatRequest<'a> {
+    ChatRequest {
+        model: params.effective_model(),
+        messages: [
+            ChatMessage {
+                role: "system",
+                content: system,
+            },
+            ChatMessage {
+                role: "user",
+                content: text,
+            },
+        ],
+        temperature: params.temperature,
+        max_tokens: params.max_tokens,
+    }
+}
 
 /// OpenAI 호환 chat completions 요청
 pub async fn translate_async_with_client(
@@ -27,15 +64,7 @@ pub async fn translate_async_with_client(
         target,
         &params.glossary,
     );
-    let payload = serde_json::json!({
-        "model": params.effective_model(),
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user",   "content": text },
-        ],
-        "temperature": params.temperature,
-        "max_tokens": params.max_tokens,
-    });
+    let payload = request_payload(params, &system, text);
 
     let url = format!("{}/chat/completions", params.effective_base_url());
     let mut req = client

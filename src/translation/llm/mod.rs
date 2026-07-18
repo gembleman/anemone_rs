@@ -160,16 +160,18 @@ pub fn build_system_prompt_with_glossary(
     } else {
         template
     };
-    let mut s = template
-        .replace("{source}", lang_utils::to_korean_name(source))
-        .replace("{target}", lang_utils::to_korean_name(target));
+    let mut s = expand_language_placeholders(
+        template,
+        lang_utils::to_korean_name(source),
+        lang_utils::to_korean_name(target),
+    );
 
-    let active: Vec<&GlossaryEntry> = glossary
+    let mut active = glossary
         .iter()
         .filter(|e| !e.source.is_empty() && !e.target.is_empty())
-        .collect();
+        .peekable();
 
-    if !active.is_empty() {
+    if active.peek().is_some() {
         use std::fmt::Write;
         s.push_str("\n\n[고정 번역 사전 — 반드시 이대로 옮길 것]");
         for e in active {
@@ -177,6 +179,36 @@ pub fn build_system_prompt_with_glossary(
         }
     }
     s
+}
+
+/// 두 언어 placeholder를 한 번 순회해 확장한다.
+fn expand_language_placeholders(template: &str, source: &str, target: &str) -> String {
+    const SOURCE: &str = "{source}";
+    const TARGET: &str = "{target}";
+
+    let mut output = String::with_capacity(template.len());
+    let mut rest = template;
+    loop {
+        let source_at = rest.find(SOURCE);
+        let target_at = rest.find(TARGET);
+        let next = match (source_at, target_at) {
+            (Some(source_at), Some(target_at)) if source_at <= target_at => {
+                Some((source_at, SOURCE, source))
+            }
+            (Some(_), Some(target_at)) => Some((target_at, TARGET, target)),
+            (Some(source_at), None) => Some((source_at, SOURCE, source)),
+            (None, Some(target_at)) => Some((target_at, TARGET, target)),
+            (None, None) => None,
+        };
+        let Some((at, token, replacement)) = next else {
+            output.push_str(rest);
+            break;
+        };
+        output.push_str(&rest[..at]);
+        output.push_str(replacement);
+        rest = &rest[at + token.len()..];
+    }
+    output
 }
 
 /// 기본 시스템 프롬프트 — 사용자가 비워두면 이 값을 사용한다

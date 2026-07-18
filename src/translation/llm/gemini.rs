@@ -7,6 +7,58 @@
 use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
 use super::super::{Language, TranslationError, TranslationResult};
 use super::{LlmCallParams, build_system_prompt_with_glossary};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct TextPart<'a> {
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct Parts<'a> {
+    parts: [TextPart<'a>; 1],
+}
+
+#[derive(Serialize)]
+struct Content<'a> {
+    role: &'static str,
+    parts: [TextPart<'a>; 1],
+}
+
+#[derive(Serialize)]
+struct GenerationConfig {
+    temperature: f32,
+    #[serde(rename = "maxOutputTokens")]
+    max_output_tokens: u32,
+}
+
+#[derive(Serialize)]
+struct GenerateContentRequest<'a> {
+    system_instruction: Parts<'a>,
+    contents: [Content<'a>; 1],
+    #[serde(rename = "generationConfig")]
+    generation_config: GenerationConfig,
+}
+
+fn request_payload<'a>(
+    params: &LlmCallParams,
+    system: &'a str,
+    text: &'a str,
+) -> GenerateContentRequest<'a> {
+    GenerateContentRequest {
+        system_instruction: Parts {
+            parts: [TextPart { text: system }],
+        },
+        contents: [Content {
+            role: "user",
+            parts: [TextPart { text }],
+        }],
+        generation_config: GenerationConfig {
+            temperature: params.temperature,
+            max_output_tokens: params.max_tokens,
+        },
+    }
+}
 
 pub async fn translate_async_with_client(
     client: &reqwest::Client,
@@ -27,16 +79,7 @@ pub async fn translate_async_with_client(
         target,
         &params.glossary,
     );
-    let payload = serde_json::json!({
-        "system_instruction": { "parts": [{ "text": system }] },
-        "contents": [
-            { "role": "user", "parts": [{ "text": text }] }
-        ],
-        "generationConfig": {
-            "temperature": params.temperature,
-            "maxOutputTokens": params.max_tokens,
-        }
-    });
+    let payload = request_payload(params, &system, text);
 
     let url = format!(
         "{}/models/{}:generateContent",

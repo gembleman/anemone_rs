@@ -8,8 +8,59 @@
 use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
 use super::super::{Language, TranslationError, TranslationResult};
 use super::{LlmCallParams, build_system_prompt_with_glossary};
+use serde::Serialize;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+#[derive(Serialize)]
+struct CacheControl {
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+#[derive(Serialize)]
+struct SystemBlock<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    text: &'a str,
+    cache_control: CacheControl,
+}
+
+#[derive(Serialize)]
+struct Message<'a> {
+    role: &'static str,
+    content: &'a str,
+}
+
+#[derive(Serialize)]
+struct MessagesRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    temperature: f32,
+    system: [SystemBlock<'a>; 1],
+    messages: [Message<'a>; 1],
+}
+
+fn request_payload<'a>(
+    params: &'a LlmCallParams,
+    system: &'a str,
+    text: &'a str,
+) -> MessagesRequest<'a> {
+    MessagesRequest {
+        model: params.effective_model(),
+        max_tokens: params.max_tokens,
+        temperature: params.temperature,
+        system: [SystemBlock {
+            kind: "text",
+            text: system,
+            cache_control: CacheControl { kind: "ephemeral" },
+        }],
+        messages: [Message {
+            role: "user",
+            content: text,
+        }],
+    }
+}
 
 pub async fn translate_async_with_client(
     client: &reqwest::Client,
@@ -33,17 +84,7 @@ pub async fn translate_async_with_client(
     // 프롬프트 캐싱: 게임 번역처럼 같은 시스템 프롬프트로 연속 호출하는 시나리오에서
     // 비용/지연을 줄임. cache_control: ephemeral 은 5분 TTL. 시스템 프롬프트가
     // 짧으면(< ~1024 토큰) 캐시 미스만 발생하고 무해. 글로서리가 길어질수록 이득 큼.
-    let payload = serde_json::json!({
-        "model": params.effective_model(),
-        "max_tokens": params.max_tokens,
-        "temperature": params.temperature,
-        "system": [
-            { "type": "text", "text": system, "cache_control": { "type": "ephemeral" } }
-        ],
-        "messages": [
-            { "role": "user", "content": text },
-        ],
-    });
+    let payload = request_payload(params, &system, text);
 
     let url = format!("{}/messages", params.effective_base_url());
     let response = client
