@@ -26,6 +26,11 @@ impl CancelHandle {
     pub(crate) fn cancel(&self) {
         self.0.store(true, Ordering::SeqCst);
     }
+
+    #[cfg(test)]
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
 }
 
 /// 워커 수명과 진행 이벤트 수신기를 소유하는 파일 번역 작업.
@@ -41,6 +46,11 @@ impl FileTransTask {
     }
     pub(crate) fn drain_events(&self) -> Vec<ProgressEvent> {
         self.events.try_iter().collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cancel_handle(&self) -> CancelHandle {
+        self.cancel.clone()
     }
 }
 
