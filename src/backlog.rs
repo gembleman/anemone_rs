@@ -1,7 +1,12 @@
 //! Win32 UI와 독립적인 번역 백로그 모델.
 
+use std::collections::VecDeque;
 use std::io::Write;
 use std::path::Path;
+
+/// 실행 중 백로그가 무제한 성장하지 않도록 하는 보존 상한.
+pub const MAX_BACKLOG_ENTRIES: usize = 1_000;
+pub const MAX_BACKLOG_TEXT_BYTES: usize = 4 * 1024 * 1024;
 
 /// 백로그에서 표시할 텍스트 종류.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +58,8 @@ impl LogEntry {
 /// 창 수명과 독립적으로 애플리케이션 실행 중 번역 이력을 보관한다.
 #[derive(Default)]
 pub struct BacklogStore {
-    entries: Vec<LogEntry>,
+    entries: VecDeque<LogEntry>,
+    text_bytes: usize,
 }
 
 impl BacklogStore {
@@ -61,12 +67,28 @@ impl BacklogStore {
         Self::default()
     }
 
-    pub fn push(&mut self, entry: LogEntry) {
-        self.entries.push(entry);
+    /// UI가 전체 다시 그리기 여부를 결정할 수 있도록 퇴출 여부를 반환한다.
+    pub(crate) fn push(&mut self, entry: LogEntry) -> bool {
+        self.text_bytes = self.text_bytes.saturating_add(entry_text_bytes(&entry));
+        self.entries.push_back(entry);
+
+        let mut evicted = false;
+        while self.entries.len() > MAX_BACKLOG_ENTRIES
+            || (self.text_bytes > MAX_BACKLOG_TEXT_BYTES && self.entries.len() > 1)
+        {
+            let removed = self
+                .entries
+                .pop_front()
+                .expect("backlog limit requires at least one removable entry");
+            self.text_bytes = self.text_bytes.saturating_sub(entry_text_bytes(&removed));
+            evicted = true;
+        }
+        evicted
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.text_bytes = 0;
     }
 
     /// 필터와 줄바꿈 옵션을 반영한 UI 독립 텍스트 조각을 생성한다.
@@ -116,6 +138,15 @@ impl BacklogStore {
         }
         content
     }
+}
+
+fn entry_text_bytes(entry: &LogEntry) -> usize {
+    entry
+        .name
+        .as_ref()
+        .map_or(0, String::len)
+        .saturating_add(entry.original.len())
+        .saturating_add(entry.translation.as_ref().map_or(0, String::len))
 }
 
 #[derive(Debug, thiserror::Error)]
