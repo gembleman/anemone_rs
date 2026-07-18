@@ -2,6 +2,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use directories::BaseDirs;
+
 const APP_DIRECTORY: &str = "Anemone";
 const PORTABLE_MARKER: &str = "anemone.portable";
 
@@ -9,11 +11,8 @@ pub fn data_dir() -> &'static PathBuf {
     static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
     DATA_DIR.get_or_init(|| {
         let exe_dir = executable_dir().unwrap_or_else(|| PathBuf::from("."));
-        choose_data_dir(
-            &exe_dir,
-            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
-            std::env::var_os("APPDATA").map(PathBuf::from),
-        )
+        let local_data_dir = BaseDirs::new().map(|dirs| dirs.data_local_dir().to_path_buf());
+        choose_data_dir(&exe_dir, local_data_dir, std::env::temp_dir)
     })
 }
 
@@ -35,16 +34,13 @@ pub fn portable_mode() -> bool {
 
 fn choose_data_dir(
     exe_dir: &Path,
-    local_app_data: Option<PathBuf>,
-    roaming_app_data: Option<PathBuf>,
+    local_data_dir: Option<PathBuf>,
+    fallback: impl FnOnce() -> PathBuf,
 ) -> PathBuf {
     if exe_dir.join(PORTABLE_MARKER).is_file() {
         return exe_dir.to_path_buf();
     }
-    local_app_data
-        .or(roaming_app_data)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(APP_DIRECTORY)
+    local_data_dir.unwrap_or_else(fallback).join(APP_DIRECTORY)
 }
 
 fn executable_dir() -> Option<PathBuf> {
@@ -98,15 +94,19 @@ mod tests {
         let exe = PathBuf::from(r"C:\Program Files\Anemone");
         let local = PathBuf::from(r"C:\Users\tester\AppData\Local");
         assert_eq!(
-            choose_data_dir(&exe, Some(local.clone()), None),
+            choose_data_dir(&exe, Some(local.clone()), || panic!("fallback used")),
             local.join(APP_DIRECTORY)
         );
     }
 
     #[test]
-    fn missing_app_data_falls_back_outside_install_directory() {
+    fn missing_known_folder_uses_temporary_directory_fallback() {
         let exe = PathBuf::from(r"C:\Program Files\Anemone");
-        assert_ne!(choose_data_dir(&exe, None, None), exe);
+        let fallback = PathBuf::from(r"C:\Temp");
+        assert_eq!(
+            choose_data_dir(&exe, None, || fallback.clone()),
+            fallback.join(APP_DIRECTORY)
+        );
     }
 
     #[test]
@@ -122,7 +122,9 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join(PORTABLE_MARKER), []).unwrap();
         assert_eq!(
-            choose_data_dir(&root, Some(PathBuf::from(r"C:\Local")), None),
+            choose_data_dir(&root, Some(PathBuf::from(r"C:\Local")), || {
+                panic!("fallback used")
+            }),
             root
         );
         std::fs::remove_dir_all(root).unwrap();
