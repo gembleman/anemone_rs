@@ -12,7 +12,7 @@ use windows::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThread
 
 use super::{FileTransJobData, FileTranslationError, ProgressEvent, WriteType, validate_job_paths};
 use crate::translation::{
-    EzTransBatchTranslator, TranslationEngine, global_eztrans_process_pool,
+    EzTransBatchTranslator, global_eztrans_process_pool,
     http_common::shared_client,
     worker::{TranslationDispatch, TranslationRequest},
 };
@@ -201,13 +201,7 @@ pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
         }
     };
 
-    let eztrans_pool = if job_data.engine == TranslationEngine::EzTrans {
-        let Some(config) = job_data.eztrans_process.as_ref() else {
-            report(ProgressEvent::Error(FileTranslationError::backend(
-                "EzTrans 파일 번역 helper 설정이 없습니다.",
-            )));
-            return;
-        };
+    let eztrans_pool = if let Some(config) = job_data.translation.engine().eztrans_process() {
         match global_eztrans_process_pool(config) {
             Ok(pool) => Some(pool),
             Err(error) => {
@@ -518,7 +512,7 @@ fn process_single_file(
             let separator_chars = usize::from(!lines.is_empty());
             let line_chars = line.text.chars().count();
             let exceeds_window = !lines.is_empty()
-                && job_data.engine == TranslationEngine::EzTrans
+                && job_data.translation.engine().is_blocking()
                 && (lines.len() >= EZTRANS_WINDOW_MAX_LINES
                     || window_chars
                         .saturating_add(separator_chars)
@@ -535,7 +529,7 @@ fn process_single_file(
             lines.push(line);
             next_line = read_input_line(&mut reader, input_path, false)?;
 
-            if job_data.engine != TranslationEngine::EzTrans {
+            if !job_data.translation.engine().is_blocking() {
                 break;
             }
         }
@@ -543,7 +537,7 @@ fn process_single_file(
         if job_data.cancel_token.load(Ordering::SeqCst) {
             return Err(FileTranslationError::Cancelled);
         }
-        let translated_lines = if job_data.engine == TranslationEngine::EzTrans {
+        let translated_lines = if job_data.translation.engine().is_blocking() {
             let pool = runtime.eztrans_pool.ok_or_else(|| {
                 FileTranslationError::backend("EzTrans 파일 번역 helper 풀이 준비되지 않았습니다")
             })?;
@@ -750,10 +744,7 @@ pub fn translate_line(
         id: 0,
         // 한 번 할당한 원문을 워커와 엔진이 공유한다.
         text: std::sync::Arc::from(line),
-        engine: job_data.engine,
-        source_lang: job_data.source_lang,
-        target_lang: job_data.target_lang,
-        credentials: job_data.credentials.clone(),
+        job: job_data.translation.clone(),
     };
 
     let result = translation.runtime.block_on(async {

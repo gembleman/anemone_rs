@@ -10,7 +10,7 @@ fn rejects_missing_credentials_without_exposing_values() {
     config.deepl_api_key.clear();
     config.deepl_keys.clear();
     assert_eq!(
-        TranslationJobSpec::from_config(&config).err(),
+        PreparedJob::from_config(&config).err(),
         Some(TranslationConfigError::MissingCredential("DeepL API 키"))
     );
 }
@@ -23,10 +23,10 @@ fn validates_eztrans_paths_and_language_pair() {
     };
     config.eztrans_dll_path.clear();
     assert_eq!(
-        TranslationJobSpec::from_config(&config).err(),
+        PreparedJob::from_config(&config).err(),
         Some(TranslationConfigError::MissingEzTransPath)
     );
-    let result = TranslationJobSpec::with_engine_languages(
+    let result = PreparedJob::with_engine_languages(
         &TranslationConfig::default(),
         TranslationEngine::EzTrans,
         Language::Kor,
@@ -45,11 +45,11 @@ fn builds_deepl_credentials_from_the_effective_key_list() {
         deepl_keys: vec!["first".into(), "second".into()],
         ..TranslationConfig::default()
     };
-    let spec = TranslationJobSpec::from_config(&config).unwrap();
-    assert_eq!(spec.engine(), TranslationEngine::DeepL);
+    let spec = PreparedJob::from_config(&config).unwrap();
+    assert_eq!(spec.engine().engine(), TranslationEngine::DeepL);
     assert!(
-        matches!(spec.credentials(), EngineCredentials::DeepL { keys, .. }
-            if keys == ["first", "second"])
+        matches!(spec.engine().kind(), PreparedEngineKind::DeepL { keys, .. }
+            if keys.iter().map(String::as_str).eq(["first", "second"]))
     );
 }
 
@@ -65,10 +65,11 @@ fn runtime_llm_params_redact_api_key_from_debug_output() {
         ..TranslationConfig::default()
     };
 
-    let credentials = TranslationJobSpec::from_config(&config)
-        .unwrap()
-        .credentials();
-    let EngineCredentials::Llm(params) = credentials else {
+    let job = PreparedJob::from_config(&config).unwrap();
+    let job_debug = format!("{job:?}");
+    assert!(!job_debug.contains(secret));
+    assert!(job_debug.contains("Llm"));
+    let PreparedEngineKind::Llm(params) = job.engine().kind() else {
         panic!("expected LLM credentials");
     };
     let debug = format!("{params:?}");
@@ -78,15 +79,40 @@ fn runtime_llm_params_redact_api_key_from_debug_output() {
 }
 
 #[test]
+fn prepared_engine_exposes_capabilities_without_credentials() {
+    let google = PreparedJob::google(Language::Jpn, Language::Kor).unwrap();
+    assert!(!google.engine().is_blocking());
+    assert!(!google.engine().supports_batch());
+    assert_eq!(
+        google.languages(),
+        LanguagePair::new(Language::Jpn, Language::Kor)
+    );
+
+    let eztrans = PreparedJob::eztrans(
+        "engine.dll".into(),
+        "dat".into(),
+        99,
+        Language::Jpn,
+        Language::Kor,
+    )
+    .unwrap();
+    assert!(eztrans.engine().is_blocking());
+    assert!(eztrans.engine().supports_batch());
+    assert_eq!(
+        eztrans.engine().eztrans_process().unwrap().process_count,
+        16
+    );
+}
+
+#[test]
 fn file_job_carries_normalized_eztrans_process_configuration() {
     let config = TranslationConfig {
         eztrans_process_count: 99,
         ..TranslationConfig::default()
     };
-    let spec = TranslationJobSpec::from_config(&config).unwrap();
-    let (engine, _, _, _, process) = spec.into_file_parts();
-    assert_eq!(engine, TranslationEngine::EzTrans);
-    let process = process.unwrap();
+    let spec = PreparedJob::from_config(&config).unwrap();
+    assert_eq!(spec.engine().engine(), TranslationEngine::EzTrans);
+    let process = spec.engine().eztrans_process().unwrap();
     assert_eq!(process.process_count, 16);
     assert_eq!(process.dll_path, config.eztrans_dll_path);
     assert_eq!(process.dat_path, config.eztrans_dat_path);
@@ -102,13 +128,16 @@ fn builds_and_validates_custom_api_credentials() {
     config.custom.api_key = "secret".into();
     config.custom.headers = r#"{"X-Source":"{source}"}"#.into();
     config.custom.request_template = r#"{"q":"{text}"}"#.into();
-    let spec = TranslationJobSpec::from_config(&config).unwrap();
-    assert_eq!(spec.engine(), TranslationEngine::Custom);
-    assert!(matches!(spec.credentials(), EngineCredentials::Custom(_)));
+    let spec = PreparedJob::from_config(&config).unwrap();
+    assert_eq!(spec.engine().engine(), TranslationEngine::Custom);
+    assert!(matches!(
+        spec.engine().kind(),
+        PreparedEngineKind::Custom(_)
+    ));
 
     config.custom.request_template = "invalid json".into();
     assert!(matches!(
-        TranslationJobSpec::from_config(&config),
+        PreparedJob::from_config(&config),
         Err(TranslationConfigError::InvalidSetting(_))
     ));
 }
@@ -132,10 +161,10 @@ fn builds_credentials_from_the_selected_named_custom_api() {
         custom_apis: vec![primary, backup],
         ..TranslationConfig::default()
     };
-    let spec = TranslationJobSpec::from_config(&config).unwrap();
+    let spec = PreparedJob::from_config(&config).unwrap();
     assert!(matches!(
-        spec.credentials(),
-        EngineCredentials::Custom(params)
+        spec.engine().kind(),
+        PreparedEngineKind::Custom(params)
             if params.url == "https://backup.example/translate"
     ));
 }
@@ -157,20 +186,20 @@ fn rejects_ambiguous_or_missing_named_custom_api_selection() {
         ..TranslationConfig::default()
     };
     assert!(matches!(
-        TranslationJobSpec::from_config(&config),
+        PreparedJob::from_config(&config),
         Err(TranslationConfigError::InvalidSetting(message)) if message.contains("중복")
     ));
 
     config.custom_apis[1].name = "other".into();
     config.custom_api = "missing".into();
     assert!(matches!(
-        TranslationJobSpec::from_config(&config),
+        PreparedJob::from_config(&config),
         Err(TranslationConfigError::InvalidSetting(message)) if message.contains("찾을 수 없습니다")
     ));
 }
 
 #[test]
-fn consuming_job_spec_moves_credentials_without_reallocating() {
+fn cloned_prepared_jobs_share_credentials_without_reallocating() {
     let mut config = TranslationConfig {
         engine: "llm".into(),
         ..TranslationConfig::default()
@@ -178,14 +207,14 @@ fn consuming_job_spec_moves_credentials_without_reallocating() {
     config.llm.api_key = "secret".repeat(32);
     config.llm.system_prompt = "prompt".repeat(256);
 
-    let spec = TranslationJobSpec::from_config(&config).unwrap();
-    let prompt_ptr = match &spec.credentials {
-        EngineCredentials::Llm(parameters) => parameters.system_prompt.as_ptr(),
+    let spec = PreparedJob::from_config(&config).unwrap();
+    let prompt_ptr = match spec.engine().kind() {
+        PreparedEngineKind::Llm(parameters) => parameters.system_prompt.as_ptr(),
         _ => panic!("expected LLM credentials"),
     };
-    let (_, _, _, credentials) = spec.into_parts();
-    let moved_ptr = match &credentials {
-        EngineCredentials::Llm(parameters) => parameters.system_prompt.as_ptr(),
+    let cloned = spec.clone();
+    let moved_ptr = match cloned.engine().kind() {
+        PreparedEngineKind::Llm(parameters) => parameters.system_prompt.as_ptr(),
         _ => panic!("expected LLM credentials"),
     };
 
@@ -206,22 +235,12 @@ fn validates_papago_pairs_from_the_ncloud_contract() {
         (Language::Jpn, Language::Vie),
     ] {
         assert!(
-            TranslationJobSpec::with_engine_languages(
-                &config,
-                TranslationEngine::Papago,
-                source,
-                target,
-            )
-            .is_ok()
+            PreparedJob::with_engine_languages(&config, TranslationEngine::Papago, source, target,)
+                .is_ok()
         );
         assert!(
-            TranslationJobSpec::with_engine_languages(
-                &config,
-                TranslationEngine::Papago,
-                target,
-                source,
-            )
-            .is_ok()
+            PreparedJob::with_engine_languages(&config, TranslationEngine::Papago, target, source,)
+                .is_ok()
         );
     }
 
@@ -231,13 +250,8 @@ fn validates_papago_pairs_from_the_ncloud_contract() {
         (Language::Eng, Language::Eng),
     ] {
         assert_eq!(
-            TranslationJobSpec::with_engine_languages(
-                &config,
-                TranslationEngine::Papago,
-                source,
-                target,
-            )
-            .err(),
+            PreparedJob::with_engine_languages(&config, TranslationEngine::Papago, source, target,)
+                .err(),
             Some(TranslationConfigError::UnsupportedLanguagePair { engine: "papago" })
         );
     }
@@ -291,7 +305,7 @@ fn preserves_chinese_script_tags_and_papago_pair() {
         ..TranslationConfig::default()
     };
     assert!(
-        TranslationJobSpec::with_engine_languages(
+        PreparedJob::with_engine_languages(
             &config,
             TranslationEngine::Papago,
             Language::ZhoHans,
@@ -323,7 +337,7 @@ fn job_spec_rejects_invalid_config_values() {
         },
     ] {
         assert!(matches!(
-            TranslationJobSpec::from_config(&config),
+            PreparedJob::from_config(&config),
             Err(TranslationConfigError::InvalidSetting(_))
         ));
     }

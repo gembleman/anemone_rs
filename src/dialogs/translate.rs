@@ -31,7 +31,7 @@ use crate::clipboard::{ClipboardGuard, OwnedGlobalMemory};
 use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::manual::{ManualOutputFormat, ManualTranslationOptions};
-use crate::translation::{Language, LlmProvider, TranslationEngine, TranslationJobSpec};
+use crate::translation::{Language, LlmProvider, PreparedJob, TranslationEngine};
 use crate::translation_ui::{request_translation, take_response, unregister_translation_hwnd};
 
 // 컨트롤 ID
@@ -785,7 +785,7 @@ impl TranslateDialog {
 
         let spec = {
             let config = self.config.borrow();
-            TranslationJobSpec::from_config(&config.translation)
+            PreparedJob::from_config(&config.translation)
         };
         let spec = match spec {
             Ok(spec) => spec,
@@ -800,15 +800,7 @@ impl TranslateDialog {
         }
 
         self.set_dest_text("[번역 중...]");
-        let (engine, source_lang, target_lang, credentials) = spec.into_parts();
-        match request_translation(
-            self.hwnd,
-            Arc::from(text),
-            engine,
-            source_lang,
-            target_lang,
-            credentials,
-        ) {
+        match request_translation(self.hwnd, Arc::from(text), spec) {
             Ok(req_id) => {
                 self.in_flight_id = Some(req_id);
                 self.last_submitted_source = source;

@@ -21,7 +21,7 @@ fn persists_trackbar_only_when_tracking_ends() {
 fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     use super::{SettingsDialog, ctrl_id};
     use crate::config::Config;
-    use crate::translation::TranslationJobSpec;
+    use crate::translation::PreparedJob;
     use std::cell::RefCell;
     use std::path::PathBuf;
     use std::rc::Rc;
@@ -144,7 +144,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_TARGET_LANG), 0);
     assert_eq!(config.borrow().translation.source_lang, "ja");
     assert_eq!(config.borrow().translation.target_lang, "ko");
-    assert!(TranslationJobSpec::from_config(&config.borrow().translation).is_ok());
+    assert!(PreparedJob::from_config(&config.borrow().translation).is_ok());
 
     let max_tokens = config.borrow().translation.llm.max_tokens;
     let persisted_before_invalid = std::fs::read(Config::default_config_path()).unwrap();

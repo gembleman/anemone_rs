@@ -15,66 +15,15 @@ use crate::constants::MAX_RESPONSE_STORAGE;
 use thiserror::Error;
 use tokio::sync::{Semaphore, watch};
 
-use super::custom::CustomApiCallParams;
-use super::llm::{LlmCallParams, LlmProvider};
-use super::{Language, TranslationEngine, TranslationError, TranslationResult};
+use super::llm::LlmProvider;
+use super::{
+    DeepLStrategy, Language, PreparedEngineKind, PreparedJob, TranslationError, TranslationResult,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TranslationRequestError {
     #[error("번역 워커가 종료되어 요청을 받을 수 없습니다.")]
     WorkerUnavailable,
-}
-
-/// DeepL 다중 키 폴백 전략
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DeepLStrategy {
-    /// 첫 키부터 순서대로 사용, 한도 초과(429/456) 시 다음 키로 폴백
-    #[default]
-    Failover,
-    /// 호출마다 키를 순회 (전역 카운터; 프로세스 수명 동안 유지)
-    RoundRobin,
-}
-
-/// 엔진과 자격 증명의 잘못된 조합을 막는 요청별 인증 정보.
-#[derive(Clone, Default)]
-pub enum EngineCredentials {
-    /// 자격증명 불필요 (EzTrans, Google 비공식)
-    #[default]
-    None,
-    /// DeepL API 키. `keys`는 최소 1개; `strategy`에 따라 폴백/순회.
-    DeepL {
-        keys: Vec<String>,
-        strategy: DeepLStrategy,
-    },
-    /// Ncloud Papago Application 인증 키 쌍
-    Papago {
-        client_id: String,
-        client_secret: String,
-    },
-    /// LLM 호출 파라미터 일체 (제공자/모델/키/프롬프트/샘플링)
-    Llm(LlmCallParams),
-    /// 사용자 정의 JSON REST API 호출 파라미터
-    Custom(CustomApiCallParams),
-}
-
-impl std::fmt::Debug for EngineCredentials {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::None => formatter.write_str("None"),
-            Self::DeepL { keys, strategy } => formatter
-                .debug_struct("DeepL")
-                .field("key_count", &keys.len())
-                .field("strategy", strategy)
-                .finish(),
-            Self::Papago { .. } => formatter.write_str("Papago(<redacted>)"),
-            Self::Llm(parameters) => formatter
-                .debug_struct("Llm")
-                .field("provider", &parameters.provider)
-                .field("model", &parameters.effective_model())
-                .finish(),
-            Self::Custom(_) => formatter.write_str("Custom(<redacted>)"),
-        }
-    }
 }
 
 /// 큐와 blocking task가 원문을 복사 없이 공유하는 번역 요청.
@@ -84,14 +33,8 @@ pub struct TranslationRequest {
     pub id: u64,
     /// 번역할 텍스트
     pub text: Arc<str>,
-    /// 번역 엔진
-    pub engine: TranslationEngine,
-    /// 소스 언어
-    pub source_lang: Language,
-    /// 타겟 언어
-    pub target_lang: Language,
-    /// 엔진별 자격증명
-    pub credentials: EngineCredentials,
+    /// 검증된 엔진, 자격증명과 언어쌍.
+    pub job: PreparedJob,
 }
 
 /// 번역 응답
@@ -447,7 +390,7 @@ impl TranslationDispatch {
         } = job;
 
         let translate = async {
-            let _permit = if req.engine == TranslationEngine::EzTrans {
+            let _permit = if req.job.engine().is_blocking() {
                 None
             } else {
                 match http_limit.acquire_owned().await {
@@ -529,9 +472,7 @@ impl TranslationDispatch {
         keys: &[String],
         strategy: DeepLStrategy,
     ) -> TranslationResult {
-        if keys.is_empty() || keys.iter().all(String::is_empty) {
-            return Err(TranslationError::MissingApiKey);
-        }
+        debug_assert!(!keys.is_empty());
 
         // 비어 있는 키는 건너뛰고 시작 오프셋만 결정한다.
         let start = match strategy {
@@ -543,13 +484,9 @@ impl TranslationDispatch {
             }
         };
 
-        let mut last_err: Option<TranslationError> = None;
         for offset in 0..keys.len() {
             let idx = (start + offset) % keys.len();
             let key = &keys[idx];
-            if key.is_empty() {
-                continue;
-            }
             match super::deepl::translate_async_with_client(client, text, source, target, key).await
             {
                 Ok(s) => return Ok(s),
@@ -561,7 +498,6 @@ impl TranslationDispatch {
                             status_code = ?e.log_status_code(),
                             "DeepL key failed; trying fallback"
                         );
-                        last_err = Some(e);
                         continue;
                     }
                     return Err(e);
@@ -569,7 +505,7 @@ impl TranslationDispatch {
             }
         }
 
-        Err(last_err.unwrap_or(TranslationError::MissingApiKey))
+        unreachable!("prepared DeepL keys are non-empty")
     }
 
     /// 한도 초과/인증 실패는 다음 키로 폴백, 그 외(파싱/네트워크 등)는 즉시 반환
@@ -590,10 +526,10 @@ impl TranslationDispatch {
         let mut last_err = None;
 
         let length = req.text.chars().count();
-        let max = req.engine.max_input_chars();
+        let max = req.job.engine().max_input_chars();
         if length > max {
             return Err(TranslationError::InputTooLong {
-                engine: req.engine.to_str(),
+                engine: req.job.engine().display_name(),
                 length,
                 max,
             });
@@ -648,12 +584,13 @@ impl TranslationDispatch {
         req: &TranslationRequest,
         client: &reqwest::Client,
     ) -> TranslationResult {
-        match req.engine {
-            TranslationEngine::EzTrans => {
+        let languages = req.job.languages();
+        match req.job.engine().kind() {
+            PreparedEngineKind::EzTrans(_) => {
                 // Arc clone으로 본문 복사 없이 blocking task에 넘긴다.
                 let text = Arc::clone(&req.text);
-                let source = req.source_lang;
-                let target = req.target_lang;
+                let source = languages.source();
+                let target = languages.target();
 
                 match tokio::task::spawn_blocking(move || {
                     super::translate_with_eztrans(&text, source, target)
@@ -667,61 +604,48 @@ impl TranslationDispatch {
                     ))),
                 }
             }
-            TranslationEngine::Google => {
+            PreparedEngineKind::Google => {
                 super::google::translate_async_with_client(
                     client,
                     &req.text,
-                    req.source_lang,
-                    req.target_lang,
+                    languages.source(),
+                    languages.target(),
                 )
                 .await
             }
-            TranslationEngine::DeepL => {
-                let (keys, strategy) = match &req.credentials {
-                    EngineCredentials::DeepL { keys, strategy } => (keys.as_slice(), *strategy),
-                    _ => (&[][..], DeepLStrategy::Failover),
-                };
+            PreparedEngineKind::DeepL { keys, strategy } => {
                 Self::translate_deepl_multi_key(
                     client,
                     &req.text,
-                    req.source_lang,
-                    req.target_lang,
-                    keys,
-                    strategy,
+                    languages.source(),
+                    languages.target(),
+                    keys.as_slice(),
+                    *strategy,
                 )
                 .await
             }
-            TranslationEngine::Papago => {
-                let empty = String::new();
-                let (client_id, client_secret) = match &req.credentials {
-                    EngineCredentials::Papago {
-                        client_id,
-                        client_secret,
-                    } => (client_id, client_secret),
-                    _ => (&empty, &empty),
-                };
+            PreparedEngineKind::Papago {
+                client_id,
+                client_secret,
+            } => {
                 super::papago::translate_async_with_client(
                     client,
                     &req.text,
-                    req.source_lang,
-                    req.target_lang,
+                    languages.source(),
+                    languages.target(),
                     client_id,
                     client_secret,
                 )
                 .await
             }
-            TranslationEngine::Llm => {
-                let params = match &req.credentials {
-                    EngineCredentials::Llm(p) => p,
-                    _ => return Err(TranslationError::EngineNotInitialized("LLM")),
-                };
+            PreparedEngineKind::Llm(params) => {
                 let result = match params.provider {
                     LlmProvider::OpenAi | LlmProvider::Grok | LlmProvider::OpenRouter => {
                         super::llm::openai_compat::translate_async_with_client(
                             client,
                             &req.text,
-                            req.source_lang,
-                            req.target_lang,
+                            languages.source(),
+                            languages.target(),
                             params,
                         )
                         .await
@@ -730,8 +654,8 @@ impl TranslationDispatch {
                         super::llm::anthropic::translate_async_with_client(
                             client,
                             &req.text,
-                            req.source_lang,
-                            req.target_lang,
+                            languages.source(),
+                            languages.target(),
                             params,
                         )
                         .await
@@ -740,8 +664,8 @@ impl TranslationDispatch {
                         super::llm::gemini::translate_async_with_client(
                             client,
                             &req.text,
-                            req.source_lang,
-                            req.target_lang,
+                            languages.source(),
+                            languages.target(),
                             params,
                         )
                         .await
@@ -752,16 +676,12 @@ impl TranslationDispatch {
                 }
                 result
             }
-            TranslationEngine::Custom => {
-                let params = match &req.credentials {
-                    EngineCredentials::Custom(params) => params,
-                    _ => return Err(TranslationError::EngineNotInitialized("Custom API")),
-                };
+            PreparedEngineKind::Custom(params) => {
                 super::custom::translate_async_with_client(
                     client,
                     &req.text,
-                    req.source_lang,
-                    req.target_lang,
+                    languages.source(),
+                    languages.target(),
                     params,
                 )
                 .await

@@ -21,10 +21,10 @@ pub use eztrans::EzTransTranslator;
 pub use eztrans_actor::{prepare_eztrans, translate_with_eztrans};
 pub use eztrans_process::{EzTransBatchTranslator, EzTransProcessConfig};
 pub(crate) use eztrans_process::{global_eztrans_process_pool, run_eztrans_worker};
-pub use job::TranslationJobSpec;
+pub(crate) use job::{DeepLStrategy, PreparedEngineKind};
+pub use job::{LanguagePair, PreparedEngine, PreparedJob};
 pub use language::{EnumParseError, Language, TranslationEngine, lang_utils};
 pub use llm::LlmProvider;
-pub use worker::EngineCredentials;
 
 pub static GOOGLE_SUPPORTED_LANGUAGES: &[Language] = language::GOOGLE_SUPPORTED_LANGUAGES;
 pub static DEEPL_SUPPORTED_LANGUAGES: &[Language] = language::DEEPL_SUPPORTED_LANGUAGES;

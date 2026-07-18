@@ -9,11 +9,11 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 use crate::constants::WM_TRANSLATION_COMPLETE;
+use crate::translation::PreparedJob;
 use crate::translation::worker::{
-    CompletionNotifier, EngineCredentials, TargetId, TranslationDispatch, TranslationRequest,
-    TranslationRequestError, TranslationResponse,
+    CompletionNotifier, TargetId, TranslationDispatch, TranslationRequest, TranslationRequestError,
+    TranslationResponse,
 };
-use crate::translation::{Language, TranslationEngine};
 
 struct WindowMessageNotifier;
 
@@ -49,22 +49,9 @@ fn target(hwnd: HWND) -> TargetId {
 pub(crate) fn request_translation(
     hwnd: HWND,
     text: Arc<str>,
-    engine: TranslationEngine,
-    source_lang: Language,
-    target_lang: Language,
-    credentials: EngineCredentials,
+    job: PreparedJob,
 ) -> Result<u64, TranslationRequestError> {
-    dispatch().request(
-        target(hwnd),
-        TranslationRequest {
-            id: 0,
-            text,
-            engine,
-            source_lang,
-            target_lang,
-            credentials,
-        },
-    )
+    dispatch().request(target(hwnd), TranslationRequest { id: 0, text, job })
 }
 
 pub(crate) fn take_response(hwnd: HWND) -> Option<(u64, TranslationResponse)> {

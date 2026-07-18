@@ -211,18 +211,21 @@ impl EzTransBatchTranslator for MockBatchTranslator {
 }
 
 fn eztrans_job() -> crate::file_trans::FileTransJobData {
-    use crate::translation::{EngineCredentials, Language, TranslationEngine};
+    use crate::translation::{Language, PreparedJob};
     crate::file_trans::FileTransJobData {
         input_files: Vec::new(),
         output_files: Vec::new(),
         write_type: super::WriteType::TranslationOnly,
         no_trans_linefeed: true,
         cancel_token: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        engine: TranslationEngine::EzTrans,
-        source_lang: Language::Jpn,
-        target_lang: Language::Kor,
-        credentials: EngineCredentials::None,
-        eztrans_process: None,
+        translation: PreparedJob::eztrans(
+            "test.dll".into(),
+            "test-dat".into(),
+            1,
+            Language::Jpn,
+            Language::Kor,
+        )
+        .unwrap(),
     }
 }
 
@@ -284,9 +287,9 @@ fn eztrans_batches_are_balanced_across_configured_processes_and_bounded() {
 
 #[test]
 fn cancellation_aborts_an_in_flight_file_http_request() {
+    use crate::config::{LlmConfig, TranslationConfig};
     use crate::file_trans::FileTransJobData;
-    use crate::translation::llm::{LlmCallParams, LlmProvider};
-    use crate::translation::{EngineCredentials, Language, TranslationEngine};
+    use crate::translation::PreparedJob;
     use std::net::TcpListener;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -305,20 +308,21 @@ fn cancellation_aborts_an_in_flight_file_http_request() {
         write_type: super::WriteType::TranslationOnly,
         no_trans_linefeed: false,
         cancel_token: cancel_token.clone(),
-        engine: TranslationEngine::Llm,
-        source_lang: Language::Jpn,
-        target_lang: Language::Kor,
-        credentials: EngineCredentials::Llm(LlmCallParams {
-            provider: LlmProvider::OpenAi,
-            model: "test".into(),
-            api_key: "test".into(),
-            base_url: format!("http://{address}"),
-            system_prompt: String::new(),
-            temperature: 0.3,
-            max_tokens: 10,
-            glossary: Vec::new(),
-        }),
-        eztrans_process: None,
+        translation: PreparedJob::from_config(&TranslationConfig {
+            engine: "llm".into(),
+            llm: LlmConfig {
+                model: "test".into(),
+                api_key: "test".into(),
+                base_url: format!("http://{address}"),
+                system_prompt: String::new(),
+                temperature: 0.3,
+                max_tokens: 10,
+                glossary: Vec::new(),
+                ..LlmConfig::default()
+            },
+            ..TranslationConfig::default()
+        })
+        .unwrap(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

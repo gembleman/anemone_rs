@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::file_trans::{
     FileTransJobData, ProgressEvent, WriteType as CoreWriteType, run as run_file_trans,
 };
-use crate::translation::TranslationJobSpec;
+use crate::translation::PreparedJob;
 
 use super::translate::{resolve_engine, resolve_languages};
 
@@ -53,26 +53,16 @@ pub(super) fn run(args: Args) -> Result<(), String> {
     let engine = resolve_engine(engine, &config)?;
     let (source_lang, target_lang) = resolve_languages(&source, &target, &config)?;
 
-    let spec = TranslationJobSpec::with_engine_languages(
-        &config.translation,
-        engine,
-        source_lang,
-        target_lang,
-    )
-    .map_err(|error| error.to_string())?;
-    let (engine, source_lang, target_lang, credentials, eztrans_process) = spec.into_file_parts();
-
+    let translation =
+        PreparedJob::with_engine_languages(&config.translation, engine, source_lang, target_lang)
+            .map_err(|error| error.to_string())?;
     let job = FileTransJobData {
         input_files: vec![input],
         output_files: vec![output],
         write_type: write_type.into(),
         no_trans_linefeed,
         cancel_token: Arc::new(AtomicBool::new(false)),
-        engine,
-        source_lang,
-        target_lang,
-        credentials,
-        eztrans_process,
+        translation,
     };
     let total = Cell::new(0usize);
     let error = RefCell::new(None);

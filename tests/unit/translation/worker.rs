@@ -59,14 +59,11 @@ fn spawn_llm_server(
 }
 
 fn llm_request_for_url(base_url: String) -> TranslationRequest {
-    TranslationRequest {
-        id: 0,
-        text: Arc::from("source"),
-        engine: TranslationEngine::Llm,
-        source_lang: Language::Eng,
-        target_lang: Language::Kor,
-        credentials: EngineCredentials::Llm(LlmCallParams {
-            provider: LlmProvider::OpenAi,
+    let config = crate::config::TranslationConfig {
+        engine: "llm".into(),
+        source_lang: "en".into(),
+        target_lang: "ko".into(),
+        llm: crate::config::LlmConfig {
             model: "test".into(),
             api_key: "test-key".into(),
             base_url,
@@ -74,7 +71,14 @@ fn llm_request_for_url(base_url: String) -> TranslationRequest {
             temperature: 0.0,
             max_tokens: 32,
             glossary: Vec::new(),
-        }),
+            ..crate::config::LlmConfig::default()
+        },
+        ..crate::config::TranslationConfig::default()
+    };
+    TranslationRequest {
+        id: 0,
+        text: Arc::from("source"),
+        job: PreparedJob::from_config(&config).unwrap(),
     }
 }
 
@@ -94,10 +98,7 @@ fn disconnected_worker_rejects_request_and_rolls_back_latest_id() {
         TranslationRequest {
             id: 0,
             text: Arc::from("source"),
-            engine: TranslationEngine::Google,
-            source_lang: Language::Jpn,
-            target_lang: Language::Kor,
-            credentials: EngineCredentials::None,
+            job: PreparedJob::google(Language::Jpn, Language::Kor).unwrap(),
         },
     );
 
@@ -132,11 +133,10 @@ fn retry_after_overrides_exponential_backoff() {
 fn oversized_input_is_rejected_before_network_io() {
     let req = TranslationRequest {
         id: 1,
-        text: Arc::from("가".repeat(TranslationEngine::Google.max_input_chars() + 1)),
-        engine: TranslationEngine::Google,
-        source_lang: Language::Kor,
-        target_lang: Language::Eng,
-        credentials: EngineCredentials::None,
+        text: Arc::from(
+            "가".repeat(crate::translation::TranslationEngine::Google.max_input_chars() + 1),
+        ),
+        job: PreparedJob::google(Language::Kor, Language::Eng).unwrap(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -320,18 +320,19 @@ fn shutdown_aborts_in_flight_http_and_joins_within_two_seconds() {
 }
 
 fn llm_request(text: &str, base_url: &str) -> TranslationRequest {
-    let config = crate::config::LlmConfig {
-        api_key: "test-key".to_string(),
-        base_url: base_url.to_string(),
-        ..crate::config::LlmConfig::default()
+    let config = crate::config::TranslationConfig {
+        engine: "llm".into(),
+        llm: crate::config::LlmConfig {
+            api_key: "test-key".to_string(),
+            base_url: base_url.to_string(),
+            ..crate::config::LlmConfig::default()
+        },
+        ..crate::config::TranslationConfig::default()
     };
     TranslationRequest {
         id: 0,
         text: Arc::from(text),
-        engine: TranslationEngine::Llm,
-        source_lang: Language::Jpn,
-        target_lang: Language::Kor,
-        credentials: EngineCredentials::Llm(config.to_call_params().unwrap()),
+        job: PreparedJob::from_config(&config).unwrap(),
     }
 }
 

@@ -156,7 +156,7 @@ fn normalized_engine_change_builds_translation_job_spec() {
     )
     .unwrap();
 
-    assert!(TranslationJobSpec::from_config(&config).is_ok());
+    assert!(PreparedJob::from_config(&config).is_ok());
 }
 
 #[test]

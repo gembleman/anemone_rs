@@ -2,7 +2,7 @@ use super::{
     FileTransJobData, FileTransRunner, FileTransTask, ProgressEvent, WriteType,
     default_output_paths, run, validate_job_paths,
 };
-use crate::translation::{EngineCredentials, Language, TranslationEngine};
+use crate::translation::{Language, PreparedJob};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,11 +37,7 @@ fn job(input_files: Vec<PathBuf>, output_files: Vec<PathBuf>) -> FileTransJobDat
         write_type: WriteType::TranslationOnly,
         no_trans_linefeed: true,
         cancel_token: Arc::new(AtomicBool::new(false)),
-        engine: TranslationEngine::Google,
-        source_lang: Language::Jpn,
-        target_lang: Language::Kor,
-        credentials: EngineCredentials::None,
-        eztrans_process: None,
+        translation: PreparedJob::google(Language::Jpn, Language::Kor).unwrap(),
     }
 }
 

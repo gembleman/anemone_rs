@@ -1,22 +1,151 @@
-//! 호출 환경과 무관한 번역 실행 사양 구성.
+//! 호출 환경과 무관한 검증된 번역 작업 구성.
+
+use std::sync::Arc;
 
 use crate::config::TranslationConfig;
-use crate::translation::worker::EngineCredentials;
+use crate::translation::custom::CustomApiCallParams;
+use crate::translation::llm::LlmCallParams;
 use crate::translation::{EzTransProcessConfig, Language, TranslationEngine, prepare_eztrans};
 
-/// 비밀 자격증명을 포함할 수 있는 실행 사양. 의도적으로 `Debug`를 구현하지 않는다.
-#[derive(Clone)]
-pub struct TranslationJobSpec {
-    engine: TranslationEngine,
-    source_lang: Language,
-    target_lang: Language,
-    credentials: EngineCredentials,
-    eztrans_dll_path: String,
-    eztrans_dat_path: String,
-    eztrans_process_count: usize,
+/// DeepL 다중 키 폴백 전략.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum DeepLStrategy {
+    #[default]
+    Failover,
+    RoundRobin,
 }
 
-impl TranslationJobSpec {
+/// 번역 언어쌍. 엔진 지원 여부는 [`PreparedJob`] 생성 시 검증한다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LanguagePair {
+    source: Language,
+    target: Language,
+}
+
+impl LanguagePair {
+    pub const fn new(source: Language, target: Language) -> Self {
+        Self { source, target }
+    }
+
+    pub const fn source(self) -> Language {
+        self.source
+    }
+
+    pub const fn target(self) -> Language {
+        self.target
+    }
+}
+
+/// 엔진과 인증 정보를 하나의 variant로 결합한 내부 실행 backend.
+pub(crate) enum PreparedEngineKind {
+    EzTrans(EzTransProcessConfig),
+    Google,
+    DeepL {
+        keys: Vec<String>,
+        strategy: DeepLStrategy,
+    },
+    Papago {
+        client_id: String,
+        client_secret: String,
+    },
+    Llm(LlmCallParams),
+    Custom(CustomApiCallParams),
+}
+
+impl PreparedEngineKind {
+    fn engine(&self) -> TranslationEngine {
+        match self {
+            Self::EzTrans(_) => TranslationEngine::EzTrans,
+            Self::Google => TranslationEngine::Google,
+            Self::DeepL { .. } => TranslationEngine::DeepL,
+            Self::Papago { .. } => TranslationEngine::Papago,
+            Self::Llm(_) => TranslationEngine::Llm,
+            Self::Custom(_) => TranslationEngine::Custom,
+        }
+    }
+}
+
+/// 비밀값을 복제하지 않고 공유하는 검증된 번역 엔진.
+#[derive(Clone)]
+pub struct PreparedEngine(Arc<PreparedEngineKind>);
+
+impl PreparedEngine {
+    pub fn engine(&self) -> TranslationEngine {
+        self.0.engine()
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        self.engine().to_str()
+    }
+
+    pub fn max_input_chars(&self) -> usize {
+        self.engine().max_input_chars()
+    }
+
+    pub fn is_blocking(&self) -> bool {
+        matches!(self.0.as_ref(), PreparedEngineKind::EzTrans(_))
+    }
+
+    pub fn supports_batch(&self) -> bool {
+        matches!(self.0.as_ref(), PreparedEngineKind::EzTrans(_))
+    }
+
+    pub(crate) fn kind(&self) -> &PreparedEngineKind {
+        self.0.as_ref()
+    }
+
+    pub(crate) fn eztrans_process(&self) -> Option<&EzTransProcessConfig> {
+        match self.0.as_ref() {
+            PreparedEngineKind::EzTrans(config) => Some(config),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for PreparedEngine {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedEngine")
+            .field("engine", &self.engine())
+            .finish_non_exhaustive()
+    }
+}
+
+/// GUI, CLI와 파일 번역이 공유하는 검증된 실행 작업.
+///
+/// `Debug`는 엔진과 언어만 표시하고 자격증명은 노출하지 않는다.
+#[derive(Clone)]
+pub struct PreparedJob {
+    engine: PreparedEngine,
+    languages: LanguagePair,
+}
+
+impl PreparedJob {
+    pub fn google(source: Language, target: Language) -> Result<Self, TranslationConfigError> {
+        Self::from_kind(PreparedEngineKind::Google, source, target)
+    }
+
+    pub fn eztrans(
+        dll_path: String,
+        dat_path: String,
+        process_count: usize,
+        source: Language,
+        target: Language,
+    ) -> Result<Self, TranslationConfigError> {
+        if dll_path.trim().is_empty() || dat_path.trim().is_empty() {
+            return Err(TranslationConfigError::MissingEzTransPath);
+        }
+        Self::from_kind(
+            PreparedEngineKind::EzTrans(EzTransProcessConfig {
+                dll_path,
+                dat_path,
+                process_count: crate::config::limits::eztrans_process_count_usize(process_count),
+            }),
+            source,
+            target,
+        )
+    }
+
     pub fn from_config(config: &TranslationConfig) -> Result<Self, TranslationConfigError> {
         let engine = config
             .get_engine()
@@ -30,30 +159,40 @@ impl TranslationJobSpec {
         Self::with_engine_languages(config, engine, source, target)
     }
 
-    /// CLI 등의 명시적 엔진/언어 재정의도 동일한 자격증명 구성 규칙을 사용한다.
+    /// CLI 등의 명시적 엔진/언어 재정의도 동일한 backend 구성 규칙을 사용한다.
     pub fn with_engine_languages(
         config: &TranslationConfig,
         engine: TranslationEngine,
-        source_lang: Language,
-        target_lang: Language,
+        source: Language,
+        target: Language,
     ) -> Result<Self, TranslationConfigError> {
-        if !engine.supports_pair(source_lang, target_lang) {
-            return Err(TranslationConfigError::UnsupportedLanguagePair {
-                engine: engine.to_str(),
-            });
-        }
-        let credentials =
+        let kind =
             match engine {
-                TranslationEngine::EzTrans | TranslationEngine::Google => EngineCredentials::None,
+                TranslationEngine::EzTrans => {
+                    if config.eztrans_dll_path.trim().is_empty()
+                        || config.eztrans_dat_path.trim().is_empty()
+                    {
+                        return Err(TranslationConfigError::MissingEzTransPath);
+                    }
+                    PreparedEngineKind::EzTrans(EzTransProcessConfig {
+                        dll_path: config.eztrans_dll_path.clone(),
+                        dat_path: config.eztrans_dat_path.clone(),
+                        process_count: crate::config::limits::eztrans_process_count(
+                            config.eztrans_process_count,
+                        ) as usize,
+                    })
+                }
+                TranslationEngine::Google => PreparedEngineKind::Google,
                 TranslationEngine::DeepL => {
                     let keys = config
                         .deepl_effective_keys()
                         .into_iter()
+                        .filter(|key| !key.trim().is_empty())
                         .collect::<Vec<_>>();
                     if keys.is_empty() {
                         return Err(TranslationConfigError::MissingCredential("DeepL API 키"));
                     }
-                    EngineCredentials::DeepL {
+                    PreparedEngineKind::DeepL {
                         keys,
                         strategy: config.deepl_strategy(),
                     }
@@ -66,7 +205,7 @@ impl TranslationJobSpec {
                             "Papago client_id/client_secret",
                         ));
                     }
-                    EngineCredentials::Papago {
+                    PreparedEngineKind::Papago {
                         client_id: config.papago_client_id.clone(),
                         client_secret: config.papago_client_secret.clone(),
                     }
@@ -75,7 +214,7 @@ impl TranslationJobSpec {
                     if config.llm.api_key.trim().is_empty() {
                         return Err(TranslationConfigError::MissingCredential("LLM API 키"));
                     }
-                    EngineCredentials::Llm(config.llm.to_call_params().map_err(|error| {
+                    PreparedEngineKind::Llm(config.llm.to_call_params().map_err(|error| {
                         TranslationConfigError::InvalidSetting(error.to_string())
                     })?)
                 }
@@ -83,7 +222,7 @@ impl TranslationJobSpec {
                     let custom = config.active_custom_api().map_err(|error| {
                         TranslationConfigError::InvalidSetting(error.to_string())
                     })?;
-                    let params = crate::translation::custom::CustomApiCallParams {
+                    let params = CustomApiCallParams {
                         url: custom.url.clone(),
                         api_key: custom.api_key.clone(),
                         auth_header: custom.auth_header.clone(),
@@ -95,79 +234,55 @@ impl TranslationJobSpec {
                     params
                         .validate()
                         .map_err(TranslationConfigError::InvalidSetting)?;
-                    EngineCredentials::Custom(params)
+                    PreparedEngineKind::Custom(params)
                 }
             };
-        if engine == TranslationEngine::EzTrans
-            && (config.eztrans_dll_path.trim().is_empty()
-                || config.eztrans_dat_path.trim().is_empty())
-        {
-            return Err(TranslationConfigError::MissingEzTransPath);
+
+        Self::from_kind(kind, source, target)
+    }
+
+    fn from_kind(
+        kind: PreparedEngineKind,
+        source: Language,
+        target: Language,
+    ) -> Result<Self, TranslationConfigError> {
+        let engine = kind.engine();
+        if !engine.supports_pair(source, target) {
+            return Err(TranslationConfigError::UnsupportedLanguagePair {
+                engine: engine.to_str(),
+            });
         }
         Ok(Self {
-            engine,
-            source_lang,
-            target_lang,
-            credentials,
-            eztrans_dll_path: config.eztrans_dll_path.clone(),
-            eztrans_dat_path: config.eztrans_dat_path.clone(),
-            eztrans_process_count: crate::config::limits::eztrans_process_count(
-                config.eztrans_process_count,
-            ) as usize,
+            engine: PreparedEngine(Arc::new(kind)),
+            languages: LanguagePair::new(source, target),
         })
     }
 
-    /// EzTrans처럼 사전 초기화가 필요한 엔진을 준비한다.
+    /// EzTrans actor처럼 사전 초기화가 필요한 단문 실행 backend를 준비한다.
     pub fn prepare(&self) -> Result<(), TranslationPrepareError> {
-        if self.engine != TranslationEngine::EzTrans {
+        let Some(config) = self.engine.eztrans_process() else {
             return Ok(());
-        }
-        prepare_eztrans(&self.eztrans_dll_path, &self.eztrans_dat_path)
+        };
+        prepare_eztrans(&config.dll_path, &config.dat_path)
             .map_err(TranslationPrepareError::EzTransInitialization)
     }
 
-    /// 준비가 끝난 실행 사양을 요청/배치 작업이 복사 없이 소유하도록 분해한다.
-    pub fn into_parts(self) -> (TranslationEngine, Language, Language, EngineCredentials) {
-        (
-            self.engine,
-            self.source_lang,
-            self.target_lang,
-            self.credentials,
-        )
+    pub fn engine(&self) -> &PreparedEngine {
+        &self.engine
     }
 
-    /// 파일 번역용 실행 사양. EzTrans는 부모 프로세스 actor 대신 격리된 helper 풀에서
-    /// 초기화하므로 경로와 프로세스 수를 함께 넘긴다.
-    pub fn into_file_parts(
-        self,
-    ) -> (
-        TranslationEngine,
-        Language,
-        Language,
-        EngineCredentials,
-        Option<EzTransProcessConfig>,
-    ) {
-        let eztrans = (self.engine == TranslationEngine::EzTrans).then_some(EzTransProcessConfig {
-            dll_path: self.eztrans_dll_path,
-            dat_path: self.eztrans_dat_path,
-            process_count: self.eztrans_process_count,
-        });
-        (
-            self.engine,
-            self.source_lang,
-            self.target_lang,
-            self.credentials,
-            eztrans,
-        )
+    pub fn languages(&self) -> LanguagePair {
+        self.languages
     }
+}
 
-    #[cfg(test)]
-    pub fn engine(&self) -> TranslationEngine {
-        self.engine
-    }
-    #[cfg(test)]
-    pub fn credentials(&self) -> EngineCredentials {
-        self.credentials.clone()
+impl std::fmt::Debug for PreparedJob {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedJob")
+            .field("engine", &self.engine)
+            .field("languages", &self.languages)
+            .finish()
     }
 }
 

@@ -39,18 +39,21 @@ impl EzTransBatchTranslator for MockBatchTranslator {
 }
 
 fn eztrans_job() -> crate::file_trans::FileTransJobData {
-    use crate::translation::{EngineCredentials, Language, TranslationEngine};
+    use crate::translation::{Language, PreparedJob};
     crate::file_trans::FileTransJobData {
         input_files: Vec::new(),
         output_files: Vec::new(),
         write_type: super::WriteType::TranslationOnly,
         no_trans_linefeed: true,
         cancel_token: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        engine: TranslationEngine::EzTrans,
-        source_lang: Language::Jpn,
-        target_lang: Language::Kor,
-        credentials: EngineCredentials::None,
-        eztrans_process: None,
+        translation: PreparedJob::eztrans(
+            "test.dll".into(),
+            "test-dat".into(),
+            1,
+            Language::Jpn,
+            Language::Kor,
+        )
+        .unwrap(),
     }
 }
 

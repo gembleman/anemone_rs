@@ -29,7 +29,7 @@ use crate::define_dialog_instance;
 use crate::file_trans::{
     FileTransJobData, FileTransRunner, WriteType, default_output_paths, validate_job_paths,
 };
-use crate::translation::{TranslationEngine, TranslationJobSpec};
+use crate::translation::{PreparedJob, TranslationEngine};
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -506,7 +506,7 @@ impl FileTransDialog {
 
         let spec = {
             let config = self.config.borrow();
-            TranslationJobSpec::from_config(&config.translation)
+            PreparedJob::from_config(&config.translation)
         };
         let spec = match spec {
             Ok(spec) => spec,
@@ -523,9 +523,6 @@ impl FileTransDialog {
                 return;
             }
         };
-        let (engine, source_lang, target_lang, credentials, eztrans_process) =
-            spec.into_file_parts();
-
         let job_data = FileTransJobData {
             input_files: self.input_files.clone(),
             output_files: self.output_files.clone(),
@@ -533,11 +530,7 @@ impl FileTransDialog {
             no_trans_linefeed: self.no_trans_linefeed,
             // runner가 작업별 취소 토큰을 설정한다.
             cancel_token: Default::default(),
-            engine,
-            source_lang,
-            target_lang,
-            credentials,
-            eztrans_process,
+            translation: spec,
         };
         let task = FileTransRunner::start(job_data);
         if let Err(e) = FileTransProgressDialog::show(self.hwnd, task) {

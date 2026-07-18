@@ -17,7 +17,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::translation::{EngineCredentials, EzTransProcessConfig, Language, TranslationEngine};
+use crate::translation::PreparedJob;
 
 pub use error::FileTranslationError;
 pub use worker::run;
@@ -118,11 +118,7 @@ pub struct FileTransJobData {
     pub write_type: WriteType,
     pub no_trans_linefeed: bool,
     pub cancel_token: Arc<AtomicBool>,
-    pub engine: TranslationEngine,
-    pub source_lang: Language,
-    pub target_lang: Language,
-    pub credentials: EngineCredentials,
-    pub eztrans_process: Option<EzTransProcessConfig>,
+    pub translation: PreparedJob,
 }
 
 /// 파일 번역 작업이 UI 또는 CLI 호출자에게 전달하는 진행 이벤트.

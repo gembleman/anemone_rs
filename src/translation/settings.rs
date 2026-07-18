@@ -2,7 +2,7 @@
 
 use crate::config::TranslationConfig;
 use crate::config::limits;
-use crate::translation::{Language, LlmProvider, TranslationEngine, TranslationJobSpec};
+use crate::translation::{Language, LlmProvider, PreparedJob, TranslationEngine};
 
 pub enum TranslationSettingChange {
     Engine(TranslationEngine),
@@ -268,7 +268,7 @@ impl TranslationSettingsEditor {
         {
             return Ok(());
         }
-        TranslationJobSpec::from_config(config)
+        PreparedJob::from_config(config)
             .map_err(|error| error.to_string())?
             .prepare()
             .map_err(|error| error.to_string())

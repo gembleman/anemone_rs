@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::translation::http_common::shared_client;
 use crate::translation::worker::{TranslationDispatch, TranslationRequest};
-use crate::translation::{Language, TranslationEngine, TranslationJobSpec, lang_utils};
+use crate::translation::{Language, PreparedJob, TranslationEngine, lang_utils};
 
 #[derive(clap::Args)]
 pub(super) struct Args {
@@ -41,14 +41,10 @@ pub(super) fn run(args: Args) -> Result<(), String> {
     let engine = resolve_engine(args.engine, &config)?;
     let (source_lang, target_lang) = resolve_languages(&args.source, &args.target, &config)?;
 
-    let spec = TranslationJobSpec::with_engine_languages(
-        &config.translation,
-        engine,
-        source_lang,
-        target_lang,
-    )
-    .map_err(|error| error.to_string())?;
-    let translated = run_translation(spec, &text)?;
+    let job =
+        PreparedJob::with_engine_languages(&config.translation, engine, source_lang, target_lang)
+            .map_err(|error| error.to_string())?;
+    let translated = run_translation(job, &text)?;
 
     println!("{translated}");
     Ok(())
@@ -56,9 +52,8 @@ pub(super) fn run(args: Args) -> Result<(), String> {
 
 /// 엔진/언어를 받아 실제 번역을 수행. HTTP 엔진은 별도 tokio 런타임에서
 /// `translate_async` 를 `block_on` 한다 (디스패치 큐 우회).
-fn run_translation(spec: TranslationJobSpec, text: &str) -> Result<String, String> {
-    spec.prepare().map_err(|error| error.to_string())?;
-    let (engine, source_lang, target_lang, credentials) = spec.into_parts();
+fn run_translation(job: PreparedJob, text: &str) -> Result<String, String> {
+    job.prepare().map_err(|error| error.to_string())?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -67,10 +62,7 @@ fn run_translation(spec: TranslationJobSpec, text: &str) -> Result<String, Strin
     let req = TranslationRequest {
         id: 0,
         text: Arc::from(text),
-        engine,
-        source_lang,
-        target_lang,
-        credentials,
+        job,
     };
     rt.block_on(TranslationDispatch::translate_async(&req, &client))
         .map_err(|e| format!("번역 실패: {e}"))

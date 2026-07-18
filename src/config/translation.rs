@@ -236,8 +236,8 @@ impl TranslationConfig {
     }
 
     /// DeepL 멀티 키 전략
-    pub fn deepl_strategy(&self) -> crate::translation::worker::DeepLStrategy {
-        use crate::translation::worker::DeepLStrategy;
+    pub(crate) fn deepl_strategy(&self) -> crate::translation::DeepLStrategy {
+        use crate::translation::DeepLStrategy;
         match self.deepl_strategy.to_lowercase().as_str() {
             "round-robin" | "roundrobin" | "rr" => DeepLStrategy::RoundRobin,
             _ => DeepLStrategy::Failover,

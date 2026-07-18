@@ -49,7 +49,7 @@ fn terminal_event_prevents_later_state_updates() {
 fn win32_cancel_and_close_request_task_cancellation() {
     use super::{FileTransProgressDialog, ctrl_id};
     use crate::file_trans::{FileTransJobData, FileTransRunner, WriteType};
-    use crate::translation::{EngineCredentials, Language, TranslationEngine};
+    use crate::translation::{Language, PreparedJob};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -67,11 +67,7 @@ fn win32_cancel_and_close_request_task_cancellation() {
             write_type: WriteType::TranslationOnly,
             no_trans_linefeed: false,
             cancel_token: Arc::new(AtomicBool::new(false)),
-            engine: TranslationEngine::Google,
-            source_lang: Language::Jpn,
-            target_lang: Language::Kor,
-            credentials: EngineCredentials::None,
-            eztrans_process: None,
+            translation: PreparedJob::google(Language::Jpn, Language::Kor).unwrap(),
         }
     }
 

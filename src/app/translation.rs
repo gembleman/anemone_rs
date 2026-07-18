@@ -138,35 +138,27 @@ impl App {
 
     /// 비동기 번역 요청
     fn request_translation_async(&mut self, text: &str) {
-        use crate::translation::TranslationJobSpec;
+        use crate::translation::PreparedJob;
 
         let config = self.config.borrow();
-        let spec = match TranslationJobSpec::from_config(&config.translation) {
+        let job = match PreparedJob::from_config(&config.translation) {
             Ok(spec) => spec,
             Err(error) => {
                 tracing::warn!("자동 번역 요청을 구성할 수 없습니다: {error}");
                 return;
             }
         };
-        if let Err(error) = spec.prepare() {
+        if let Err(error) = job.prepare() {
             tracing::warn!("자동 번역 엔진을 준비할 수 없습니다: {error}");
             return;
         }
 
         drop(config);
 
-        let (engine, source_lang, target_lang, credentials) = spec.into_parts();
         let original: Arc<str> = Arc::from(text);
 
         // 디스패치에 번역 요청 (워커는 프로세스 전역)
-        let request = request_translation(
-            self.hwnd,
-            Arc::clone(&original),
-            engine,
-            source_lang,
-            target_lang,
-            credentials,
-        );
+        let request = request_translation(self.hwnd, Arc::clone(&original), job);
 
         match request {
             Ok(req_id) => {
