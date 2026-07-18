@@ -1,4 +1,74 @@
-use super::*;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::rc::Rc;
+
+use windows::Win32::{
+    Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
+    Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT},
+    UI::WindowsAndMessaging::{
+        DefWindowProcW, GetClientRect, HTCAPTION, HTTRANSPARENT, MINMAXINFO, PostQuitMessage,
+        SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND,
+        WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_HOTKEY, WM_NCHITTEST,
+        WM_NCRBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SIZE,
+    },
+};
+
+use super::{APP, App};
+use crate::constants::{
+    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
+    WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
+};
+use crate::translation::unregister_translation_hwnd;
+use crate::window;
+
+#[derive(Clone, Copy)]
+struct DeferredMessage {
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+}
+
+thread_local! {
+    static DEFERRED_MESSAGES: RefCell<VecDeque<DeferredMessage>> =
+        const { RefCell::new(VecDeque::new()) };
+    static TASKBAR_CREATED_MESSAGE: Cell<u32> = const { Cell::new(0) };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReentryPolicy {
+    DeferOwned,
+    ApplyDpiThenResize,
+    ValidatePaintThenRepaint,
+    Quit,
+    Default,
+}
+
+fn reentry_policy(msg: u32, taskbar_created_msg: u32) -> ReentryPolicy {
+    if taskbar_created_msg != 0 && msg == taskbar_created_msg {
+        return ReentryPolicy::DeferOwned;
+    }
+
+    match msg {
+        WM_DESTROY => ReentryPolicy::Quit,
+        WM_DPICHANGED => ReentryPolicy::ApplyDpiThenResize,
+        WM_PAINT => ReentryPolicy::ValidatePaintThenRepaint,
+        WM_CLOSE | WM_SIZE | WM_DISPLAYCHANGE | WM_RBUTTONUP | WM_NCRBUTTONUP | WM_COMMAND
+        | WM_HOTKEY | WM_TRAY_ICON | WM_CLIPBOARDUPDATE => ReentryPolicy::DeferOwned,
+        _ if matches!(
+            msg,
+            WM_APP_REFRESH
+                | WM_APP_SET_MAGNETIC
+                | WM_DEFERRED_RESIZE
+                | WM_DEFERRED_PAINT
+                | WM_TRANSLATION_COMPLETE
+        ) =>
+        {
+            ReentryPolicy::DeferOwned
+        }
+        _ => ReentryPolicy::Default,
+    }
+}
 
 impl App {
     /// WndProc에서 호출되는 메시지 디스패처
@@ -19,10 +89,12 @@ impl App {
         // hwnd/wparam/lparam. Pointer casts are valid for their respective message types.
         unsafe {
             match msg {
+                _ if self.taskbar_created_msg != 0 && msg == self.taskbar_created_msg => {
+                    self.tray.restore();
+                    Some(LRESULT(0))
+                }
                 WM_DESTROY => {
-                    if let Err(e) = self.config.borrow().save() {
-                        tracing::error!("설정 저장 실패: {}", e);
-                    }
+                    DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().clear());
                     // 클립보드 자동 번역으로 등록된 라우팅 슬롯 정리. shutdown()
                     // 이전 in-flight 응답이 죽은 HWND 로 PostMessage 시도하는 것을
                     // 막는다. (PostMessage 자체는 안전하지만 silent fail.)
@@ -53,20 +125,8 @@ impl App {
                     // Per-Monitor V2: 모니터 간 이동 또는 OS DPI 변경 시 호출된다.
                     // 자식 컨트롤이 없는 합성 윈도우이므로 권장 RECT 로 위치/크기만 갱신.
                     // 위치/크기 변경은 WM_SIZE 를 유발해 거기서 swap chain resize + paint 가 이어진다.
-                    if lparam.0 != 0 {
-                        let rect = &*(lparam.0 as *const RECT);
-                        let w = rect.right - rect.left;
-                        let h = rect.bottom - rect.top;
-                        let _ = SetWindowPos(
-                            hwnd,
-                            None,
-                            rect.left,
-                            rect.top,
-                            w,
-                            h,
-                            SWP_NOZORDER | SWP_NOACTIVATE,
-                        );
-                    }
+                    Self::apply_dpi_rect(hwnd, lparam);
+                    self.sync_client_size(hwnd);
                     Some(LRESULT(0))
                 }
 
@@ -111,15 +171,27 @@ impl App {
                     Some(LRESULT(0))
                 }
 
-                _ if msg == WM_DEFERRED_CLIPBOARD => {
-                    self.handle_clipboard_change();
-                    Some(LRESULT(0))
-                }
-
                 _ if msg == WM_APP_REFRESH => {
                     self.sync_window_state();
                     if let Err(e) = self.paint() {
                         tracing::warn!("paint failed on refresh: {e}");
+                    }
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_APP_SET_MAGNETIC => {
+                    self.apply_magnetic_request(wparam.0 != 0);
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_DEFERRED_RESIZE => {
+                    self.sync_client_size(hwnd);
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_DEFERRED_PAINT => {
+                    if let Err(error) = self.paint() {
+                        tracing::warn!("deferred paint failed: {error}");
                     }
                     Some(LRESULT(0))
                 }
@@ -131,6 +203,36 @@ impl App {
 
                 _ => None,
             }
+        }
+    }
+
+    unsafe fn apply_dpi_rect(hwnd: HWND, lparam: LPARAM) {
+        if lparam.0 == 0 {
+            return;
+        }
+        let rect = unsafe { *(lparam.0 as *const RECT) };
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    fn sync_client_size(&mut self, hwnd: HWND) {
+        let mut rect = RECT::default();
+        match unsafe { GetClientRect(hwnd, &mut rect) } {
+            Ok(()) => {
+                if let Err(error) = self.resize(rect.right - rect.left, rect.bottom - rect.top) {
+                    tracing::warn!("client-size synchronization failed: {error}");
+                }
+            }
+            Err(error) => tracing::warn!("GetClientRect failed after window resize: {error}"),
         }
     }
 
@@ -146,6 +248,84 @@ impl App {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 
+    pub(super) fn set_taskbar_created_message(msg: u32) {
+        TASKBAR_CREATED_MESSAGE.with(|slot| slot.set(msg));
+    }
+
+    fn enqueue_deferred(message: DeferredMessage) {
+        tracing::debug!("Deferring reentrant app message: 0x{:04X}", message.msg);
+        DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().push_back(message));
+    }
+
+    /// Drain only after the current `RefMut<App>` has been dropped. Each deferred message owns
+    /// all of its parameters; messages whose LPARAM points to temporary system memory are never
+    /// put in this queue.
+    pub(super) fn drain_deferred_messages(app: &Rc<RefCell<App>>) {
+        while let Some(message) = DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().pop_front()) {
+            let Ok(mut app_ref) = app.try_borrow_mut() else {
+                DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().push_front(message));
+                break;
+            };
+            let result = unsafe {
+                app_ref.dispatch_message(message.hwnd, message.msg, message.wparam, message.lparam)
+            };
+            drop(app_ref);
+
+            if result.is_none() {
+                unsafe {
+                    DefWindowProcW(message.hwnd, message.msg, message.wparam, message.lparam);
+                }
+            }
+        }
+    }
+
+    unsafe fn handle_reentry(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        let taskbar_created_msg = TASKBAR_CREATED_MESSAGE.with(Cell::get);
+        match reentry_policy(msg, taskbar_created_msg) {
+            ReentryPolicy::DeferOwned => {
+                Self::enqueue_deferred(DeferredMessage {
+                    hwnd,
+                    msg,
+                    wparam,
+                    lparam,
+                });
+                LRESULT(0)
+            }
+            ReentryPolicy::ApplyDpiThenResize => {
+                unsafe { Self::apply_dpi_rect(hwnd, lparam) };
+                Self::enqueue_deferred(DeferredMessage {
+                    hwnd,
+                    msg: WM_DEFERRED_RESIZE,
+                    wparam: WPARAM(0),
+                    lparam: LPARAM(0),
+                });
+                LRESULT(0)
+            }
+            ReentryPolicy::ValidatePaintThenRepaint => {
+                let mut ps = PAINTSTRUCT::default();
+                unsafe {
+                    let _ = BeginPaint(hwnd, &mut ps);
+                    let _ = EndPaint(hwnd, &ps);
+                }
+                Self::enqueue_deferred(DeferredMessage {
+                    hwnd,
+                    msg: WM_DEFERRED_PAINT,
+                    wparam: WPARAM(0),
+                    lparam: LPARAM(0),
+                });
+                LRESULT(0)
+            }
+            ReentryPolicy::Quit => {
+                tracing::warn!("WM_DESTROY arrived during wndproc reentry; quitting safely");
+                DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().clear());
+                unregister_translation_hwnd(hwnd);
+                unsafe { PostQuitMessage(0) };
+                LRESULT(0)
+            }
+            ReentryPolicy::Default => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        }
+    }
+
     // SAFETY: This is a Win32 window procedure callback. The system guarantees hwnd is valid
     // and msg/wparam/lparam contain valid message data when called.
     pub(super) unsafe extern "system" fn wndproc(
@@ -154,94 +334,91 @@ impl App {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        let app = APP.with(|cell| cell.try_borrow().ok().and_then(|g| g.clone()));
+        let app = APP.with(|cell| cell.try_borrow().ok().and_then(|guard| guard.clone()));
+        let Some(app) = app else {
+            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+        };
 
-        if let Some(app) = app {
-            // TaskbarCreated 메시지 체크
-            if let Ok(app_ref) = app.try_borrow() {
-                let taskbar_msg = app_ref.taskbar_created_msg;
-                drop(app_ref);
-                if msg == taskbar_msg {
-                    if let Ok(mut app_ref) = app.try_borrow_mut() {
-                        app_ref.tray.restore();
-                    }
-                    return LRESULT(0);
-                }
-            }
-
-            // App 인스턴스 불필요한 메시지 처리
-            // SAFETY: hwnd/lparam are valid system-provided parameters.
-            unsafe {
-                match msg {
-                    WM_NCHITTEST => {
-                        let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                        if let Some(hit) =
-                            window::hit_test_resize_border(hwnd, x, y, RESIZE_BORDER_WIDTH)
-                        {
-                            return LRESULT(hit as isize);
-                        }
-                        // DComp 합성 경로 회귀 보완: 투명 배경 모드에서 텍스트
-                        // 라인 사각형 밖이면 HTTRANSPARENT 로 클릭 통과.
-                        // try_borrow 실패 (paint 등 mutable borrow 진행 중) 시는
-                        // 안전한 fallback 으로 HTCAPTION 유지. hit_region 이
-                        // 비어 있으면 (배경 표시 또는 텍스트 없음) 기존 동작.
-                        if let Ok(app_ref) = app.try_borrow()
-                            && !app_ref.hit_region.is_empty()
-                            && !window::point_in_any_rect(hwnd, x, y, &app_ref.hit_region)
-                        {
-                            return LRESULT(HTTRANSPARENT as isize);
-                        }
-                        return LRESULT(HTCAPTION as isize);
-                    }
-                    WM_GETMINMAXINFO => {
-                        let mm = &mut *(lparam.0 as *mut MINMAXINFO);
-                        window::set_min_track_size(mm, MIN_WINDOW_SIZE, MIN_WINDOW_SIZE);
-                        return LRESULT(0);
-                    }
-                    _ => {}
-                }
-            }
-
-            // App 인스턴스가 필요한 메시지: dispatch_message로 위임
-            // WM_CLIPBOARDUPDATE는 borrow 실패 시 지연 처리
-            if msg == WM_CLIPBOARDUPDATE {
-                if let Ok(mut app_ref) = app.try_borrow_mut() {
-                    // SAFETY: Valid system parameters forwarded to dispatch_message.
-                    if let Some(result) =
-                        unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) }
+        // Messages with pointer parameters that can be handled without mutable App state.
+        unsafe {
+            match msg {
+                WM_NCHITTEST => {
+                    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                    if let Some(hit) =
+                        window::hit_test_resize_border(hwnd, x, y, RESIZE_BORDER_WIDTH)
                     {
-                        return result;
+                        return LRESULT(hit as isize);
                     }
-                } else {
-                    unsafe {
-                        let _ =
-                            PostMessageW(Some(hwnd), WM_DEFERRED_CLIPBOARD, WPARAM(0), LPARAM(0));
+                    if let Ok(app_ref) = app.try_borrow()
+                        && !app_ref.hit_region.is_empty()
+                        && !window::point_in_any_rect(hwnd, x, y, &app_ref.hit_region)
+                    {
+                        return LRESULT(HTTRANSPARENT as isize);
                     }
+                    return LRESULT(HTCAPTION as isize);
+                }
+                WM_GETMINMAXINFO => {
+                    let mm = &mut *(lparam.0 as *mut MINMAXINFO);
+                    window::set_min_track_size(mm, MIN_WINDOW_SIZE, MIN_WINDOW_SIZE);
                     return LRESULT(0);
                 }
-            } else if let Ok(mut app_ref) = app.try_borrow_mut() {
-                // SAFETY: Valid system parameters forwarded to dispatch_message.
-                if let Some(result) = unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) }
-                {
-                    return result;
-                }
-            } else {
-                // borrow_mut 실패 = wndproc 재진입 (예: dispatch_message 처리 중에
-                // Win32 가 동기 send 한 메시지). 종료 메시지만은 fallback 처리해
-                // 메시지 루프가 멈추지 않도록 보장.
-                if msg == WM_DESTROY {
-                    tracing::warn!(
-                        "WM_DESTROY arrived during wndproc reentry (App borrowed) — \
-                         posting quit directly"
-                    );
-                    unsafe { PostQuitMessage(0) };
-                    return LRESULT(0);
-                }
+                _ => {}
             }
         }
 
-        // SAFETY: Forwarding valid system-provided parameters to DefWindowProcW.
-        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        let Ok(mut app_ref) = app.try_borrow_mut() else {
+            return unsafe { Self::handle_reentry(hwnd, msg, wparam, lparam) };
+        };
+        let result = unsafe { app_ref.dispatch_message(hwnd, msg, wparam, lparam) };
+        drop(app_ref);
+
+        let result = match result {
+            Some(result) => result,
+            None => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        };
+        Self::drain_deferred_messages(&app);
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReentryPolicy, reentry_policy};
+    use crate::constants::{WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_TRANSLATION_COMPLETE};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WM_APP, WM_CLIPBOARDUPDATE, WM_COMMAND, WM_DPICHANGED, WM_NOTIFY, WM_SIZE,
+    };
+
+    #[test]
+    fn reentry_defers_owned_app_messages() {
+        for msg in [
+            WM_COMMAND,
+            WM_SIZE,
+            WM_CLIPBOARDUPDATE,
+            WM_APP_REFRESH,
+            WM_APP_SET_MAGNETIC,
+            WM_TRANSLATION_COMPLETE,
+        ] {
+            assert_eq!(reentry_policy(msg, 0), ReentryPolicy::DeferOwned);
+        }
+    }
+
+    #[test]
+    fn reentry_copies_dpi_effect_but_never_queues_its_rect_pointer() {
+        assert_eq!(
+            reentry_policy(WM_DPICHANGED, 0),
+            ReentryPolicy::ApplyDpiThenResize
+        );
+        assert_eq!(reentry_policy(WM_NOTIFY, 0), ReentryPolicy::Default);
+    }
+
+    #[test]
+    fn taskbar_restart_message_is_deferred_dynamically() {
+        let taskbar_message = WM_APP + 99;
+        assert_eq!(
+            reentry_policy(taskbar_message, taskbar_message),
+            ReentryPolicy::DeferOwned
+        );
     }
 }

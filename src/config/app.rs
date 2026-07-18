@@ -170,10 +170,6 @@ impl Config {
         self.border_visible = !self.border_visible;
     }
 
-    pub fn toggle_magnetic_mode(&mut self) {
-        self.magnetic_mode = !self.magnetic_mode;
-    }
-
     /// 텍스트 타입으로 스타일 가져오기 (mutable)
     pub fn get_text_style_mut(&mut self, text_type: TextType) -> &mut TextStyle {
         match text_type {

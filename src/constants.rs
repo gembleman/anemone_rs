@@ -30,11 +30,15 @@ pub const WM_TRAY_ICON: u32 = WM_USER + 1;
 /// 번역 완료 알림 (워커 → UI)
 pub const WM_TRANSLATION_COMPLETE: u32 = WM_USER + 100;
 
-/// 지연된 클립보드 처리 (RefCell try_borrow_mut 실패 시 재시도용)
-pub const WM_DEFERRED_CLIPBOARD: u32 = WM_USER + 200;
-
 /// 설정/메뉴 변경 후 메인 윈도우 상태 동기화 + repaint 요청
 pub const WM_APP_REFRESH: u32 = WM_APP + 1;
+
+/// 설정 창에서 요청한 자석 모드 상태 (`WPARAM`: 0/1)
+pub const WM_APP_SET_MAGNETIC: u32 = WM_APP + 2;
+
+/// 재진입 중 포인터 수명을 연장할 수 없는 DPI/paint 후속 작업
+pub const WM_DEFERRED_RESIZE: u32 = WM_APP + 3;
+pub const WM_DEFERRED_PAINT: u32 = WM_APP + 4;
 
 // ── 파일 번역 진행률 메시지 ─────────────────────────────
 

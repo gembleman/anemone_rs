@@ -265,6 +265,18 @@ impl SettingsDialog {
         Ok(hwnd)
     }
 
+    /// Reflect the live magnetic runtime state after the main window accepted or rejected
+    /// a settings request.
+    pub(crate) fn set_magnetic_checked(dialog_hwnd: HWND, enabled: bool) {
+        unsafe {
+            let _ = CheckDlgButton(
+                dialog_hwnd,
+                ctrl_id::USE_MAGNETIC as i32,
+                if enabled { BST_CHECKED } else { BST_UNCHECKED },
+            );
+        }
+    }
+
     /// ctrl_id로부터 미리보기 색상(ARGB)을 찾는다
     fn color_for_button(&self, id: u16) -> Option<u32> {
         use crate::config::{ColorType, TextType};

@@ -638,14 +638,17 @@ impl TranslateDialog {
         self.set_dest_text("[번역 중...]");
         self.translating = true;
 
-        request_translation(
+        if let Err(error) = request_translation(
             self.hwnd,
             text,
             spec.engine(),
             spec.source_lang(),
             spec.target_lang(),
             spec.credentials(),
-        );
+        ) {
+            self.translating = false;
+            self.set_dest_text(&format!("[오류] {error}"));
+        }
     }
 
     /// 번역 완료 처리. WPARAM 의 `req_id` 로 자신의 응답만 꺼낸다.

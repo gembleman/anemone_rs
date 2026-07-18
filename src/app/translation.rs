@@ -1,4 +1,6 @@
-use super::*;
+use super::{App, state};
+use crate::dialogs::{LogEntry, add_to_backlog};
+use crate::translation::{request_translation, take_response};
 
 impl App {
     pub(super) fn handle_clipboard_change(&mut self) {
@@ -43,17 +45,8 @@ impl App {
 
         drop(config);
 
-        // 원문 저장 (번역 완료 시 백로그에 추가)
-        self.pending_original_text = Some(text.to_string());
-
-        // 번역 중 표시
-        self.current_text = format!("[번역 중...]\n{}", text);
-        if let Err(e) = self.paint() {
-            tracing::warn!("paint failed during translation: {e}");
-        }
-
         // 디스패치에 번역 요청 (워커는 프로세스 전역)
-        request_translation(
+        let request = request_translation(
             self.hwnd,
             text.to_string(),
             spec.engine(),
@@ -61,6 +54,24 @@ impl App {
             spec.target_lang(),
             spec.credentials(),
         );
+
+        match request {
+            Ok(req_id) => {
+                self.state.pending_translation =
+                    Some(state::PendingTranslation::new(req_id, text.to_string()));
+                self.state.current_text = format!("[번역 중...]\n{text}");
+            }
+            Err(error) => {
+                tracing::error!("Translation request failed: {error}");
+                self.state.pending_translation = None;
+                self.state.current_text = text.to_string();
+                add_to_backlog(&self.backlog_store, LogEntry::new(text.to_string()));
+            }
+        }
+
+        if let Err(e) = self.paint() {
+            tracing::warn!("paint failed during translation: {e}");
+        }
     }
 
     /// 번역 완료 처리
@@ -74,27 +85,32 @@ impl App {
             return;
         };
 
-        let translation = match response.result {
+        let Some(completion) = state::correlate_translation(
+            &mut self.state.pending_translation,
+            req_id,
+            response.result,
+        ) else {
+            tracing::debug!("Ignoring stale translation response: req_id={req_id}");
+            return;
+        };
+
+        let translation = match completion.result {
             Ok(translated) => {
-                self.current_text = translated.clone();
+                self.state.current_text = translated.clone();
                 Some(translated)
             }
             Err(err) => {
                 tracing::error!("Translation error: {}", err);
-                if let Some(ref original) = self.pending_original_text {
-                    self.current_text = original.clone();
-                }
+                self.state.current_text = completion.original.clone();
                 None
             }
         };
 
-        if let Some(original) = self.pending_original_text.take() {
-            let mut entry = LogEntry::new(original);
-            if let Some(trans) = translation {
-                entry = entry.with_translation(trans);
-            }
-            add_to_backlog(&self.backlog_store, entry);
+        let mut entry = LogEntry::new(completion.original);
+        if let Some(trans) = translation {
+            entry = entry.with_translation(trans);
         }
+        add_to_backlog(&self.backlog_store, entry);
 
         if let Err(e) = self.paint() {
             tracing::warn!("paint failed after translation complete: {e}");

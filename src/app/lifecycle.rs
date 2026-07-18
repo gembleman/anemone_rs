@@ -1,7 +1,92 @@
-use super::*;
+use std::cell::RefCell;
+use std::mem::zeroed;
+use std::ptr::null_mut;
+use std::rc::Rc;
+
+use windows::{
+    Win32::{
+        Foundation::{GetLastError, HMODULE, HWND},
+        Graphics::Gdi::{HBRUSH, UpdateWindow},
+        System::LibraryLoader::GetModuleHandleW,
+        UI::WindowsAndMessaging::{
+            CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW,
+            HICON, IDC_ARROW, IsWindow, LoadCursorW, LoadIconW, MSG, RegisterClassExW,
+            TranslateMessage, WNDCLASSEXW, WNDPROC, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_POPUP,
+        },
+    },
+    core::{Error, HRESULT, PCWSTR, Result},
+};
+
+#[cfg(feature = "benchmark")]
+use windows::Win32::UI::WindowsAndMessaging::PostQuitMessage;
+
+use super::{APP, App, CLASS_NAME, DialogWindows, PARENT_CLASS_NAME, WINDOW_TITLE, state};
+use crate::clipboard::ClipboardWatcher;
+use crate::config::Config;
+use crate::constants::{
+    APP_ICON_ID, INITIAL_WINDOW_HEIGHT, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_X, INITIAL_WINDOW_Y,
+};
+use crate::d2d::D2DRenderer;
+use crate::dialogs::BacklogStore;
+use crate::dialogs::helpers::dispatch_resource_dialog_message;
+use crate::hotkey::HotkeyManager;
+use crate::menu::ContextMenu;
+use crate::translation::unregister_translation_hwnd;
+use crate::tray::{self, TrayIcon};
+
+#[cfg(feature = "benchmark")]
+use super::bench;
+
+struct AppCleanupGuard;
+
+impl Drop for AppCleanupGuard {
+    fn drop(&mut self) {
+        APP.with(|cell| {
+            let Ok(mut slot) = cell.try_borrow_mut() else {
+                tracing::error!("APP remained borrowed during cleanup");
+                return;
+            };
+            if let Some(app) = slot.take()
+                && let Ok(app) = app.try_borrow()
+            {
+                unregister_translation_hwnd(app.hwnd);
+                if let Err(error) = app.config.borrow().save() {
+                    tracing::error!("설정 저장 실패: {error}");
+                }
+            }
+        });
+        crate::translation::shutdown();
+    }
+}
+
+struct CreatedWindows {
+    parent: HWND,
+    main: Option<HWND>,
+}
+
+impl Drop for CreatedWindows {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(hwnd) = self.main
+                && IsWindow(Some(hwnd)).as_bool()
+            {
+                let _ = DestroyWindow(hwnd);
+            }
+            if IsWindow(Some(self.parent)).as_bool() {
+                let _ = DestroyWindow(self.parent);
+            }
+        }
+    }
+}
 
 impl App {
     pub fn run() -> Result<()> {
+        let _cleanup = AppCleanupGuard;
+        unsafe { Self::run_inner() }
+    }
+
+    unsafe fn run_inner() -> Result<()> {
         // SAFETY: All Win32 API calls use valid parameters; GetModuleHandleW(None) returns the
         // current process handle, CreateWindowExW creates windows with valid class/instance,
         // and the message loop runs on the main thread as required by Win32.
@@ -27,6 +112,10 @@ impl App {
                 Some(instance.into()),
                 None,
             )?;
+            let mut created_windows = CreatedWindows {
+                parent: hwnd_parent,
+                main: None,
+            };
 
             // 메인 윈도우 생성 (DComp 합성 경로).
             // - WS_EX_NOREDIRECTIONBITMAP: DWM 이 redirection surface 미할당 → DComp visual 노출
@@ -46,9 +135,11 @@ impl App {
                 Some(instance.into()),
                 None,
             )?;
+            created_windows.main = Some(hwnd);
 
             // TaskbarCreated 메시지 등록
             let taskbar_created_msg = tray::register_taskbar_created_message();
+            Self::set_taskbar_created_message(taskbar_created_msg);
 
             // D2D 렌더러 초기화
             let d2d_renderer = D2DRenderer::new()?;
@@ -61,25 +152,25 @@ impl App {
 
             let app = Rc::new(RefCell::new(App {
                 hwnd,
-                width: INITIAL_WINDOW_WIDTH,
-                height: INITIAL_WINDOW_HEIGHT,
+                state: state::AppState {
+                    client_size: state::ClientSize::new(
+                        INITIAL_WINDOW_WIDTH,
+                        INITIAL_WINDOW_HEIGHT,
+                    ),
+                    current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
+                    pending_translation: None,
+                },
                 config,
                 tray: TrayIcon::new(),
                 menu: ContextMenu::new()?,
                 hotkey: None,
                 clipboard: ClipboardWatcher::new(hwnd),
                 taskbar_created_msg,
-                settings_hwnd: None,
-                translate_hwnd: None,
-                backlog_hwnd: None,
+                dialogs: DialogWindows::default(),
                 backlog_store: Rc::new(RefCell::new(BacklogStore::new())),
-                file_trans_hwnd: None,
-                hook_settings_hwnd: None,
                 magnetic: None,
-                current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
                 d2d_renderer: Some(d2d_renderer),
                 composition: None,
-                pending_original_text: None,
                 hit_region: Vec::new(),
             }));
 
@@ -108,33 +199,21 @@ impl App {
                 // 클립보드 감시 여부 확인 (borrow_mut 블록 안에서)
                 app_ref.config.borrow().clipboard_watch
             };
+            Self::drain_deferred_messages(&app);
 
-            // 클립보드 감시 시작 (borrow_mut 블록 밖에서)
-            // AddClipboardFormatListener 가 내부적으로 Win32 동기 메시지
-            // (SendMessageTimeoutW)를 보낼 수 있으므로, start() 호출 시점에
-            // RefMut 이 살아있으면 wndproc 의 borrow_mut 과 충돌해 패닉한다.
-            //
-            // `app.borrow_mut().clipboard.start()` 는 임시 RefMut 의 수명이
-            // statement 끝까지 유지되어 start() 실행 중에도 borrow 가 걸려 있다.
-            // 명시적 변수 + 별도 statement 로 분리해 RefMut 을 start() 전에 drop.
+            // AddClipboardFormatListener can synchronously re-enter wndproc while the watcher
+            // is mutably borrowed through App. The common deferred-message queue captures any
+            // owned app message and is drained immediately after this borrow ends.
             if should_start_clipboard {
                 let mut app_ref = app.borrow_mut();
                 app_ref.clipboard.start();
-                // app_ref (RefMut) 은 이 블록 끝에서 drop — start() 완료 후.
-                // start() 내부의 AddClipboardFormatListener 가 동기 메시지를 보내
-                // wndproc 이 재진입하더라도, wndproc 은 try_borrow_mut() 를 쓰므로
-                // 이미 borrow 된 상태에서 조용히 skip 한다.
-                // (이전에 별도 statement 로 쪼갰던 이유는 착각이었음 — start() 자체가
-                // RefMut 홀딩 상태에서 동기 메시지를 유발하는 게 문제이며, wndproc 이
-                // try_borrow_mut 을 쓰는 이상 패닉하지 않는다.)
             }
-
-            // 윈도우 표시 → 첫 paint (CompositionRenderer lazy init 트리거).
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = UpdateWindow(hwnd);
+            Self::drain_deferred_messages(&app);
 
             {
                 let mut app_ref = app.borrow_mut();
+                // Apply persisted runtime policy before the main window can become the
+                // foreground target itself. Visibility is applied by sync_window_state().
                 app_ref.sync_window_state();
                 if let Err(e) = app_ref.paint() {
                     tracing::warn!("initial paint failed: {e}");
@@ -161,10 +240,21 @@ impl App {
                     }
                 }
             }
+            Self::drain_deferred_messages(&app);
+            let _ = UpdateWindow(hwnd);
 
             // 메시지 루프
             let mut msg: MSG = zeroed();
-            while GetMessageW(&mut msg, None, 0, 0).into() {
+            loop {
+                let status = GetMessageW(&mut msg, None, 0, 0).0;
+                if status == 0 {
+                    break;
+                }
+                if status == -1 {
+                    let error = Error::from_hresult(HRESULT::from_win32(GetLastError().0));
+                    tracing::error!("GetMessageW failed: {error}");
+                    return Err(error);
+                }
                 // 리소스 기반 모델리스 창의 Tab/Shift+Tab/기본 버튼 처리를
                 // 다이얼로그 매니저에 먼저 맡긴다.
                 if dispatch_resource_dialog_message(&msg) {
@@ -173,15 +263,6 @@ impl App {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-
-            // 정리 순서:
-            // 1) App drop → tray/hotkey/clipboard/composition 등 RAII 해제
-            // 2) 번역 워커 스레드 + tokio runtime 명시 종료
-            //    (detach 채로 두면 main 리턴 후 CRT cleanup 단계에서 hang 위험)
-            APP.with(|cell| {
-                *cell.borrow_mut() = None;
-            });
-            crate::translation::shutdown();
 
             Ok(())
         }

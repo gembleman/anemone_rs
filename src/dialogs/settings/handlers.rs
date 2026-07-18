@@ -8,7 +8,7 @@ use windows::{
 use super::SettingsDialog;
 use super::ctrl_id;
 use crate::config::{ColorType, TextAlign, TextType};
-use crate::constants::WM_APP_REFRESH;
+use crate::constants::{WM_APP_REFRESH, WM_APP_SET_MAGNETIC};
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
 use crate::translation::settings::{TranslationSettingChange, TranslationSettingsEditor};
@@ -182,8 +182,22 @@ impl SettingsDialog {
             // 윈도우 옵션 체크박스
             TOPMOST => toggle_field!(self, window_topmost),
             USE_MAGNETIC => {
-                self.config.borrow_mut().toggle_magnetic_mode();
-                self.notify_change();
+                // The main App owns the live MagneticManager. Ask it to update the runtime
+                // first; it commits or rolls back config and this checkbox together.
+                let enabled =
+                    unsafe { IsDlgButtonChecked(self.hwnd, USE_MAGNETIC as i32) == BST_CHECKED.0 };
+                let posted = unsafe {
+                    PostMessageW(
+                        Some(self.main_hwnd),
+                        WM_APP_SET_MAGNETIC,
+                        WPARAM(usize::from(enabled)),
+                        LPARAM(0),
+                    )
+                };
+                if let Err(error) = posted {
+                    tracing::error!("Failed to request magnetic mode update: {error}");
+                    Self::set_magnetic_checked(self.hwnd, self.config.borrow().magnetic_mode);
+                }
             }
             MAGNETIC_MINIMIZE => toggle_field!(self, magnetic_minimize),
             HIDEWIN => toggle_field!(self, temp_window_hide),

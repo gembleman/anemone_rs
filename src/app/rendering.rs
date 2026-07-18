@@ -1,4 +1,16 @@
-use super::*;
+use std::sync::Arc;
+
+use windows::{
+    Win32::{
+        Foundation::D2DERR_RECREATE_TARGET,
+        Graphics::Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET},
+    },
+    core::{Error, Result},
+};
+
+use super::{App, state};
+use crate::d2d::CompositionRenderer;
+use crate::window::TextRenderStyle;
 
 impl App {
     fn text_layout_extent(size: i32, margin: i32) -> f32 {
@@ -108,8 +120,13 @@ impl App {
 
         // 테두리 그리기
         if border_visible
-            && let Err(e) =
-                renderer.draw_border(ctx, self.width, self.height, border_width, border_color)
+            && let Err(e) = renderer.draw_border(
+                ctx,
+                self.state.client_size.width,
+                self.state.client_size.height,
+                border_width,
+                border_color,
+            )
         {
             tracing::error!("D2D draw_border failed: {e}");
         }
@@ -117,12 +134,12 @@ impl App {
         let t = phase_record(PhaseField::Border, t);
 
         // 텍스트 그리기
-        if !self.current_text.is_empty() {
-            let max_width = Self::text_layout_extent(self.width, margin_x);
-            let max_height = Self::text_layout_extent(self.height, margin_y);
+        if !self.state.current_text.is_empty() {
+            let max_width = Self::text_layout_extent(self.state.client_size.width, margin_x);
+            let max_height = Self::text_layout_extent(self.state.client_size.height, margin_y);
             if let Err(e) = renderer.draw_text(
                 ctx,
-                &self.current_text,
+                &self.state.current_text,
                 crate::d2d::TextBox {
                     x: margin_x as f32,
                     y: margin_y as f32,
@@ -174,9 +191,9 @@ impl App {
         // 또는 텍스트가 비어 있으면 빈 Vec → WM_NCHITTEST 가 윈도우 사각
         // 전체를 HTCAPTION 으로 잡는 기존 동작 유지.
         self.hit_region.clear();
-        if !background_visible && !self.current_text.is_empty() {
-            let max_width = Self::text_layout_extent(self.width, margin_x);
-            let max_height = Self::text_layout_extent(self.height, margin_y);
+        if !background_visible && !self.state.current_text.is_empty() {
+            let max_width = Self::text_layout_extent(self.state.client_size.width, margin_x);
+            let max_height = Self::text_layout_extent(self.state.client_size.height, margin_y);
             // shadow 가 그림자 방향으로만 확장되므로 양방향 inflate 의 보수적
             // 상한으로 abs 합. outline 은 텍스트 주변 전 방향이라 그대로 합산.
             // i32::MIN 에 가까운 값이 들어오면 unsigned_abs() as i32 가
@@ -194,7 +211,7 @@ impl App {
                     as f32;
             if let Some(d2d) = self.d2d_renderer.as_mut() {
                 match d2d.compute_text_line_rects(
-                    &self.current_text,
+                    &self.state.current_text,
                     &render_style,
                     crate::d2d::TextBox {
                         x: margin_x as f32,
@@ -241,12 +258,11 @@ impl App {
     pub(super) fn resize(&mut self, width: i32, height: i32) -> Result<()> {
         // 0 사이즈 (minimize) 는 paint/resize 모두 스킵 — DXGI ResizeBuffers 가
         // 0 사이즈를 거부하며, 어차피 그릴 면적도 없다.
-        if width <= 0 || height <= 0 {
+        let Some(size) = state::ClientSize::drawable(width, height) else {
             return Ok(());
-        }
+        };
 
-        self.width = width;
-        self.height = height;
+        self.state.client_size = size;
 
         // 합성 렌더러가 이미 부착된 상태면 swap chain 도 따라 키운다.
         // 첫 paint 전 (lazy init 직전) 의 WM_SIZE 는 self.composition 이 None 이라

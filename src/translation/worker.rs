@@ -21,6 +21,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use isolang::Language;
+use thiserror::Error;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
@@ -29,6 +30,12 @@ use crate::constants::{MAX_RESPONSE_STORAGE, WM_TRANSLATION_COMPLETE};
 
 use super::llm::{LlmCallParams, LlmProvider};
 use super::{TranslationEngine, TranslationError, TranslationResult};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum TranslationRequestError {
+    #[error("번역 워커가 종료되어 요청을 받을 수 없습니다.")]
+    WorkerUnavailable,
+}
 
 /// DeepL 다중 키 폴백 전략
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -315,7 +322,11 @@ impl TranslationDispatch {
     }
 
     /// 번역 요청 송신. ID 를 즉시 반환하여 호출자가 응답 매칭에 사용할 수 있다.
-    pub fn request(&self, hwnd: HWND, mut req: TranslationRequest) -> u64 {
+    pub fn request(
+        &self,
+        hwnd: HWND,
+        mut req: TranslationRequest,
+    ) -> Result<u64, TranslationRequestError> {
         let hwnd_raw = hwnd.0 as usize;
         let id = {
             let mut st = self.shared.state.lock().expect("dispatch state poisoned");
@@ -324,23 +335,27 @@ impl TranslationDispatch {
         req.id = id;
 
         // 워커가 lock 없이 stale 판정할 수 있도록 원자 슬롯 갱신
-        self.shared
-            .latest_atomic(hwnd_raw)
-            .store(id, Ordering::Release);
+        let latest = self.shared.latest_atomic(hwnd_raw);
+        latest.store(id, Ordering::Release);
 
         // shutdown 이 진행됐다면 sender 가 None — 조용히 폐기.
         let send_result = {
             let s = self.sender.lock().expect("dispatch sender poisoned");
             match s.as_ref() {
                 Some(tx) => tx.send(DispatchJob { hwnd_raw, req }),
-                None => return id,
+                None => {
+                    let _ = latest.compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire);
+                    return Err(TranslationRequestError::WorkerUnavailable);
+                }
             }
         };
-        if let Err(e) = send_result {
-            tracing::error!("Failed to send translation request: {}", e);
+        if let Err(error) = send_result {
+            let _ = latest.compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire);
+            tracing::error!("Failed to send translation request: {error}");
+            return Err(TranslationRequestError::WorkerUnavailable);
         }
 
-        id
+        Ok(id)
     }
 
     /// 호출자(메인 윈도우 / 다이얼로그)가 자기 응답을 꺼낸다
@@ -666,7 +681,7 @@ pub fn translate(
     source_lang: Language,
     target_lang: Language,
     credentials: EngineCredentials,
-) -> u64 {
+) -> Result<u64, TranslationRequestError> {
     dispatch().request(
         hwnd,
         TranslationRequest {
@@ -678,4 +693,42 @@ pub fn translate(
             credentials,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disconnected_worker_rejects_request_and_rolls_back_latest_id() {
+        let (sender, receiver) = mpsc::channel();
+        drop(receiver);
+        let shared = Arc::new(DispatchShared::new());
+        let dispatch = TranslationDispatch {
+            sender: Mutex::new(Some(sender)),
+            shared: shared.clone(),
+            worker: Mutex::new(None),
+        };
+
+        let result = dispatch.request(
+            HWND::default(),
+            TranslationRequest {
+                id: 0,
+                text: Arc::from("source"),
+                engine: TranslationEngine::Google,
+                source_lang: Language::Jpn,
+                target_lang: Language::Kor,
+                credentials: EngineCredentials::None,
+            },
+        );
+
+        assert_eq!(result, Err(TranslationRequestError::WorkerUnavailable));
+        assert_eq!(
+            shared
+                .latest_atomic_lookup(0)
+                .expect("request allocated a latest-id slot")
+                .load(Ordering::Acquire),
+            0
+        );
+    }
 }

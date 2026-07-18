@@ -1,28 +1,55 @@
-use super::*;
+use std::mem::zeroed;
+
+use windows::{
+    Win32::{
+        Foundation::{HWND, LPARAM, POINT, WPARAM},
+        Graphics::Gdi::ClientToScreen,
+        UI::WindowsAndMessaging::{
+            GetCursorPos, IsWindow, PostMessageW, SetForegroundWindow, WM_CLOSE, WM_LBUTTONUP,
+            WM_RBUTTONUP,
+        },
+    },
+    core::Result,
+};
+
+use super::{App, state};
+use crate::dialogs::{
+    BacklogDialog, FileTransDialog, HookSettingsDialog, SettingsDialog, TranslateDialog,
+};
+use crate::hotkey::HotkeyManager;
+use crate::magnetic::MagneticManager;
+use crate::window;
 
 impl App {
     fn show_context_menu(&mut self, x: i32, y: i32) -> Result<()> {
         self.menu.build(&self.config.borrow())?;
-        self.menu.show(self.hwnd, x, y)
+        if let Some(command) = self.menu.show(self.hwnd, x, y)? {
+            self.handle_menu_command(command)?;
+        }
+        Ok(())
     }
 
     pub(super) fn handle_menu_command(&mut self, cmd: u16) -> Result<()> {
-        match cmd {
-            menu::id::WINDOW_SHOW => {
+        let Some(command) = state::AppCommand::from_menu_id(cmd) else {
+            return Ok(());
+        };
+
+        match command {
+            state::AppCommand::WindowShow => {
                 let mut cfg = self.config.borrow_mut();
                 cfg.toggle_window_visible();
                 let visible = cfg.window_visible;
                 drop(cfg);
                 window::set_window_visible(self.hwnd, visible);
             }
-            menu::id::CLICK_THROUGH => {
+            state::AppCommand::ClickThrough => {
                 let mut cfg = self.config.borrow_mut();
                 cfg.toggle_click_through();
                 let click_through = cfg.click_through;
                 drop(cfg);
                 window::set_click_through(self.hwnd, click_through);
             }
-            menu::id::CLIPBOARD_WATCH => {
+            state::AppCommand::ClipboardWatch => {
                 let mut cfg = self.config.borrow_mut();
                 cfg.toggle_clipboard_watch();
                 let watch = cfg.clipboard_watch;
@@ -33,33 +60,34 @@ impl App {
                     self.clipboard.stop();
                 }
             }
-            menu::id::BACKGROUND_TOGGLE => {
+            state::AppCommand::BackgroundToggle => {
                 self.config.borrow_mut().toggle_background_visible();
                 self.paint()?;
             }
-            menu::id::BORDER_TOGGLE => {
+            state::AppCommand::BorderToggle => {
                 self.config.borrow_mut().toggle_border_visible();
                 self.paint()?;
             }
-            menu::id::MAGNETIC_MODE => {
-                self.toggle_magnetic_mode();
+            state::AppCommand::MagneticMode => {
+                let enabled = !self.config.borrow().magnetic_mode;
+                self.apply_magnetic_request(enabled);
             }
-            menu::id::SETTINGS => {
+            state::AppCommand::Settings => {
                 self.open_settings_dialog();
             }
-            menu::id::TRANSLATE => {
+            state::AppCommand::Translate => {
                 self.open_translate_dialog();
             }
-            menu::id::BACKLOG => {
+            state::AppCommand::Backlog => {
                 self.open_backlog_dialog();
             }
-            menu::id::FILE_TRANS => {
+            state::AppCommand::FileTrans => {
                 self.open_file_trans_dialog();
             }
-            menu::id::HOOK_SETTINGS => {
+            state::AppCommand::HookSettings => {
                 self.open_hook_settings_dialog();
             }
-            menu::id::TEXT_SIZE_UP => {
+            state::AppCommand::TextSizeUp => {
                 let mut cfg = self.config.borrow_mut();
                 let new_size = (cfg.translation_style.size + 1).min(100);
                 cfg.translation_style.size = new_size;
@@ -68,7 +96,7 @@ impl App {
                 drop(cfg);
                 self.paint()?;
             }
-            menu::id::TEXT_SIZE_DOWN => {
+            state::AppCommand::TextSizeDown => {
                 let mut cfg = self.config.borrow_mut();
                 let new_size = (cfg.translation_style.size - 1).max(6);
                 cfg.translation_style.size = new_size;
@@ -87,12 +115,11 @@ impl App {
             // 끝나고 borrow 가 풀린 뒤 메시지 루프의 다음 패스에서 WM_CLOSE →
             // 기본 DefWindowProcW 처리 → DestroyWindow → WM_DESTROY → PostQuitMessage
             // 흐름이 정상 작동한다.
-            menu::id::EXIT => unsafe {
+            state::AppCommand::Exit => unsafe {
                 if let Err(e) = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) {
                     tracing::error!("PostMessageW(WM_CLOSE) failed: {e}");
                 }
             },
-            _ => {}
         }
         Ok(())
     }
@@ -132,7 +159,7 @@ impl App {
     fn open_settings_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(&mut self.settings_hwnd, "settings", || {
+        Self::open_dialog_generic(&mut self.dialogs.settings, "settings", || {
             SettingsDialog::show(main_hwnd, config, None)
         });
     }
@@ -141,7 +168,7 @@ impl App {
     fn open_translate_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(&mut self.translate_hwnd, "translate", || {
+        Self::open_dialog_generic(&mut self.dialogs.translate, "translate", || {
             TranslateDialog::show(main_hwnd, config)
         });
     }
@@ -150,7 +177,7 @@ impl App {
     fn open_backlog_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let store = self.backlog_store.clone();
-        Self::open_dialog_generic(&mut self.backlog_hwnd, "backlog", || {
+        Self::open_dialog_generic(&mut self.dialogs.backlog, "backlog", || {
             BacklogDialog::show(main_hwnd, store)
         });
     }
@@ -159,7 +186,7 @@ impl App {
     fn open_file_trans_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(&mut self.file_trans_hwnd, "file_trans", || {
+        Self::open_dialog_generic(&mut self.dialogs.file_trans, "file_trans", || {
             FileTransDialog::show(main_hwnd, config)
         });
     }
@@ -168,19 +195,36 @@ impl App {
     fn open_hook_settings_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(&mut self.hook_settings_hwnd, "hook_settings", || {
+        Self::open_dialog_generic(&mut self.dialogs.hook_settings, "hook_settings", || {
             HookSettingsDialog::show(main_hwnd, config)
         });
     }
 
-    /// 설정 대화상자에서 변경된 윈도우 상태를 실제 윈도우에 반영
+    /// Apply all config-backed Win32 runtime policy: magnetic hook, click-through,
+    /// topmost, visibility, and clipboard watching. Rendering/text/dialog lifetime is
+    /// intentionally owned by their dedicated handlers.
     pub(super) fn sync_window_state(&mut self) {
         let cfg = self.config.borrow();
         let click_through = cfg.click_through;
         let topmost = cfg.window_topmost;
         let visible = cfg.window_visible;
         let watch = cfg.clipboard_watch;
+        let magnetic_enabled = cfg.magnetic_mode;
         drop(cfg);
+
+        // `magnetic_mode` is a persistent desired state. At startup and after any external
+        // config refresh we try to attach to the current foreground window. If that is not
+        // possible, both the setting and the dialog checkbox are rolled back to disabled.
+        let active_before = self.magnetic.is_some();
+        if let Err(error) = self.set_magnetic_enabled(magnetic_enabled) {
+            tracing::error!("Failed to synchronize magnetic mode: {error}");
+        }
+        let magnetic_changed = active_before != self.magnetic.is_some()
+            || magnetic_enabled != self.config.borrow().magnetic_mode;
+        self.sync_magnetic_checkbox();
+        if magnetic_changed && let Err(error) = self.config.borrow().save() {
+            tracing::error!("Failed to persist magnetic mode synchronization: {error}");
+        }
 
         window::set_click_through(self.hwnd, click_through);
         window::set_topmost(self.hwnd, topmost);
@@ -193,29 +237,44 @@ impl App {
         }
     }
 
-    /// 자석 모드 토글
-    fn toggle_magnetic_mode(&mut self) {
-        let mut cfg = self.config.borrow_mut();
-        let was_enabled = cfg.magnetic_mode;
-        cfg.toggle_magnetic_mode();
-        let is_enabled = cfg.magnetic_mode;
-        drop(cfg);
+    /// Idempotently synchronize the persisted setting and the live WinEvent hook.
+    pub(super) fn set_magnetic_enabled(&mut self, enabled: bool) -> Result<()> {
+        match state::magnetic_action(enabled, self.magnetic.is_some()) {
+            state::MagneticAction::Noop => {
+                self.config.borrow_mut().magnetic_mode = enabled;
+            }
+            state::MagneticAction::Start => {
+                let mut magnetic = MagneticManager::new(self.hwnd, self.config.clone());
+                if let Err(error) = magnetic.start() {
+                    self.config.borrow_mut().magnetic_mode = false;
+                    return Err(error);
+                }
+                self.magnetic = Some(magnetic);
+                self.config.borrow_mut().magnetic_mode = true;
+            }
+            state::MagneticAction::Stop => {
+                if let Some(mut magnetic) = self.magnetic.take() {
+                    magnetic.stop();
+                }
+                self.config.borrow_mut().magnetic_mode = false;
+            }
+        }
+        Ok(())
+    }
 
-        if is_enabled && !was_enabled {
-            // 자석 모드 시작
-            let mut magnetic = MagneticManager::new(self.hwnd, self.config.clone());
-            if let Err(e) = magnetic.start() {
-                tracing::error!("Failed to start magnetic mode: {e}");
-                self.config.borrow_mut().toggle_magnetic_mode(); // 롤백
-                return;
-            }
-            self.magnetic = Some(magnetic);
-        } else if !is_enabled && was_enabled {
-            // 자석 모드 중지
-            if let Some(ref mut magnetic) = self.magnetic {
-                magnetic.stop();
-            }
-            self.magnetic = None;
+    pub(super) fn apply_magnetic_request(&mut self, enabled: bool) {
+        if let Err(error) = self.set_magnetic_enabled(enabled) {
+            tracing::error!("Failed to apply magnetic mode request: {error}");
+        }
+        self.sync_magnetic_checkbox();
+        if let Err(error) = self.config.borrow().save() {
+            tracing::error!("Failed to persist magnetic mode: {error}");
+        }
+    }
+
+    fn sync_magnetic_checkbox(&self) {
+        if let Some(hwnd) = self.dialogs.settings {
+            SettingsDialog::set_magnetic_checked(hwnd, self.config.borrow().magnetic_mode);
         }
     }
 

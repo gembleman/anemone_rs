@@ -5,6 +5,10 @@ use windows::{
 
 use crate::config::Config;
 
+fn popup_flags() -> TRACK_POPUP_MENU_FLAGS {
+    TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY
+}
+
 // 메뉴 ID 정의
 pub mod id {
     pub const WINDOW_SHOW: u16 = 101;
@@ -124,23 +128,28 @@ impl ContextMenu {
         }
     }
 
-    pub fn show(&self, hwnd: HWND, x: i32, y: i32) -> Result<()> {
+    /// Show the popup without sending `WM_COMMAND` to the owner window.
+    ///
+    /// Returning the selected command keeps menu tracking from re-entering the app's
+    /// `RefCell<App>` through a synchronous owner notification.
+    pub fn show(&self, hwnd: HWND, x: i32, y: i32) -> Result<Option<u16>> {
         // SAFETY: hwnd is a valid window handle from the caller. self.hmenu is a valid
         // popup menu handle. SetForegroundWindow and TrackPopupMenu use valid handles.
         // PostMessageW with WM_NULL is the standard pattern to dismiss the menu properly.
         unsafe {
             let _ = SetForegroundWindow(hwnd);
-            let _ = TrackPopupMenu(
-                self.hmenu,
-                TPM_LEFTALIGN | TPM_RIGHTBUTTON,
-                x,
-                y,
-                None,
-                hwnd,
-                None,
-            );
+            // With TPM_RETURNCMD, zero means either cancellation or failure. Clear the
+            // thread error first so a non-zero value afterwards can be reported precisely.
+            SetLastError(WIN32_ERROR(0));
+            let command = TrackPopupMenu(self.hmenu, popup_flags(), x, y, None, hwnd, None);
+            if command.0 == 0 {
+                let error = GetLastError();
+                if error.0 != 0 {
+                    return Err(Error::from_hresult(HRESULT::from_win32(error.0)));
+                }
+            }
             PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0))?;
-            Ok(())
+            Ok((command.0 != 0).then_some(command.0 as u16))
         }
     }
 }
@@ -152,5 +161,17 @@ impl Drop for ContextMenu {
         unsafe {
             let _ = DestroyMenu(self.hmenu);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn popup_returns_commands_without_notifying_owner() {
+        let flags = popup_flags().0;
+        assert_ne!(flags & TPM_RETURNCMD.0, 0);
+        assert_ne!(flags & TPM_NONOTIFY.0, 0);
     }
 }

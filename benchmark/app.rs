@@ -83,7 +83,7 @@ impl App {
         // geometry 캐시를 강제 miss 시킨다. 항목 10 의 "miss 폭주" 위험 실측용.
         let force_cache_miss = bench::bench_force_cache_miss();
         let saved_text = if force_cache_miss {
-            Some(self.current_text.clone())
+            Some(self.state.current_text.clone())
         } else {
             None
         };
@@ -95,7 +95,7 @@ impl App {
                     self.config.borrow_mut().translation_style = s;
                 }
                 if let Some(t) = saved_text {
-                    self.current_text = t;
+                    self.state.current_text = t;
                 }
                 if was_watching {
                     self.clipboard.start();
@@ -111,7 +111,7 @@ impl App {
             // 카운터는 텍스트 끝 ("…#0", "#1", …) 에 붙여 layout box 크기
             // 변동을 최소화 (자릿수 1 → 2 → 3 자리 전환점에서만 폭 변화).
             if let Some(orig) = saved_text.as_ref() {
-                self.current_text = format!("{}#{}", orig, i);
+                self.state.current_text = format!("{}#{}", orig, i);
             }
             bench::phase_begin();
             let t0 = outer_timer.now();
@@ -122,7 +122,7 @@ impl App {
                     self.config.borrow_mut().translation_style = s;
                 }
                 if let Some(t) = saved_text {
-                    self.current_text = t;
+                    self.state.current_text = t;
                 }
                 if was_watching {
                     self.clipboard.start();
@@ -140,7 +140,7 @@ impl App {
             self.config.borrow_mut().translation_style = s;
         }
         if let Some(t) = saved_text {
-            self.current_text = t;
+            self.state.current_text = t;
         }
         if was_watching {
             self.clipboard.start();
