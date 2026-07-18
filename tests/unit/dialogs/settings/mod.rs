@@ -27,8 +27,8 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     use std::rc::Rc;
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CB_GETCURSEL, CB_SETCURSEL, DestroyWindow, GetDesktopWindow, GetDlgItem, IsWindow,
-        SendMessageW, SetWindowTextW, WM_COMMAND,
+        CB_GETCURSEL, CB_SETCURSEL, DestroyWindow, GWL_STYLE, GetDesktopWindow, GetDlgItem,
+        GetWindowLongPtrW, IsWindow, SendMessageW, SetWindowTextW, WM_COMMAND, WS_THICKFRAME,
     };
     use windows::core::w;
 
@@ -130,6 +130,11 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     let parent = unsafe { GetDesktopWindow() };
     let hwnd = SettingsDialog::show(parent, config.clone(), None).unwrap();
     let mut dialog = DialogGuard(Some(hwnd));
+    assert_ne!(
+        unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 } & WS_THICKFRAME.0,
+        0,
+        "settings dialog must expose the standard resize border"
+    );
 
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_SOURCE_LANG), 2);
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_TARGET_LANG), 5);

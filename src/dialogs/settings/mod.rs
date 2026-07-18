@@ -220,6 +220,8 @@ unsafe extern "system" fn settings_dialog_proc(
 impl SettingsDialog {
     // 리소스의 96 DPI 디자인 폭. 높이는 선택한 탭에 따라 동적으로 바뀐다.
     const WIDTH: i32 = 485;
+    // 가로 컨트롤은 고정 배치이므로 잘리지 않는 최소 client 폭을 유지한다.
+    const MIN_HEIGHT: i32 = 180;
 
     /// `resources/settings.rc`의 모델리스 DIALOGEX 리소스를 연다.
     pub fn show(
@@ -456,20 +458,22 @@ impl SettingsDialog {
         self.adjust_dialog_size_for_tab(new_tab);
     }
 
-    /// 탭에 따라 다이얼로그 클라이언트 높이를 조정 (빈 공간 최소화)
-    fn adjust_dialog_size_for_tab(&mut self, tab: usize) {
-        // 각 탭의 마지막 group 아래에 닫기 button이 오도록 높이를 잡는다.
-        let target_height = match tab {
+    fn target_height_for_tab(tab: usize) -> i32 {
+        match tab {
             TAB_APPEARANCE => 505,
             TAB_DISPLAY => 305,
             TAB_TRANSLATION => 1180,
             _ => 505,
-        };
+        }
+    }
+
+    /// 탭에 따라 다이얼로그 클라이언트 높이를 조정 (빈 공간 최소화)
+    fn adjust_dialog_size_for_tab(&mut self, tab: usize) {
+        // 각 탭의 마지막 group 아래에 닫기 button이 오도록 높이를 잡는다.
+        let target_height = Self::target_height_for_tab(tab);
         // SAFETY: self.hwnd is valid. SetWindowPos uses valid parameters.
         unsafe {
             self.scroll_to(0);
-            let dpi = crate::dpi::dpi_for_window(self.hwnd);
-            let s = |v: i32| crate::dpi::scale(v, dpi);
             let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
             let mut info = MONITORINFO {
                 cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -528,43 +532,81 @@ impl SettingsDialog {
                 win_height,
                 SWP_NOZORDER | SWP_FRAMECHANGED,
             );
-            // Tab은 header부터 닫기 button 위까지 늘린다.
+        }
+        self.layout_for_current_size();
+    }
+
+    /// 사용자가 테두리를 끌어 바꾼 client 크기에 tab, 닫기 button, scrollbar를 맞춘다.
+    fn layout_for_current_size(&mut self) {
+        // SAFETY: self.hwnd와 자식 컨트롤은 설정창 수명 동안 유효하다.
+        unsafe {
+            let mut client = RECT::default();
+            if GetClientRect(self.hwnd, &mut client).is_err() {
+                return;
+            }
+            let height = (client.bottom - client.top).max(1);
+            let dpi = crate::dpi::dpi_for_window(self.hwnd);
+            let s = |v: i32| crate::dpi::scale(v, dpi);
+            let content_height = s(Self::target_height_for_tab(self.current_tab));
+            let scroll_max = (content_height - height).max(0);
+            let new_scroll_pos = self.scroll_pos.clamp(0, scroll_max);
+
+            // 수동으로 창을 낮춘 경우에도 표준 세로 scrollbar를 즉시 표시한다.
+            let _ = ShowScrollBar(self.hwnd, SB_VERT, scroll_max > 0);
+            let _ = GetClientRect(self.hwnd, &mut client);
+            let width = (client.right - client.left).max(1);
+            let height = (client.bottom - client.top).max(1);
+
+            if new_scroll_pos != self.scroll_pos {
+                let delta = self.scroll_pos - new_scroll_pos;
+                self.offset_scroll_children(delta);
+            }
+            self.scroll_pos = new_scroll_pos;
+            self.scroll_max = scroll_max;
+
+            // Tab은 가로로 창을 채우고, 세로로는 기존 내용 또는 viewport 중 큰 쪽을 쓴다.
             if let Ok(tab_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32) {
                 let _ = SetWindowPos(
                     tab_hwnd,
                     None,
-                    0,
-                    0,
-                    s(475),
-                    s(target_height - 70),
-                    SWP_NOMOVE | SWP_NOZORDER,
-                );
-            }
-            // 닫기 button을 dialog 오른쪽 아래로 옮긴다.
-            if let Ok(close_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
-                let _ = SetWindowPos(
-                    close_hwnd,
-                    None,
-                    s(370),
-                    s(target_height - 65),
-                    0,
-                    0,
-                    SWP_NOSIZE | SWP_NOZORDER,
+                    s(5),
+                    s(5) - new_scroll_pos,
+                    (width - s(10)).max(1),
+                    (content_height.max(height) - s(70)).max(1),
+                    SWP_NOZORDER | SWP_NOACTIVATE,
                 );
             }
 
-            let mut client = RECT::default();
-            let _ = GetClientRect(self.hwnd, &mut client);
-            let viewport_height = (client.bottom - client.top).max(1);
-            let content_height = s(target_height);
-            self.scroll_max = (content_height - viewport_height).max(0);
+            // 내용이 모두 보이면 하단에 고정하고, 스크롤 중이면 기존처럼 내용 끝에 둔다.
+            if let Ok(close_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
+                let mut close_rect = RECT::default();
+                if GetWindowRect(close_hwnd, &mut close_rect).is_ok() {
+                    let close_width = close_rect.right - close_rect.left;
+                    let close_height = close_rect.bottom - close_rect.top;
+                    let close_y = if scroll_max == 0 {
+                        height - s(65)
+                    } else {
+                        content_height - s(65) - new_scroll_pos
+                    };
+                    let _ = SetWindowPos(
+                        close_hwnd,
+                        None,
+                        width - s(15) - close_width,
+                        close_y,
+                        close_width,
+                        close_height,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+            }
+
             let scroll_info = SCROLLINFO {
                 cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
                 fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
                 nMin: 0,
                 nMax: content_height.saturating_sub(1),
-                nPage: viewport_height as u32,
-                nPos: 0,
+                nPage: height as u32,
+                nPos: new_scroll_pos,
                 ..Default::default()
             };
             SetScrollInfo(self.hwnd, SB_VERT, &scroll_info, true);
@@ -760,6 +802,25 @@ impl SettingsDialog {
     /// 커스텀 메시지 핸들러
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         match msg {
+            WM_GETMINMAXINFO => {
+                // SAFETY: LPARAM은 WM_GETMINMAXINFO 처리 중 유효한 MINMAXINFO 포인터다.
+                unsafe {
+                    let mm = &mut *(lparam.0 as *mut MINMAXINFO);
+                    let (min_width, min_height) = super::helpers::design_to_window_size(
+                        self.hwnd,
+                        Self::WIDTH,
+                        Self::MIN_HEIGHT,
+                    );
+                    crate::window::set_min_track_size(mm, min_width, min_height);
+                }
+                Some(LRESULT(1))
+            }
+            WM_SIZE => {
+                if wparam.0 != SIZE_MINIMIZED as usize {
+                    self.layout_for_current_size();
+                }
+                Some(LRESULT(1))
+            }
             WM_CTLCOLORSTATIC => {
                 // Tab 본문과 child control 배경을 모두 COLOR_WINDOW로 맞춘다.
                 // SAFETY: wparam은 OS가 전달한 유효 HDC다.
