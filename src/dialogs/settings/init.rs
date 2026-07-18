@@ -489,7 +489,6 @@ impl SettingsDialog {
 
     fn set_text(&self, id: u16, text: &str) -> Result<()> {
         let control = self.control(id)?;
-        let wide = to_wide(text);
-        unsafe { SetWindowTextW(control, PCWSTR(wide.as_ptr())) }
+        unsafe { SetWindowTextW(control, &HSTRING::from(text)) }
     }
 }

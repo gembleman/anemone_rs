@@ -488,14 +488,9 @@ impl BacklogDialog {
             Ok(None) => return,
             Err(error) => {
                 tracing::error!("백로그 저장 대화상자 오류: {error}");
-                let message = to_wide(&format!("저장 대화상자를 열 수 없습니다.\n{error}"));
+                let message = HSTRING::from(format!("저장 대화상자를 열 수 없습니다.\n{error}"));
                 unsafe {
-                    let _ = MessageBoxW(
-                        Some(self.hwnd),
-                        PCWSTR(message.as_ptr()),
-                        w!("오류"),
-                        MB_ICONERROR,
-                    );
+                    let _ = MessageBoxW(Some(self.hwnd), &message, w!("오류"), MB_ICONERROR);
                 }
                 return;
             }

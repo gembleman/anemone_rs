@@ -77,11 +77,12 @@ pub fn run() {
 
     if let Err(e) = App::run() {
         tracing::error!("Error: {e}");
-        let message = util::to_wide(&format!("아네모네를 시작할 수 없습니다.\n\n{e}"));
+        let message =
+            windows::core::HSTRING::from(format!("아네모네를 시작할 수 없습니다.\n\n{e}"));
         unsafe {
             let _ = windows::Win32::UI::WindowsAndMessaging::MessageBoxW(
                 None,
-                windows::core::PCWSTR(message.as_ptr()),
+                &message,
                 windows::core::w!("아네모네 오류"),
                 windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
             );

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{util::to_wide, window::TextRenderStyle};
+use crate::window::TextRenderStyle;
 use windows::{
     Win32::Graphics::{
         Direct2D::{Common::*, *},
@@ -188,13 +188,12 @@ impl D2DRenderer {
         debug_assert!(max_width.is_finite() && max_width > 0.0);
         debug_assert!(max_height.is_finite() && max_height > 0.0);
         // SAFETY: DirectWrite factory creates valid text format and layout objects.
-        // font_face_wide is a valid null-terminated UTF-16 string.
         unsafe {
-            let font_face_wide = to_wide(&style.font_face);
             let (font_weight, font_style_dw) = font_style_to_dwrite(style.font_style);
+            let font_face: &str = style.font_face.as_ref();
 
             let text_format = self.dwrite_factory.CreateTextFormat(
-                PCWSTR(font_face_wide.as_ptr()),
+                &HSTRING::from(font_face),
                 None,
                 font_weight,
                 font_style_dw,

@@ -26,7 +26,6 @@ use super::helpers::{
 };
 use crate::define_dialog_instance;
 use crate::file_trans::{FileTransTask, ProgressEvent};
-use crate::util::to_wide;
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -559,13 +558,8 @@ impl FileTransProgressDialog {
                         let _ = tb.SetProgressState(self.parent_hwnd, TBPF_ERROR);
                     }
 
-                    let msg_wide = to_wide(&error_msg);
-                    let _ = MessageBoxW(
-                        Some(self.hwnd),
-                        PCWSTR(msg_wide.as_ptr()),
-                        w!("오류"),
-                        MB_ICONERROR,
-                    );
+                    let message = HSTRING::from(error_msg);
+                    let _ = MessageBoxW(Some(self.hwnd), &message, w!("오류"), MB_ICONERROR);
 
                     self.clear_taskbar_progress();
                     let _ = PostMessageW(Some(self.hwnd), WM_PROGRESS_FINISH, WPARAM(0), LPARAM(0));

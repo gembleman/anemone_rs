@@ -12,12 +12,6 @@
 #[path = "../benchmark/bench.rs"]
 mod bench;
 
-// D2D module을 독립 compile할 최소 stub을 제공한다.
-mod util {
-    pub fn to_wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-}
 mod config {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub enum TextAlign {

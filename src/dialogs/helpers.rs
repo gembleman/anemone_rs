@@ -186,7 +186,6 @@ pub fn dialog_font_for_dpi(dpi: u32) -> HFONT {
         // 지정 DPI 에 맞춰 폰트 높이 스케일링.
         let height = crate::dpi::scale(-12, dpi);
         let hfont = unsafe {
-            let face = to_wide("맑은 고딕");
             CreateFontW(
                 height,
                 0,
@@ -201,7 +200,7 @@ pub fn dialog_font_for_dpi(dpi: u32) -> HFONT {
                 CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY,
                 (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-                PCWSTR(face.as_ptr()),
+                w!("맑은 고딕"),
             )
         };
         if hfont.0.is_null() {
@@ -344,8 +343,7 @@ pub unsafe fn show_dialog_window(hwnd: HWND) {
 }
 
 pub fn set_window_text(hwnd: HWND, text: &str) -> Result<()> {
-    let wide = to_wide(text);
-    unsafe { SetWindowTextW(hwnd, PCWSTR(wide.as_ptr())) }
+    unsafe { SetWindowTextW(hwnd, &HSTRING::from(text)) }
 }
 
 pub fn get_window_text(hwnd: HWND) -> String {
