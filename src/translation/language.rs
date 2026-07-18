@@ -19,7 +19,7 @@ impl EnumParseError {
 
 /// 번역 API에 전달할 언어 태그.
 ///
-/// `isolang::Language`와 달리 중국어 문자 체계를 보존한다. 설정/CLI/UI에서 선택한
+/// 일반 ISO 언어 열거형과 달리 중국어 문자 체계를 보존한다. 설정/CLI/UI에서 선택한
 /// `zh-CN`과 `zh-TW`가 제공자 어댑터까지 손실 없이 전달된다.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Language {
