@@ -12,6 +12,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::constants::MAX_RESPONSE_STORAGE;
+use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 use tokio::sync::{Semaphore, watch};
 
@@ -43,13 +44,13 @@ pub enum EngineCredentials {
     None,
     /// DeepL API 키. `keys`는 최소 1개; `strategy`에 따라 폴백/순회.
     DeepL {
-        keys: Vec<String>,
+        keys: Vec<SecretString>,
         strategy: DeepLStrategy,
     },
     /// Ncloud Papago Application 인증 키 쌍
     Papago {
-        client_id: String,
-        client_secret: String,
+        client_id: SecretString,
+        client_secret: SecretString,
     },
     /// LLM 호출 파라미터 일체 (제공자/모델/키/프롬프트/샘플링)
     Llm(LlmCallParams),
@@ -526,10 +527,10 @@ impl TranslationDispatch {
         text: &str,
         source: Language,
         target: Language,
-        keys: &[String],
+        keys: &[SecretString],
         strategy: DeepLStrategy,
     ) -> TranslationResult {
-        if keys.is_empty() || keys.iter().all(|k| k.is_empty()) {
+        if keys.is_empty() || keys.iter().all(|key| key.expose_secret().is_empty()) {
             return Err(TranslationError::MissingApiKey);
         }
 
@@ -547,7 +548,7 @@ impl TranslationDispatch {
         for offset in 0..keys.len() {
             let idx = (start + offset) % keys.len();
             let key = &keys[idx];
-            if key.is_empty() {
+            if key.expose_secret().is_empty() {
                 continue;
             }
             match super::deepl::translate_async_with_client(client, text, source, target, key).await
@@ -692,12 +693,13 @@ impl TranslationDispatch {
                 .await
             }
             TranslationEngine::Papago => {
+                let empty = SecretString::default();
                 let (client_id, client_secret) = match &req.credentials {
                     EngineCredentials::Papago {
                         client_id,
                         client_secret,
-                    } => (client_id.as_str(), client_secret.as_str()),
-                    _ => ("", ""),
+                    } => (client_id, client_secret),
+                    _ => (&empty, &empty),
                 };
                 super::papago::translate_async_with_client(
                     client,

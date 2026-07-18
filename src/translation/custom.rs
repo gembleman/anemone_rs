@@ -1,5 +1,6 @@
 //! 사용자 정의 JSON REST 번역 API 어댑터.
 
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
 use super::http_common::{send_and_read_body, validate_not_empty};
@@ -9,7 +10,7 @@ use super::{Language, TranslationError, TranslationResult, lang_utils};
 #[derive(Clone)]
 pub struct CustomApiCallParams {
     pub url: String,
-    pub api_key: String,
+    pub api_key: SecretString,
     pub auth_header: String,
     pub auth_scheme: String,
     pub headers: String,
@@ -26,14 +27,15 @@ impl CustomApiCallParams {
         }
         serde_json::from_str::<Value>(&self.request_template)
             .map_err(|error| format!("커스텀 API 요청 템플릿이 올바른 JSON이 아닙니다: {error}"))?;
-        if !self.api_key.is_empty() && !self.auth_header.trim().is_empty() {
+        let api_key = self.api_key.expose_secret();
+        if !api_key.is_empty() && !self.auth_header.trim().is_empty() {
             reqwest::header::HeaderName::from_bytes(self.auth_header.trim().as_bytes())
                 .map_err(|error| format!("커스텀 API 인증 헤더 이름이 잘못되었습니다: {error}"))?;
             let value = auth_value(self);
-            reqwest::header::HeaderValue::from_str(&value)
+            reqwest::header::HeaderValue::from_str(value.expose_secret())
                 .map_err(|error| format!("커스텀 API 인증 헤더 값이 잘못되었습니다: {error}"))?;
         }
-        build_extra_headers(&self.headers, &[("{api_key}", self.api_key.as_str())])?;
+        build_extra_headers(&self.headers, &[("{api_key}", api_key)])?;
         Ok(())
     }
 }
@@ -50,17 +52,19 @@ pub async fn translate_async_with_client(
 
     let mut body: Value = serde_json::from_str(&params.request_template)
         .map_err(|error| TranslationError::Parse(error.to_string()))?;
+    let api_key = params.api_key.expose_secret();
     let replacements = [
         ("{text}", text),
         ("{source}", lang_utils::to_code(source)),
         ("{target}", lang_utils::to_code(target)),
-        ("{api_key}", params.api_key.as_str()),
+        ("{api_key}", api_key),
     ];
     substitute_json_strings(&mut body, &replacements);
 
     let mut request = client.post(params.url.trim()).json(&body);
-    if !params.api_key.is_empty() && !params.auth_header.trim().is_empty() {
-        request = request.header(params.auth_header.trim(), auth_value(params));
+    if !api_key.is_empty() && !params.auth_header.trim().is_empty() {
+        let value = auth_value(params);
+        request = request.header(params.auth_header.trim(), value.expose_secret());
     }
     let headers =
         build_extra_headers(&params.headers, &replacements).map_err(TranslationError::Engine)?;
@@ -73,11 +77,15 @@ pub async fn translate_async_with_client(
     extract_translation(&response_body, &params.response_path)
 }
 
-fn auth_value(params: &CustomApiCallParams) -> String {
+fn auth_value(params: &CustomApiCallParams) -> SecretString {
     if params.auth_scheme.trim().is_empty() {
         params.api_key.clone()
     } else {
-        format!("{} {}", params.auth_scheme.trim(), params.api_key)
+        SecretString::from(format!(
+            "{} {}",
+            params.auth_scheme.trim(),
+            params.api_key.expose_secret()
+        ))
     }
 }
 

@@ -5,6 +5,7 @@
 use super::Language;
 use super::http_common::{send_and_read_body, validate_not_empty};
 use super::{TranslationError, TranslationResult, lang_utils};
+use secrecy::{ExposeSecret, SecretString};
 
 const ENDPOINT: &str = "https://papago.apigw.ntruss.com/nmt/v1/translation";
 
@@ -14,10 +15,12 @@ pub async fn translate_async_with_client(
     text: &str,
     source: Language,
     target: Language,
-    client_id: &str,
-    client_secret: &str,
+    client_id: &SecretString,
+    client_secret: &SecretString,
 ) -> TranslationResult {
     validate_not_empty(text)?;
+    let client_id = client_id.expose_secret();
+    let client_secret = client_secret.expose_secret();
 
     if !super::TranslationEngine::Papago.supports_pair(source, target) {
         return Err(TranslationError::UnsupportedLanguagePair);
