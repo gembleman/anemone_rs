@@ -26,29 +26,29 @@ $lockedAcl.AddAccessRule($rule)
 Set-Acl -LiteralPath $install -AclObject $lockedAcl
 
 $oldLocalAppData = $env:LOCALAPPDATA
+$oldAppData = $env:APPDATA
 $oldSmokeExit = $env:ANEMONE_SMOKE_EXIT
 try {
     $env:LOCALAPPDATA = $localData
+    $env:APPDATA = $localData
     $env:ANEMONE_SMOKE_EXIT = '1'
     $process = Start-Process -FilePath $installedExe -PassThru -Wait
     if ($process.ExitCode -ne 0) { throw "GUI smoke test exited with $($process.ExitCode)" }
 
     $dataDir = Join-Path $localData 'Anemone'
-    if (-not (Test-Path -LiteralPath (Join-Path $dataDir 'config.toml'))) {
-        throw 'GUI did not create config.toml in the user data directory'
+    if (Test-Path -LiteralPath $dataDir) {
+        throw 'GUI incorrectly fell back to the user data directory'
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $dataDir 'logs\anemone.log'))) {
-        throw 'GUI did not create its log in the user data directory'
-    }
-    foreach ($name in 'config.toml', 'anemone.log', 'llm_usage.json') {
-        if (Test-Path -LiteralPath (Join-Path $install $name)) {
-            throw "GUI wrote runtime data beside the executable: $name"
+    foreach ($path in 'config.toml', 'llm_usage.json', 'logs\anemone.log') {
+        if (Test-Path -LiteralPath (Join-Path $install $path)) {
+            throw "GUI unexpectedly wrote runtime data in a read-only executable directory: $path"
         }
     }
-    Write-Host 'Read-only installation GUI smoke test passed.'
+    Write-Host 'Read-only installation did not redirect runtime data away from the executable.'
 }
 finally {
     $env:LOCALAPPDATA = $oldLocalAppData
+    $env:APPDATA = $oldAppData
     $env:ANEMONE_SMOKE_EXIT = $oldSmokeExit
     Set-Acl -LiteralPath $install -AclObject $originalAcl
     Remove-Item -LiteralPath $root -Recurse -Force
