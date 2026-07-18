@@ -72,7 +72,6 @@ reqwest = { version = "0.13", features = [
     "native-tls",
     "form",
 ], default-features = false }
-rpassword = "7.4"
 httpdate = "1.0"
 directories = "6.0.0"
 secrecy = "0.10.3"

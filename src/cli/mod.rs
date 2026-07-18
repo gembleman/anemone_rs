@@ -1,6 +1,5 @@
-//! GUI, tracing, COM, D2D 초기화 없이 번역과 설정을 다루는 headless CLI.
+//! GUI, tracing, COM, D2D 초기화 없이 번역을 수행하는 headless CLI.
 
-mod config;
 mod file_trans;
 mod list;
 mod translate;
@@ -14,19 +13,7 @@ use crate::translation::TranslationEngine;
 const AFTER_HELP: &str = r#"인자 없이 실행하면 GUI 모드로 시작합니다.
 
 ENGINE: eztrans | google | deepl | papago | llm | custom
-LANG:   ISO 639-1 (예: ja, ko, en, zh)
-
-CONFIG KEYS (대표):
-    translation.engine, translation.source_lang, translation.target_lang
-    translation.eztrans_dll_path, translation.eztrans_dat_path
-    translation.eztrans_process_count (파일 번역 helper 프로세스 수, 1..16)
-    translation.llm.provider, translation.llm.model
-    translation.llm.base_url, translation.llm.temperature, translation.llm.max_tokens
-    translation.custom_api (선택 이름), translation.custom_apis (config.toml에서 직접 편집)
-    clipboard_watch, click_through, magnetic_mode, background_visible
-    border_visible, window_topmost, window_visible
-
-비밀값은 `config set-secret <key>`로만 입력합니다."#;
+LANG:   ISO 639-1 (예: ja, ko, en, zh)"#;
 
 #[derive(Parser)]
 #[command(
@@ -49,13 +36,6 @@ enum Command {
     ListEngines,
     /// 엔진이 지원하는 언어 출력
     ListLangs(list::LanguagesArgs),
-    /// config.toml 조회 및 변경
-    Config {
-        #[command(subcommand)]
-        command: config::Command,
-    },
-    /// config.toml 절대 경로 출력
-    ConfigPath,
     /// 내부 EzTrans helper 프로세스. 직접 호출하지 않는다.
     #[command(hide = true)]
     EztransWorker {
@@ -124,8 +104,6 @@ pub fn run() -> CliOutcome {
         Command::FileTrans(args) => file_trans::run(args),
         Command::ListEngines => list::engines(),
         Command::ListLangs(args) => list::languages(args),
-        Command::Config { command } => config::run(command),
-        Command::ConfigPath => config::print_path(),
         Command::EztransWorker { dll, dat } => crate::translation::run_eztrans_worker(&dll, &dat),
     };
 

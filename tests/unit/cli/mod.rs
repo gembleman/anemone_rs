@@ -23,6 +23,13 @@ fn parses_existing_command_shapes() {
         ])
         .is_ok()
     );
+}
+
+#[test]
+fn rejects_removed_config_commands() {
+    assert!(Cli::try_parse_from(["anemone_rs", "config"]).is_err());
+    assert!(Cli::try_parse_from(["anemone_rs", "config", "show"]).is_err());
+    assert!(Cli::try_parse_from(["anemone_rs", "config-path"]).is_err());
     assert!(
         Cli::try_parse_from([
             "anemone_rs",
@@ -31,7 +38,16 @@ fn parses_existing_command_shapes() {
             "translation.engine",
             "google",
         ])
-        .is_ok()
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "anemone_rs",
+            "config",
+            "set-secret",
+            "translation.llm.api_key",
+        ])
+        .is_err()
     );
 }
 
