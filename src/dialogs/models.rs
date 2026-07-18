@@ -125,5 +125,5 @@ fn transfer(
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/dialog_models.rs"]
+#[path = "../../tests/unit/dialogs/models.rs"]
 mod tests;

@@ -8,7 +8,6 @@ mod clipboard;
 mod config;
 mod constants;
 mod d2d;
-mod dialog_models;
 mod dialogs;
 mod dpi;
 mod file_trans;

@@ -15,9 +15,9 @@ use super::helpers::{
     center_dialog_on_monitor, listbox_add_item, listbox_get_sel, listbox_reset, listbox_set_sel,
     register_resource_dialog, show_dialog_window, unregister_resource_dialog,
 };
+use super::models::HookListDraft;
 use crate::config::Config;
 use crate::define_dialog_instance;
-use crate::dialog_models::HookListDraft;
 
 // 컨트롤 ID
 mod ctrl_id {

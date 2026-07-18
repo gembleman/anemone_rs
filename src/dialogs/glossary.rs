@@ -15,9 +15,9 @@ use super::helpers::{
     center_dialog_on_monitor, get_window_text, listbox_add_item, listbox_get_sel, listbox_reset,
     register_resource_dialog, set_window_text, show_dialog_window, unregister_resource_dialog,
 };
+use super::models::GlossaryDraft;
 use crate::config::Config;
 use crate::define_dialog_instance;
-use crate::dialog_models::GlossaryDraft;
 
 mod ctrl_id {
     pub const DIALOG: u16 = 102;

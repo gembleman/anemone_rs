@@ -17,6 +17,7 @@
 //! - 후크 설정 대화상자 (hook_settings.rs)
 
 pub mod helpers;
+mod models;
 
 pub mod backlog;
 pub mod color;
