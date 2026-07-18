@@ -171,6 +171,8 @@ impl App {
                 magnetic: None,
                 d2d_renderer: Some(d2d_renderer),
                 composition: None,
+                composition_init_failures: 0,
+                composition_retry_scheduled: false,
                 hit_region: Vec::new(),
             }));
 

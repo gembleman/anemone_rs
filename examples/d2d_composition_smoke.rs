@@ -10,6 +10,7 @@
 //! - 윈도우가 검정/회색이 아니라 빨간색으로 칠해진다 → swap chain + DComp 연결 OK
 //! - 알파 채널이 적용된 영역이 데스크톱 배경과 섞여 보인다 → premultiplied α OK
 //! - 리사이즈해도 그림이 깨지지 않는다 → `resize()` 경로 OK
+//! - 아래 3줄이 left/center/right로 이동하고 italic `fij`가 잘리지 않는다
 //! - ESC 또는 X 로 종료 시 크래시 없음 → COM 해제 순서 OK
 //!
 //! 본 예제는 `src/d2d/mod.rs` 를 `#[path]` 로 직접 포함해 binary crate 와
@@ -31,12 +32,23 @@ mod util {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 }
+mod config {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub enum TextAlign {
+        Left,
+        Center,
+        Right,
+    }
+}
 mod window {
+    use crate::config::TextAlign;
+
     #[derive(Clone, Debug)]
     pub struct TextRenderStyle {
         pub font_size: i32,
         pub font_face: String,
         pub font_style: u8,
+        pub text_align: TextAlign,
         pub color: u32,
         pub outline1_size: i32,
         pub outline1_color: u32,
@@ -57,7 +69,8 @@ mod window {
 mod d2d;
 
 use bench::{BenchAccumulator, paint_bench_iters};
-use d2d::{CompositionRenderer, D2DRenderer, TextBox};
+use config::TextAlign;
+use d2d::{CompositionRenderer, D2DRenderer, TextBox, WaitOutcome};
 use std::cell::RefCell;
 use window::TextRenderStyle;
 use windows::{
@@ -266,7 +279,11 @@ fn render_frame(sync_interval: u32, mode: RenderMode) -> Result<()> {
         // waitable swap chain — 메인 paint 와 동일하게 다음 back buffer 가
         // 사용 가능해질 때까지 명시 wait. 안 부르면 EndDraw 내부에서 같은
         // 대기가 발생해 phase 별 비용이 EndDraw 로 합쳐진다.
-        renderer.wait_for_back_buffer(1000);
+        match renderer.wait_for_back_buffer(16) {
+            WaitOutcome::Ready => {}
+            WaitOutcome::Timeout => return Ok(()),
+            WaitOutcome::Failed(e) => return Err(e),
+        }
 
         let ctx = renderer.begin_draw();
 
@@ -338,10 +355,11 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
         let yellow = 0xFFFFD000;
         d2d.draw_border(ctx, 640, 360, 4, yellow)?;
 
-        let style = TextRenderStyle {
-            font_size: 28,
+        let base_style = TextRenderStyle {
+            font_size: 24,
             font_face: "Segoe UI".to_string(),
-            font_style: 1, // bold
+            font_style: 2, // italic overhang 확인
+            text_align: TextAlign::Left,
             color: 0xFFFFFFFF,
             outline1_size: 2,
             outline1_color: 0xFF000000,
@@ -352,17 +370,24 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
             shadow_offset_x: 2,
             shadow_offset_y: 2,
         };
-        d2d.draw_text(
-            ctx,
-            "D2DRenderer ▸ DComp 결합 OK",
-            TextBox {
-                x: 20.0,
-                y: 300.0,
-                max_width: 600.0,
-                max_height: 40.0,
-            },
-            &style,
-        )?;
+        for (line, align) in [TextAlign::Left, TextAlign::Center, TextAlign::Right]
+            .into_iter()
+            .enumerate()
+        {
+            let mut style = base_style.clone();
+            style.text_align = align;
+            d2d.draw_text(
+                ctx,
+                "fij ÁW · 한글 · 日本語",
+                TextBox {
+                    x: 20.0,
+                    y: 210.0 + line as f32 * 46.0,
+                    max_width: 600.0,
+                    max_height: 42.0,
+                },
+                &style,
+            )?;
+        }
         Ok(())
     })
 }
@@ -393,6 +418,7 @@ fn draw_bench_match_app(ctx: &ID2D1DeviceContext) -> Result<()> {
             font_size: 22,
             font_face: "맑은 고딕".to_string(),
             font_style: 0,
+            text_align: TextAlign::Left,
             color: 0xFFFFFFFF,
             outline1_size: 2,
             outline1_color: 0xFF000000,

@@ -12,7 +12,7 @@ use windows_numerics::Matrix3x2;
 
 use super::{
     cache::*,
-    color::{argb_to_color_f, font_style_to_dwrite},
+    color::{argb_to_color_f, font_style_to_dwrite, text_align_to_dwrite},
     outline_text_renderer::OutlineTextRenderer,
 };
 
@@ -21,8 +21,8 @@ use super::{
 /// 그리기 메서드들은 `&ID2D1RenderTarget` 을 받아 호출 측이 보유한
 /// render target (현재는 `CompositionRenderer` 의 `ID2D1DeviceContext`)
 /// 위에 그린다. `BeginDraw`/`EndDraw`/`Present` 는 호출 측이 책임지며,
-/// 본 타입은 한 프레임 시작 시 [`Self::configure_frame`] 으로 캐시
-/// reset + AA 모드 설정만 수행한다.
+/// 본 타입은 한 프레임 시작 시 [`Self::configure_frame`] 으로 AA 모드를
+/// 설정한다. device-bound 캐시는 device-lost까지 프레임 간 재사용한다.
 ///
 /// `d2d_factory` 는 [`ID2D1Factory1`] 로 보관한다 — `CreateDevice` 가
 /// 필요한 `CompositionRenderer` 가 [`Self::factory`] 로 받아 같은 factory
@@ -32,7 +32,7 @@ use super::{
 pub struct D2DRenderer {
     pub(super) d2d_factory: ID2D1Factory1,
     pub(super) dwrite_factory: IDWriteFactory,
-    /// 프레임 단위 브러시 캐시 (ARGB 색상 → SolidColorBrush)
+    /// device 수명 단위 브러시 캐시 (ARGB 색상 → SolidColorBrush)
     pub(super) brush_cache: HashMap<u32, ID2D1SolidColorBrush>,
     /// 외곽선 스트로크 스타일 캐시 (불변이므로 한 번만 생성)
     pub(super) stroke_style: Option<ID2D1StrokeStyle>,
@@ -209,6 +209,17 @@ impl D2DRenderer {
         max_width: f32,
         max_height: f32,
     ) -> Result<IDWriteTextLayout> {
+        debug_assert!(style.font_size > 0, "font_size must be positive");
+        debug_assert!(
+            style.outline1_size >= 0,
+            "outline1_size must be non-negative"
+        );
+        debug_assert!(
+            style.outline2_size >= 0,
+            "outline2_size must be non-negative"
+        );
+        debug_assert!(max_width.is_finite() && max_width > 0.0);
+        debug_assert!(max_height.is_finite() && max_height > 0.0);
         // SAFETY: DirectWrite factory creates valid text format and layout objects.
         // font_face_wide is a valid null-terminated UTF-16 string.
         unsafe {
@@ -224,6 +235,7 @@ impl D2DRenderer {
                 style.font_size as f32,
                 w!(""),
             )?;
+            text_format.SetTextAlignment(text_align_to_dwrite(style.text_align))?;
 
             let text_wide: Vec<u16> = text.encode_utf16().collect();
             self.dwrite_factory

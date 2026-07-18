@@ -91,7 +91,7 @@ impl TextStyle {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TextAlign {
     Left = 0,
     Center = 1,

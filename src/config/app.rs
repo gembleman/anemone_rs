@@ -150,6 +150,29 @@ impl Default for Config {
 }
 
 impl Config {
+    /// 외부 설정 파일에서 들어온 값을 UI가 허용하는 범위와 동일하게
+    /// 정규화한다. 렌더러, hit testing, 윈도우 크기 계산이 모두 같은 유효
+    /// 값을 보도록 deserialize 경계에서 한 번만 적용한다.
+    pub fn normalize(&mut self) {
+        self.border_width = self.border_width.clamp(0, 10);
+        self.text_margin_x = self.text_margin_x.clamp(0, 300);
+        self.text_margin_y = self.text_margin_y.clamp(0, 300);
+        self.name_margin = self.name_margin.clamp(0, 300);
+        self.shadow_offset_x = self.shadow_offset_x.clamp(0, 20);
+        self.shadow_offset_y = self.shadow_offset_y.clamp(0, 20);
+
+        for style in [
+            &mut self.name_style,
+            &mut self.original_style,
+            &mut self.translation_style,
+        ] {
+            style.size = style.size.clamp(6, 100);
+            style.outline1_size = style.outline1_size.clamp(0, 20);
+            style.outline2_size = style.outline2_size.clamp(0, 20);
+            style.font_style &= 0b11;
+        }
+    }
+
     pub fn toggle_window_visible(&mut self) {
         self.window_visible = !self.window_visible;
     }
@@ -203,7 +226,12 @@ impl Config {
     /// 설정 파일에서 로드 (TOML 형식)
     pub fn load_from_file(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        Ok(Self::from_toml_str(&content)?)
+    }
+
+    fn from_toml_str(content: &str) -> Result<Self, toml::de::Error> {
+        let mut config: Config = toml::from_str(content)?;
+        config.normalize();
         Ok(config)
     }
 
@@ -278,3 +306,7 @@ impl Config {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/config/app.rs"]
+mod tests;
