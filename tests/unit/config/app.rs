@@ -61,6 +61,7 @@ fn invalid_translation_values_are_rejected_instead_of_defaulted() {
 #[test]
 fn partial_config_uses_defaults_for_missing_top_level_fields() {
     let loaded = Config::from_toml_str("window_visible = false\n").unwrap();
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     assert!(!loaded.window_visible);
     assert_eq!(
         loaded.clipboard_max_length,
@@ -70,6 +71,15 @@ fn partial_config_uses_defaults_for_missing_top_level_fields() {
         loaded.translation.engine,
         Config::default().translation.engine
     );
+}
+
+#[test]
+fn future_schema_version_is_rejected() {
+    let error = Config::from_toml_str("schema_version = 999\n").unwrap_err();
+    assert!(matches!(
+        error,
+        ConfigDecodeError::UnsupportedSchema { found: 999, .. }
+    ));
 }
 
 #[test]
@@ -91,6 +101,7 @@ response_path = "result.text"
 "#;
 
     let loaded = Config::from_toml_str(text).unwrap();
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     assert_eq!(loaded.translation.custom_apis.len(), 2);
     assert_eq!(
         loaded.translation.active_custom_api().unwrap().url,

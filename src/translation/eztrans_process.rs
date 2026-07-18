@@ -65,7 +65,8 @@ pub(crate) struct EzTransProcessPool {
 
 impl EzTransProcessPool {
     fn new(config: EzTransProcessConfig) -> Result<Self, String> {
-        let process_count = config.process_count.clamp(1, 16);
+        let process_count =
+            crate::config::limits::eztrans_process_count_usize(config.process_count);
         let (ready_sender, ready_receiver) = mpsc::channel();
         // EHND 초기화는 여러 프로세스에서도 DAT 내부의 공유 파일을 동시에 만질 수 있다.
         // 프로세스는 병렬 실행하되 초기화 구간만 직렬화해 간헐적 시작 실패를 막는다.
@@ -125,7 +126,8 @@ impl EzTransProcessPool {
     fn matches(&self, config: &EzTransProcessConfig) -> bool {
         self.config.dll_path == config.dll_path
             && self.config.dat_path == config.dat_path
-            && self.config.process_count == config.process_count.clamp(1, 16)
+            && self.config.process_count
+                == crate::config::limits::eztrans_process_count_usize(config.process_count)
     }
 }
 

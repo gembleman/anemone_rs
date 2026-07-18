@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use quick_cache::unsync::Cache;
 use windows::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
 
-use super::{FileTransJobData, ProgressEvent, WriteType, validate_job_paths};
+use super::{FileTransJobData, FileTranslationError, ProgressEvent, WriteType, validate_job_paths};
 use crate::translation::{
     EzTransBatchTranslator, TranslationEngine, global_eztrans_process_pool,
     http_common::shared_client,
@@ -37,7 +37,7 @@ pub struct PendingOutput {
 }
 
 impl PendingOutput {
-    pub fn create(final_path: &Path) -> Result<Self, String> {
+    pub fn create(final_path: &Path) -> Result<Self, FileTranslationError> {
         let parent = final_path.parent().unwrap_or(Path::new(""));
         let name = final_path.file_name().unwrap_or_default().to_string_lossy();
 
@@ -61,49 +61,50 @@ impl PendingOutput {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => {
-                    return Err(format!(
+                    return Err(FileTranslationError::output(format!(
                         "임시 출력 파일을 생성할 수 없습니다: {}\n{error}",
                         temp_path.display()
-                    ));
+                    )));
                 }
             }
         }
 
-        Err(format!(
+        Err(FileTranslationError::output(format!(
             "고유한 임시 출력 파일을 생성할 수 없습니다: {}",
             final_path.display()
-        ))
+        )))
     }
 
     pub fn writer(&mut self) -> &mut BufWriter<File> {
         self.writer.as_mut().expect("writer exists until persist")
     }
 
+    #[cfg(test)]
     pub fn temp_path(&self) -> &Path {
         &self.temp_path
     }
 
-    pub fn persist(mut self) -> Result<(), String> {
+    pub fn persist(mut self) -> Result<(), FileTranslationError> {
         let mut writer = self.writer.take().expect("writer exists until persist");
         writer.flush().map_err(|error| {
-            format!(
+            FileTranslationError::output(format!(
                 "임시 출력 파일을 저장할 수 없습니다: {}\n{error}",
                 self.temp_path.display()
-            )
+            ))
         })?;
         writer.get_ref().sync_all().map_err(|error| {
-            format!(
+            FileTranslationError::output(format!(
                 "임시 출력 파일을 디스크에 반영할 수 없습니다: {}\n{error}",
                 self.temp_path.display()
-            )
+            ))
         })?;
         drop(writer);
 
         crate::fs_util::atomic_replace(&self.temp_path, &self.final_path).map_err(|error| {
-            format!(
+            FileTranslationError::output(format!(
                 "완성된 출력 파일을 최종 경로로 옮길 수 없습니다: {}\n{error}",
                 self.final_path.display()
-            )
+            ))
         })?;
 
         self.temp_path.clear();
@@ -151,16 +152,8 @@ pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     // 작업이 끝날 때까지 시스템 절전을 막는다.
     let _sleep_guard = SleepBlocker::new();
 
-    // 입력과 출력은 일대일이어야 한다.
-    if job_data.input_files.len() != job_data.output_files.len() {
-        report(ProgressEvent::Error(
-            "입력 파일과 출력 파일 수가 일치하지 않습니다.".to_string(),
-        ));
-        return;
-    }
-
-    if let Err(message) = validate_job_paths(&job_data.input_files, &job_data.output_files) {
-        report(ProgressEvent::Error(message));
+    if let Err(error) = validate_job_paths(&job_data.input_files, &job_data.output_files) {
+        report(ProgressEvent::Error(error));
         return;
     }
 
@@ -171,7 +164,9 @@ pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     {
         Ok(rt) => rt,
         Err(e) => {
-            report(ProgressEvent::Error(format!("tokio 런타임 생성 실패: {e}")));
+            report(ProgressEvent::Error(FileTranslationError::Runtime(
+                e.to_string(),
+            )));
             return;
         }
     };
@@ -186,7 +181,7 @@ pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     let file_line_counts = match preflight_inputs(&job_data.input_files, &job_data.cancel_token) {
         Ok(counts) => counts,
         Err(error) => {
-            if job_data.cancel_token.load(Ordering::SeqCst) {
+            if error == FileTranslationError::Cancelled {
                 report(ProgressEvent::Cancelled);
             } else {
                 report(ProgressEvent::Error(error));
@@ -201,24 +196,22 @@ pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     }) {
         Some(total) => total,
         None => {
-            report(ProgressEvent::Error(
-                "입력 파일의 전체 줄 수가 너무 많습니다.".to_string(),
-            ));
+            report(ProgressEvent::Error(FileTranslationError::TooManyLines));
             return;
         }
     };
 
     let eztrans_pool = if job_data.engine == TranslationEngine::EzTrans {
         let Some(config) = job_data.eztrans_process.as_ref() else {
-            report(ProgressEvent::Error(
-                "EzTrans 파일 번역 helper 설정이 없습니다.".to_string(),
-            ));
+            report(ProgressEvent::Error(FileTranslationError::backend(
+                "EzTrans 파일 번역 helper 설정이 없습니다.",
+            )));
             return;
         };
         match global_eztrans_process_pool(config) {
             Ok(pool) => Some(pool),
             Err(error) => {
-                report(ProgressEvent::Error(error));
+                report(ProgressEvent::Error(FileTranslationError::backend(error)));
                 return;
             }
         }
@@ -264,7 +257,7 @@ pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
         ) {
             Ok(()) => {}
             Err(e) => {
-                if job_data.cancel_token.load(Ordering::SeqCst) {
+                if e == FileTranslationError::Cancelled {
                     report(ProgressEvent::Cancelled);
                 } else {
                     report(ProgressEvent::Error(e));
@@ -283,6 +276,7 @@ pub struct TranslationContext<'a> {
 }
 
 impl<'a> TranslationContext<'a> {
+    #[cfg(test)]
     pub fn new(runtime: &'a tokio::runtime::Runtime, http_client: &'a reqwest::Client) -> Self {
         Self {
             runtime,
@@ -301,10 +295,11 @@ struct FileRuntime<'a> {
 fn preflight_inputs(
     files: &[PathBuf],
     cancel_token: &std::sync::atomic::AtomicBool,
-) -> Result<Vec<usize>, String> {
+) -> Result<Vec<usize>, FileTranslationError> {
     let mut counts = Vec::with_capacity(files.len());
     for path in files {
-        let reader = crate::util::open_utf8_translation_input(path)?;
+        let reader =
+            crate::util::open_utf8_translation_input(path).map_err(FileTranslationError::input)?;
         counts.push(validate_and_count_reader(reader, path, cancel_token)?);
     }
     Ok(counts)
@@ -314,7 +309,7 @@ pub fn validate_and_count_reader<R: Read>(
     mut reader: R,
     path: &Path,
     cancel_token: &std::sync::atomic::AtomicBool,
-) -> Result<usize, String> {
+) -> Result<usize, FileTranslationError> {
     const CHUNK_SIZE: usize = 64 * 1024;
     let mut buffer = [0u8; CHUNK_SIZE];
     let mut pending = Vec::with_capacity(4);
@@ -325,11 +320,14 @@ pub fn validate_and_count_reader<R: Read>(
 
     loop {
         if cancel_token.load(Ordering::SeqCst) {
-            return Err("사용자가 취소했습니다.".to_string());
+            return Err(FileTranslationError::Cancelled);
         }
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|e| format!("입력 파일을 읽을 수 없습니다: {}\n{e}", path.display()))?;
+        let read = reader.read(&mut buffer).map_err(|e| {
+            FileTranslationError::input(format!(
+                "입력 파일을 읽을 수 없습니다: {}\n{e}",
+                path.display()
+            ))
+        })?;
         if read == 0 {
             break;
         }
@@ -355,19 +353,19 @@ pub fn validate_and_count_reader<R: Read>(
                 let byte = total_body_bytes
                     .saturating_sub(pending.len())
                     .saturating_add(error.valid_up_to());
-                return Err(format!(
+                return Err(FileTranslationError::encoding(format!(
                     "UTF-8 디코딩 실패(byte {byte}): UTF-8 또는 UTF-8 BOM 파일만 사용할 수 있습니다. ({})",
                     path.display()
-                ));
+                )));
             }
         }
     }
     if !pending.is_empty() {
-        return Err(format!(
+        return Err(FileTranslationError::encoding(format!(
             "UTF-8 디코딩 실패(byte {}): UTF-8 또는 UTF-8 BOM 파일만 사용할 수 있습니다. ({})",
             total_body_bytes.saturating_sub(pending.len()),
             path.display()
-        ));
+        )));
     }
     Ok(newline_count + usize::from(total_body_bytes > 0 && !last_was_newline))
 }
@@ -427,13 +425,16 @@ pub fn read_input_line<R: BufRead>(
     reader: &mut R,
     path: &Path,
     first_line: bool,
-) -> Result<Option<InputLine>, String> {
+) -> Result<Option<InputLine>, FileTranslationError> {
     const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
     let mut bytes = Vec::new();
     loop {
-        let available = reader
-            .fill_buf()
-            .map_err(|e| format!("입력 파일을 읽을 수 없습니다: {}\n{e}", path.display()))?;
+        let available = reader.fill_buf().map_err(|e| {
+            FileTranslationError::input(format!(
+                "입력 파일을 읽을 수 없습니다: {}\n{e}",
+                path.display()
+            ))
+        })?;
         if available.is_empty() {
             break;
         }
@@ -442,10 +443,10 @@ pub fn read_input_line<R: BufRead>(
             .position(|&byte| byte == b'\n')
             .map_or(available.len(), |index| index + 1);
         if bytes.len().saturating_add(take) > MAX_LINE_BYTES {
-            return Err(format!(
-                "입력 파일의 한 줄이 허용 크기({MAX_LINE_BYTES}바이트)를 초과했습니다: {}",
-                path.display()
-            ));
+            return Err(FileTranslationError::LineTooLong {
+                path: path.to_path_buf(),
+                limit: MAX_LINE_BYTES,
+            });
         }
         let found_newline = available[take - 1] == b'\n';
         bytes.extend_from_slice(&available[..take]);
@@ -474,10 +475,10 @@ pub fn read_input_line<R: BufRead>(
         return Ok(None);
     }
     let text = String::from_utf8(bytes).map_err(|error| {
-        format!(
+        FileTranslationError::encoding(format!(
             "UTF-8 디코딩 실패: UTF-8 또는 UTF-8 BOM 파일만 사용할 수 있습니다. ({})\n{error}",
             path.display()
-        )
+        ))
     })?;
     Ok(Some(InputLine { text, ending }))
 }
@@ -491,8 +492,9 @@ fn process_single_file(
     global_current: &mut i32,
     runtime: &mut FileRuntime<'_>,
     report: &impl Fn(ProgressEvent),
-) -> Result<(), String> {
-    let mut reader = crate::util::open_utf8_translation_input(input_path)?;
+) -> Result<(), FileTranslationError> {
+    let mut reader = crate::util::open_utf8_translation_input(input_path)
+        .map_err(FileTranslationError::input)?;
 
     // 최종 파일은 전체 번역과 flush가 성공한 뒤에만 교체한다.
     let mut pending_output = PendingOutput::create(output_path)?;
@@ -501,7 +503,7 @@ fn process_single_file(
     pending_output
         .writer()
         .write_all(&[0xEF, 0xBB, 0xBF])
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| FileTranslationError::output(e.to_string()))?;
 
     report(ProgressEvent::FileLines(line_count as i32));
 
@@ -539,12 +541,12 @@ fn process_single_file(
         }
 
         if job_data.cancel_token.load(Ordering::SeqCst) {
-            return Err("사용자가 취소했습니다.".to_string());
+            return Err(FileTranslationError::Cancelled);
         }
         let translated_lines = if job_data.engine == TranslationEngine::EzTrans {
-            let pool = runtime
-                .eztrans_pool
-                .ok_or_else(|| "EzTrans 파일 번역 helper 풀이 준비되지 않았습니다".to_string())?;
+            let pool = runtime.eztrans_pool.ok_or_else(|| {
+                FileTranslationError::backend("EzTrans 파일 번역 helper 풀이 준비되지 않았습니다")
+            })?;
             translate_eztrans_window(&lines, job_data, pool, &mut runtime.eztrans_cache)?
         } else {
             translate_lines(&lines, job_data, runtime.translation)?
@@ -578,7 +580,7 @@ fn translate_lines(
     lines: &[InputLine],
     job_data: &FileTransJobData,
     translation: &TranslationContext<'_>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, FileTranslationError> {
     lines
         .iter()
         .map(|line| translate_line(&line.text, job_data, translation))
@@ -590,7 +592,7 @@ pub fn translate_eztrans_window(
     job_data: &FileTransJobData,
     translator: &dyn EzTransBatchTranslator,
     cache: &mut BoundedTranslationCache,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, FileTranslationError> {
     let mut results = lines
         .iter()
         .map(|line| line.text.clone())
@@ -622,14 +624,16 @@ pub fn translate_eztrans_window(
         return Ok(results);
     }
     let batches = partition_eztrans_batches(&misses, translator.process_count());
-    let translated_batches = translator.translate_batches(batches, &job_data.cancel_token)?;
+    let translated_batches = translator
+        .translate_batches(batches, &job_data.cancel_token)
+        .map_err(FileTranslationError::backend)?;
     let translated_misses = translated_batches.into_iter().flatten().collect::<Vec<_>>();
     if translated_misses.len() != misses.len() {
-        return Err(format!(
+        return Err(FileTranslationError::backend(format!(
             "EzTrans helper 결과 수가 일치하지 않습니다: 요청 {}, 응답 {}",
             misses.len(),
             translated_misses.len()
-        ));
+        )));
     }
 
     for (original, translated) in misses.iter().cloned().zip(&translated_misses) {
@@ -735,7 +739,7 @@ pub fn translate_line(
     line: &str,
     job_data: &FileTransJobData,
     translation: &TranslationContext<'_>,
-) -> Result<String, String> {
+) -> Result<String, FileTranslationError> {
     // 빈 줄은 엔진에 보내지 않는다.
     // 옵션이 켜지면 공백만 있는 단락 구분 줄도 유지한다.
     if !should_translate_line(line, job_data.no_trans_linefeed) {
@@ -760,7 +764,7 @@ pub fn translate_line(
     });
 
     match result {
-        None => Err("사용자가 취소했습니다.".to_string()),
+        None => Err(FileTranslationError::Cancelled),
         Some(Ok(translated)) => Ok(translated),
         Some(Err(e)) => {
             tracing::warn!(
@@ -788,44 +792,52 @@ pub fn write_output<W: Write>(
     write_type: WriteType,
     ending: LineEnding,
     has_more: bool,
-) -> Result<(), String> {
+) -> Result<(), FileTranslationError> {
     let separator = ending.separator();
     match write_type {
         WriteType::TranslationOnly => {
             writer
                 .write_all(translated.as_bytes())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| FileTranslationError::output(e.to_string()))?;
             writer
                 .write_all(ending.bytes())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| FileTranslationError::output(e.to_string()))?;
         }
         WriteType::OriginalAndTrans => {
             writer
                 .write_all(original.as_bytes())
-                .map_err(|e| e.to_string())?;
-            writer.write_all(separator).map_err(|e| e.to_string())?;
+                .map_err(|e| FileTranslationError::output(e.to_string()))?;
+            writer
+                .write_all(separator)
+                .map_err(|e| FileTranslationError::output(e.to_string()))?;
             writer
                 .write_all(translated.as_bytes())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| FileTranslationError::output(e.to_string()))?;
             writer
                 .write_all(ending.bytes())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| FileTranslationError::output(e.to_string()))?;
         }
         WriteType::OriginalTransNewline => {
             writer
                 .write_all(original.as_bytes())
-                .map_err(|e| e.to_string())?;
-            writer.write_all(separator).map_err(|e| e.to_string())?;
+                .map_err(|e| FileTranslationError::output(e.to_string()))?;
+            writer
+                .write_all(separator)
+                .map_err(|e| FileTranslationError::output(e.to_string()))?;
             writer
                 .write_all(translated.as_bytes())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| FileTranslationError::output(e.to_string()))?;
             if has_more {
-                writer.write_all(separator).map_err(|e| e.to_string())?;
-                writer.write_all(separator).map_err(|e| e.to_string())?;
+                writer
+                    .write_all(separator)
+                    .map_err(|e| FileTranslationError::output(e.to_string()))?;
+                writer
+                    .write_all(separator)
+                    .map_err(|e| FileTranslationError::output(e.to_string()))?;
             } else {
                 writer
                     .write_all(ending.bytes())
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| FileTranslationError::output(e.to_string()))?;
             }
         }
     }
@@ -842,3 +854,7 @@ fn send_filename(path: &Path, report: &impl Fn(ProgressEvent)) {
 
     report(ProgressEvent::FileName(filename));
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/file_trans/worker.rs"]
+mod tests;

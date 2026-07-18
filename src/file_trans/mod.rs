@@ -3,7 +3,8 @@
 //! 작업 설정, 경로 검증, 기본 출력 경로 생성과 실제 파일 처리를 제공한다.
 //! 진행 상황은 [`ProgressEvent`] 콜백으로 전달하므로 Win32 UI에 의존하지 않는다.
 
-pub mod worker;
+mod error;
+mod worker;
 
 use std::collections::HashSet;
 use std::fs;
@@ -18,8 +19,17 @@ use std::time::Duration;
 
 use crate::translation::{EngineCredentials, EzTransProcessConfig, Language, TranslationEngine};
 
+pub use error::FileTranslationError;
 pub use worker::run;
-pub use worker::split_eztrans_batch;
+pub(crate) use worker::split_eztrans_batch;
+
+#[cfg(feature = "benchmark")]
+pub mod benchmark_support {
+    pub use super::worker::{
+        BoundedTranslationCache, read_input_line, translate_eztrans_window,
+        validate_and_count_reader,
+    };
+}
 
 /// 파일 번역 작업을 취소하는 스레드 안전한 핸들.
 #[derive(Clone)]
@@ -127,16 +137,16 @@ pub enum ProgressEvent {
     TotalProgress(i32),
     Complete,
     Cancelled,
-    Error(String),
+    Error(FileTranslationError),
 }
 
 /// Windows 파일 시스템의 대소문자 비구분 규칙에 맞춰 비교할 절대 경로 키를 만든다.
-fn normalized_path_key(path: &Path) -> Result<String, String> {
+fn normalized_path_key(path: &Path) -> Result<String, FileTranslationError> {
     let absolute = std::path::absolute(path).map_err(|e| {
-        format!(
+        FileTranslationError::path(format!(
             "경로를 절대 경로로 변환할 수 없습니다: {}\n{e}",
             path.display()
-        )
+        ))
     })?;
     let normalized = fs::canonicalize(&absolute).unwrap_or(absolute);
     let text = normalized.to_string_lossy();
@@ -149,9 +159,14 @@ fn normalized_path_key(path: &Path) -> Result<String, String> {
 }
 
 /// 입력과 출력 경로가 서로 겹치거나 출력 경로끼리 중복되는지 검사한다.
-pub fn validate_job_paths(inputs: &[PathBuf], outputs: &[PathBuf]) -> Result<(), String> {
+pub fn validate_job_paths(
+    inputs: &[PathBuf],
+    outputs: &[PathBuf],
+) -> Result<(), FileTranslationError> {
     if inputs.len() != outputs.len() {
-        return Err("입력 파일과 출력 파일 수가 일치하지 않습니다.".to_string());
+        return Err(FileTranslationError::InvalidRequest(
+            "입력 파일과 출력 파일 수가 일치하지 않습니다.".to_string(),
+        ));
     }
 
     let input_keys = inputs
@@ -163,17 +178,17 @@ pub fn validate_job_paths(inputs: &[PathBuf], outputs: &[PathBuf]) -> Result<(),
     for output in outputs {
         let output_key = normalized_path_key(output)?;
         if let Some((_, input)) = input_keys.iter().find(|(key, _)| key == &output_key) {
-            return Err(format!(
+            return Err(FileTranslationError::path(format!(
                 "출력 파일이 입력 파일과 같습니다.\n입력: {}\n출력: {}",
                 input.display(),
                 output.display()
-            ));
+            )));
         }
         if !output_keys.insert(output_key) {
-            return Err(format!(
+            return Err(FileTranslationError::path(format!(
                 "출력 파일 경로가 중복됩니다.\n{}",
                 output.display()
-            ));
+            )));
         }
     }
 
@@ -181,7 +196,7 @@ pub fn validate_job_paths(inputs: &[PathBuf], outputs: &[PathBuf]) -> Result<(),
 }
 
 /// 입력 순서대로 충돌하지 않는 기본 출력 경로를 만든다.
-pub fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+pub fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, FileTranslationError> {
     let input_keys = inputs
         .iter()
         .map(|path| normalized_path_key(path))
@@ -211,3 +226,7 @@ pub fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> 
 
     Ok(outputs)
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/file_trans/mod.rs"]
+mod tests;

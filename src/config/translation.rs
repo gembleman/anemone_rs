@@ -186,8 +186,8 @@ impl TranslationConfig {
         Ok(())
     }
 
-    /// 이전 단일 Custom API 설정을 이름 기반 목록으로 옮긴다.
-    pub fn normalize_custom_apis(&mut self) {
+    /// v0의 단일 Custom API 설정을 v1의 이름 기반 목록으로 옮긴다.
+    pub(crate) fn migrate_legacy_custom_api(&mut self) {
         if self.custom_apis.is_empty() && !self.custom.is_default() {
             let legacy = std::mem::take(&mut self.custom);
             self.custom_api = legacy.name.clone();

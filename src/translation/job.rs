@@ -111,7 +111,9 @@ impl TranslationJobSpec {
             credentials,
             eztrans_dll_path: config.eztrans_dll_path.clone(),
             eztrans_dat_path: config.eztrans_dat_path.clone(),
-            eztrans_process_count: config.eztrans_process_count.clamp(1, 16) as usize,
+            eztrans_process_count: crate::config::limits::eztrans_process_count(
+                config.eztrans_process_count,
+            ) as usize,
         })
     }
 

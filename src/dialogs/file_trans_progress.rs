@@ -558,7 +558,7 @@ impl FileTransProgressDialog {
                         let _ = tb.SetProgressState(self.parent_hwnd, TBPF_ERROR);
                     }
 
-                    let message = HSTRING::from(error_msg);
+                    let message = HSTRING::from(error_msg.to_string());
                     let _ = MessageBoxW(Some(self.hwnd), &message, w!("오류"), MB_ICONERROR);
 
                     self.clear_taskbar_progress();

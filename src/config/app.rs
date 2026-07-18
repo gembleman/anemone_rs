@@ -4,10 +4,16 @@ use serde::{Deserialize, Serialize};
 
 use super::{ColorType, TextAlign, TextStyle, TextType, TranslationConfig};
 
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 /// 애플리케이션 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// 설정 구조 버전. 누락된 기존 설정은 v0 migration을 거친다.
+    #[serde(default)]
+    pub schema_version: u32,
+
     // 윈도우 표시
     pub window_visible: bool,
     pub window_topmost: bool,
@@ -61,6 +67,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
             window_visible: true,
             window_topmost: true,
             click_through: false,
@@ -109,35 +116,46 @@ impl Default for Config {
 impl Config {
     /// 외부 설정값을 UI 범위로 정규화해 모든 소비자가 같은 값을 보게 한다.
     pub fn normalize(&mut self) {
-        self.border_width = self.border_width.clamp(0, 10);
-        self.text_margin_x = self.text_margin_x.clamp(0, 300);
-        self.text_margin_y = self.text_margin_y.clamp(0, 300);
-        self.name_margin = self.name_margin.clamp(0, 300);
-        self.shadow_offset_x = self.shadow_offset_x.clamp(0, 20);
-        self.shadow_offset_y = self.shadow_offset_y.clamp(0, 20);
+        self.border_width = super::limits::border_width(self.border_width);
+        self.text_margin_x = super::limits::margin(self.text_margin_x);
+        self.text_margin_y = super::limits::margin(self.text_margin_y);
+        self.name_margin = super::limits::margin(self.name_margin);
+        self.shadow_offset_x = super::limits::shadow_offset(self.shadow_offset_x);
+        self.shadow_offset_y = super::limits::shadow_offset(self.shadow_offset_y);
         self.translation.eztrans_process_count =
-            self.translation.eztrans_process_count.clamp(1, 16);
-        self.translation.normalize_custom_apis();
+            super::limits::eztrans_process_count(self.translation.eztrans_process_count);
 
         for style in [
             &mut self.name_style,
             &mut self.original_style,
             &mut self.translation_style,
         ] {
-            style.size = style.size.clamp(6, 100);
-            style.outline1_size = style.outline1_size.clamp(0, 20);
-            style.outline2_size = style.outline2_size.clamp(0, 20);
+            style.size = super::limits::text_size(style.size);
+            style.outline1_size = super::limits::outline_size(style.outline1_size);
+            style.outline2_size = super::limits::outline_size(style.outline2_size);
             style.font_style &= 0b11;
         }
 
         let llm = &mut self.translation.llm;
-        llm.max_tokens = llm.max_tokens.clamp(1, 32_000);
-        llm.debounce_ms = llm.debounce_ms.clamp(0, 10_000);
-        llm.temperature = if llm.temperature.is_finite() {
-            llm.temperature.clamp(0.0, 2.0)
-        } else {
-            0.3
-        };
+        llm.max_tokens = super::limits::llm_max_tokens(llm.max_tokens);
+        llm.debounce_ms = super::limits::llm_debounce_ms(llm.debounce_ms);
+        llm.temperature = super::limits::llm_temperature(llm.temperature);
+    }
+
+    fn migrate(&mut self) -> Result<(), ConfigDecodeError> {
+        if self.schema_version > CURRENT_SCHEMA_VERSION {
+            return Err(ConfigDecodeError::UnsupportedSchema {
+                found: self.schema_version,
+                supported: CURRENT_SCHEMA_VERSION,
+            });
+        }
+
+        if self.schema_version == 0 {
+            self.translation.migrate_legacy_custom_api();
+            self.schema_version = 1;
+        }
+
+        Ok(())
     }
 
     pub fn toggle_window_visible(&mut self) {
@@ -192,8 +210,9 @@ impl Config {
         Ok(Self::from_toml_str(&content)?)
     }
 
-    fn from_toml_str(content: &str) -> Result<Self, toml::de::Error> {
+    fn from_toml_str(content: &str) -> Result<Self, ConfigDecodeError> {
         let mut config: Config = toml::from_str(content)?;
+        config.migrate()?;
         config.normalize();
         Ok(config)
     }
@@ -201,6 +220,7 @@ impl Config {
     /// 설정 파일에 저장 (TOML 형식)
     pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
         let mut normalized = self.clone();
+        normalized.migrate()?;
         normalized.normalize();
         let content = toml::to_string_pretty(&normalized)?;
         let _: Config = Self::from_toml_str(&content)?;
@@ -281,7 +301,15 @@ pub enum ConfigLoadError {
     #[error("설정 파일 읽기 실패: {0}")]
     Io(#[from] std::io::Error),
     #[error("설정 TOML 파싱 실패: {0}")]
-    Decode(#[from] toml::de::Error),
+    Decode(#[from] ConfigDecodeError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigDecodeError {
+    #[error("설정 TOML 파싱 실패: {0}")]
+    Toml(#[from] toml::de::Error),
+    #[error("지원하지 않는 설정 schema_version {found} (최대 지원: {supported})")]
+    UnsupportedSchema { found: u32, supported: u32 },
 }
 
 fn quarantine_corrupt_file(path: &std::path::Path) -> std::io::Result<PathBuf> {

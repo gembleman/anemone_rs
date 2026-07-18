@@ -36,7 +36,9 @@ fn terminal_event_prevents_later_state_updates() {
     assert!(completed.terminal);
 
     let mut failed = ProgressState::default();
-    failed.apply(&ProgressEvent::Error("failed".into()));
+    failed.apply(&ProgressEvent::Error(
+        crate::file_trans::FileTranslationError::Runtime("failed".into()),
+    ));
     failed.apply(&ProgressEvent::TotalFiles(99));
     assert_eq!(failed.total_files, 0);
     assert!(failed.terminal);

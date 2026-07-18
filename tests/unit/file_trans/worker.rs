@@ -86,8 +86,8 @@ fn line_read_error_is_returned_instead_of_skipped() {
 
     let error = validate_and_count_reader(reader, Path::new("invalid.txt"), &cancel).unwrap_err();
 
-    assert!(error.contains("invalid.txt"));
-    assert!(error.contains("UTF-8 디코딩 실패"));
+    assert!(error.to_string().contains("invalid.txt"));
+    assert!(error.to_string().contains("UTF-8 디코딩 실패"));
 }
 
 #[test]

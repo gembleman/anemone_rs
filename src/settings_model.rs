@@ -1,6 +1,6 @@
 //! Settings Dialog가 사용하는 Win32 비의존 설정 변경 명령.
 
-use crate::config::{ColorType, Config, TextAlign, TextType};
+use crate::config::{ColorType, Config, TextAlign, TextType, limits};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoolSetting {
@@ -131,8 +131,8 @@ fn set_numeric(config: &mut Config, setting: NumericSetting, value: i32) -> bool
         }
         NumericSetting::TextSize(color_type) => {
             let value = match color_type {
-                ColorType::Primary => value.clamp(6, 100),
-                ColorType::Outline1 | ColorType::Outline2 => value.clamp(0, 20),
+                ColorType::Primary => limits::text_size(value),
+                ColorType::Outline1 | ColorType::Outline2 => limits::outline_size(value),
                 ColorType::Shadow => return false,
             };
             let changed = [TextType::Name, TextType::Original, TextType::Translation]
@@ -144,19 +144,23 @@ fn set_numeric(config: &mut Config, setting: NumericSetting, value: i32) -> bool
             changed
         }
         NumericSetting::ShadowOffsetX => {
-            set_if_changed(&mut config.shadow_offset_x, value.clamp(0, 20))
+            set_if_changed(&mut config.shadow_offset_x, limits::shadow_offset(value))
         }
         NumericSetting::ShadowOffsetY => {
-            set_if_changed(&mut config.shadow_offset_y, value.clamp(0, 20))
+            set_if_changed(&mut config.shadow_offset_y, limits::shadow_offset(value))
         }
         NumericSetting::TextMarginX => {
-            set_if_changed(&mut config.text_margin_x, value.clamp(0, 300))
+            set_if_changed(&mut config.text_margin_x, limits::margin(value))
         }
         NumericSetting::TextMarginY => {
-            set_if_changed(&mut config.text_margin_y, value.clamp(0, 300))
+            set_if_changed(&mut config.text_margin_y, limits::margin(value))
         }
-        NumericSetting::NameMargin => set_if_changed(&mut config.name_margin, value.clamp(0, 300)),
-        NumericSetting::BorderWidth => set_if_changed(&mut config.border_width, value.clamp(0, 10)),
+        NumericSetting::NameMargin => {
+            set_if_changed(&mut config.name_margin, limits::margin(value))
+        }
+        NumericSetting::BorderWidth => {
+            set_if_changed(&mut config.border_width, limits::border_width(value))
+        }
     }
 }
 

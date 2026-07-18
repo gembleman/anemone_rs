@@ -392,7 +392,7 @@ impl FileTransDialog {
             Err(error) => {
                 self.input_files.clear();
                 unsafe {
-                    let message = HSTRING::from(error);
+                    let message = HSTRING::from(error.to_string());
                     let _ = MessageBoxW(Some(self.hwnd), &message, w!("경로 오류"), MB_ICONERROR);
                 }
                 return;
@@ -498,7 +498,7 @@ impl FileTransDialog {
 
         if let Err(error) = validate_job_paths(&self.input_files, &self.output_files) {
             unsafe {
-                let message = HSTRING::from(error);
+                let message = HSTRING::from(error.to_string());
                 let _ = MessageBoxW(Some(self.hwnd), &message, w!("경로 오류"), MB_ICONERROR);
             }
             return;

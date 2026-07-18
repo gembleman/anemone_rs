@@ -357,9 +357,9 @@ impl SettingsDialog {
         let temperature = config.translation.llm.temperature;
         self.initialize_trackbar(
             ctrl_id::LLM_TEMPERATURE_TRACKBAR,
-            0,
-            200,
-            (temperature * 100.0).clamp(0.0, 200.0) as i32,
+            crate::config::limits::LLM_TEMPERATURE_SLIDER_MIN,
+            crate::config::limits::LLM_TEMPERATURE_SLIDER_MAX,
+            (crate::config::limits::llm_temperature(temperature) * 100.0) as i32,
         )?;
         self.set_text(ctrl_id::LLM_TEMPERATURE_LABEL, &format!("{temperature:.2}"))?;
         self.set_text(

@@ -1,6 +1,7 @@
 //! Win32 UI와 독립적인 번역 설정 편집 규칙.
 
 use crate::config::TranslationConfig;
+use crate::config::limits;
 use crate::translation::{Language, LlmProvider, TranslationEngine, TranslationJobSpec};
 
 pub enum TranslationSettingChange {
@@ -214,15 +215,15 @@ impl TranslationSettingsEditor {
             }
             TranslationSettingChange::LlmMaxTokensText(value) => {
                 let value = parse_unsigned(&value, "max_tokens")?;
-                set_if_changed(&mut config.llm.max_tokens, value.clamp(1, 32_000))
+                set_if_changed(&mut config.llm.max_tokens, limits::llm_max_tokens(value))
             }
             TranslationSettingChange::LlmDebounceText(value) => {
                 let value = parse_unsigned(&value, "debounce_ms")?;
-                set_if_changed(&mut config.llm.debounce_ms, value.clamp(0, 10_000))
+                set_if_changed(&mut config.llm.debounce_ms, limits::llm_debounce_ms(value))
             }
             TranslationSettingChange::LlmTemperatureSlider(value) => set_if_changed(
                 &mut config.llm.temperature,
-                (value as f32 / 100.0).clamp(0.0, 2.0),
+                limits::llm_temperature_slider(value),
             ),
             TranslationSettingChange::SelectCustomApi(value) => {
                 config.select_custom_api(&value).map_err(|error| {
