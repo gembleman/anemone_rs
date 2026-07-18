@@ -488,13 +488,12 @@ fn run_composition_bench(iters: usize) {
 
     let mut acc = BenchAccumulator::with_capacity(iters);
     for _ in 0..iters {
-        let t0 = acc.timer().now();
+        let started = std::time::Instant::now();
         if let Err(e) = render_frame(0, RenderMode::BenchMatchApp) {
             eprintln!("bench paint failed: {e}");
             return;
         }
-        let t1 = acc.timer().now();
-        acc.push(t1 - t0);
+        acc.push(started.elapsed());
     }
     acc.report("composition_paint");
     eprintln!("--- bench done (see bench_paint.log next to exe) ---");

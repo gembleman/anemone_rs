@@ -29,7 +29,7 @@ use crate::dialogs::BacklogStore;
 use crate::dialogs::helpers::dispatch_resource_dialog_message;
 use crate::hotkey::HotkeyManager;
 use crate::menu::ContextMenu;
-use crate::translation::unregister_translation_hwnd;
+use crate::translation_ui::unregister_translation_hwnd;
 use crate::tray::{self, TrayIcon};
 
 #[cfg(feature = "benchmark")]
@@ -53,7 +53,7 @@ impl Drop for AppCleanupGuard {
                 }
             }
         });
-        crate::translation::shutdown();
+        crate::translation_ui::shutdown();
     }
 }
 

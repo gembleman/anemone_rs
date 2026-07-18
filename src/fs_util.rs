@@ -49,7 +49,10 @@ fn unique_temp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{name}.tmp-{}-{sequence}", std::process::id()))
 }
 
-fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
+/// 같은 볼륨의 임시 파일을 목적지에 원자적으로 덮어쓰고 디스크 반영을 요청한다.
+///
+/// Windows의 기존 파일 overwrite 의미를 보존하기 위한 단일 플랫폼 경계다.
+pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
     use windows::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
     };

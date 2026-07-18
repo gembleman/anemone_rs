@@ -18,6 +18,7 @@ mod menu;
 mod runtime;
 mod settings_model;
 mod translation;
+mod translation_ui;
 mod tray;
 mod util;
 mod window;

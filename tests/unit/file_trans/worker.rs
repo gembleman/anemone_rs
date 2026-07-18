@@ -55,6 +55,25 @@ fn persisted_output_replaces_existing_file() {
 }
 
 #[test]
+fn failed_persist_removes_the_temporary_output() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("occupied");
+    std::fs::create_dir(&output).unwrap();
+
+    let mut pending = PendingOutput::create(&output).unwrap();
+    let temporary = pending.temp_path.clone();
+    pending
+        .writer()
+        .write_all(b"complete but cannot replace")
+        .unwrap();
+
+    assert!(pending.persist().is_err());
+    assert!(!temporary.exists());
+    assert!(output.is_dir());
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+}
+
+#[test]
 fn line_read_error_is_returned_instead_of_skipped() {
     let reader = BufReader::new(Cursor::new(vec![0xFF, b'\n']));
 

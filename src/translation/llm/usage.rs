@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use time::{Date, OffsetDateTime};
 
 /// 일일 호출 수 임계 — 초과 시 경고 한 번. 사용자가 직접 편집해 늘릴 수 있음.
 const DAILY_CALL_WARN_THRESHOLD: u32 = 500;
@@ -53,17 +54,39 @@ fn lock() -> &'static Mutex<UsageFile> {
     })
 }
 
+trait DateProvider {
+    fn today(&self) -> Date;
+}
+
+struct SystemDateProvider;
+
+impl DateProvider for SystemDateProvider {
+    fn today(&self) -> Date {
+        match OffsetDateTime::now_local() {
+            Ok(now) => now.date(),
+            Err(error) => {
+                // 로컬 오프셋을 확인할 수 없는 비정상 환경에서도 사용량 기록은
+                // 중단하지 않는다. 이 경우에만 UTC 날짜로 명시적으로 폴백한다.
+                static WARNED: AtomicBool = AtomicBool::new(false);
+                if !WARNED.swap(true, Ordering::Relaxed) {
+                    tracing::warn!("로컬 날짜 확인 실패, UTC 날짜 사용: {error}");
+                }
+                OffsetDateTime::now_utc().date()
+            }
+        }
+    }
+}
+
 /// 오늘 날짜 키 ("YYYY-MM-DD"). 시스템 로컬 타임 기준 — 자정에 카운터가
 /// 리셋되는 게 사용자 관점에서 자연스럽기 때문.
-fn today_key() -> String {
-    use windows::Win32::System::SystemInformation::GetLocalTime;
-    // SAFETY: GetLocalTime 은 부수효과 없는 Win32 호출. 값만 받음.
-    let st = unsafe { GetLocalTime() };
-    if st.wYear == 0 {
-        // SYSTEMTIME 이 0 인 경우는 사실상 없지만 방어적으로 폴백.
-        return "1970-01-01".to_string();
-    }
-    format!("{:04}-{:02}-{:02}", st.wYear, st.wMonth, st.wDay)
+fn today_key(provider: &impl DateProvider) -> String {
+    let date = provider.today();
+    format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        u8::from(date.month()),
+        date.day()
+    )
 }
 
 fn prune(file: &mut UsageFile) {
@@ -90,36 +113,55 @@ fn save_to_path(file: &UsageFile, path: &std::path::Path) -> Result<(), String> 
     crate::fs_util::atomic_write(path, serialized.as_bytes()).map_err(|error| error.to_string())
 }
 
+struct RecordOutcome {
+    key: String,
+    calls: u32,
+    threshold_crossed: bool,
+}
+
+fn apply_record(
+    file: &mut UsageFile,
+    provider: &impl DateProvider,
+    input_bytes: usize,
+    output_bytes: usize,
+) -> RecordOutcome {
+    let key = today_key(provider);
+    let entry = file.days.entry(key.clone()).or_default();
+    let prev_calls = entry.calls;
+    entry.calls = entry.calls.saturating_add(1);
+    entry.input_bytes = entry.input_bytes.saturating_add(input_bytes as u64);
+    entry.output_bytes = entry.output_bytes.saturating_add(output_bytes as u64);
+    let outcome = RecordOutcome {
+        key,
+        calls: entry.calls,
+        threshold_crossed: prev_calls < DAILY_CALL_WARN_THRESHOLD
+            && entry.calls >= DAILY_CALL_WARN_THRESHOLD,
+    };
+    prune(file);
+    outcome
+}
+
 /// 한 번의 LLM 호출 성공을 기록. 임계 초과 시 한 번만 경고.
 pub fn record(input_bytes: usize, output_bytes: usize) {
-    let key = today_key();
-    let (today_calls, threshold_crossed) = {
+    let outcome = {
         let mut g = match lock().lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        let entry = g.days.entry(key.clone()).or_default();
-        let prev_calls = entry.calls;
-        entry.calls = entry.calls.saturating_add(1);
-        entry.input_bytes = entry.input_bytes.saturating_add(input_bytes as u64);
-        entry.output_bytes = entry.output_bytes.saturating_add(output_bytes as u64);
-        let crossed =
-            prev_calls < DAILY_CALL_WARN_THRESHOLD && entry.calls >= DAILY_CALL_WARN_THRESHOLD;
-        let calls = entry.calls;
-        prune(&mut g);
+        let outcome = apply_record(&mut g, &SystemDateProvider, input_bytes, output_bytes);
         save_locked(&g);
-        (calls, crossed)
+        outcome
     };
 
-    if threshold_crossed {
+    if outcome.threshold_crossed {
         static WARNED: AtomicBool = AtomicBool::new(false);
         if !WARNED.swap(true, Ordering::Relaxed) {
             tracing::warn!(
                 "LLM 일일 호출 수 임계({}) 초과 — 오늘({}) 현재 {} 회. \
                  비용 폭주에 주의. llm_usage.json 확인.",
                 DAILY_CALL_WARN_THRESHOLD,
-                key,
-                today_calls,
+                outcome.key,
+                outcome.calls,
             );
         }
     }
@@ -128,6 +170,56 @@ pub fn record(input_bytes: usize, output_bytes: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FixedDate(Date);
+
+    impl DateProvider for FixedDate {
+        fn today(&self) -> Date {
+            self.0
+        }
+    }
+
+    fn date(year: i32, month: time::Month, day: u8) -> Date {
+        Date::from_calendar_date(year, month, day).unwrap()
+    }
+
+    #[test]
+    fn injected_local_date_changes_the_bucket_at_midnight() {
+        let mut file = UsageFile::default();
+        apply_record(
+            &mut file,
+            &FixedDate(date(2026, time::Month::July, 18)),
+            10,
+            20,
+        );
+        apply_record(
+            &mut file,
+            &FixedDate(date(2026, time::Month::July, 19)),
+            30,
+            40,
+        );
+
+        assert_eq!(file.days["2026-07-18"].calls, 1);
+        assert_eq!(file.days["2026-07-19"].calls, 1);
+        assert_eq!(file.days["2026-07-19"].input_bytes, 30);
+    }
+
+    #[test]
+    fn retention_keeps_the_newest_thirty_injected_dates() {
+        let mut file = UsageFile::default();
+        for day in 1u8..=31 {
+            apply_record(
+                &mut file,
+                &FixedDate(date(2026, time::Month::January, day)),
+                1,
+                1,
+            );
+        }
+
+        assert_eq!(file.days.len(), RETAIN_DAYS);
+        assert!(!file.days.contains_key("2026-01-01"));
+        assert!(file.days.contains_key("2026-01-31"));
+    }
 
     #[test]
     fn usage_file_is_replaced_atomically_with_valid_json() {

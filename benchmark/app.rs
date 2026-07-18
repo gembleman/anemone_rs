@@ -27,7 +27,7 @@ impl App {
 
         let mut acc = bench::BenchAccumulator::with_capacity(iters);
         for _ in 0..iters {
-            let t0 = acc.timer().now();
+            let started = std::time::Instant::now();
             if let Err(e) = self.paint() {
                 tracing::warn!("bench paint failed: {e}");
                 if was_watching {
@@ -35,8 +35,7 @@ impl App {
                 }
                 return;
             }
-            let t1 = acc.timer().now();
-            acc.push(t1 - t0);
+            acc.push(started.elapsed());
         }
         acc.report("paint");
 
@@ -105,7 +104,6 @@ impl App {
         }
 
         let mut phased = bench::PhasedBenchAccumulator::with_capacity(iters);
-        let outer_timer = bench::QpcTimer::new();
         for i in 0..iters {
             // 매 iteration 마다 텍스트 변경 → 캐시 miss 강제.
             // 카운터는 텍스트 끝 ("…#0", "#1", …) 에 붙여 layout box 크기
@@ -114,7 +112,7 @@ impl App {
                 self.state.current_text = format!("{}#{}", orig, i);
             }
             bench::phase_begin();
-            let t0 = outer_timer.now();
+            let started = std::time::Instant::now();
             if let Err(e) = self.paint() {
                 tracing::warn!("bench detailed paint failed: {e}");
                 bench::phase_end(); // 슬롯 비워서 다음 측정 안전
@@ -129,9 +127,8 @@ impl App {
                 }
                 return;
             }
-            let t1 = outer_timer.now();
             if let Some(rec) = bench::phase_end() {
-                phased.push(&rec, t1 - t0);
+                phased.push(&rec, started.elapsed());
             }
         }
         phased.report();

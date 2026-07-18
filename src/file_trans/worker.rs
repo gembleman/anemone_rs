@@ -4,14 +4,10 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use windows::Win32::{
-    Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
-    System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState},
-};
+use windows::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
 
 use super::{FileTransJobData, ProgressEvent, WriteType, validate_job_paths};
 use crate::translation::{
@@ -98,26 +94,7 @@ impl PendingOutput {
         })?;
         drop(writer);
 
-        let source: Vec<u16> = self
-            .temp_path
-            .as_os_str()
-            .encode_wide()
-            .chain(Some(0))
-            .collect();
-        let destination: Vec<u16> = self
-            .final_path
-            .as_os_str()
-            .encode_wide()
-            .chain(Some(0))
-            .collect();
-        unsafe {
-            MoveFileExW(
-                windows::core::PCWSTR(source.as_ptr()),
-                windows::core::PCWSTR(destination.as_ptr()),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
-        }
-        .map_err(|error| {
+        crate::fs_util::atomic_replace(&self.temp_path, &self.final_path).map_err(|error| {
             format!(
                 "완성된 출력 파일을 최종 경로로 옮길 수 없습니다: {}\n{error}",
                 self.final_path.display()

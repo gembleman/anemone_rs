@@ -34,10 +34,8 @@ use crate::clipboard::{ClipboardGuard, OwnedGlobalMemory};
 use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::manual::{ManualOutputFormat, ManualTranslationOptions};
-use crate::translation::{
-    Language, LlmProvider, TranslationEngine, TranslationJobSpec, request_translation,
-    take_response, unregister_translation_hwnd,
-};
+use crate::translation::{Language, LlmProvider, TranslationEngine, TranslationJobSpec};
+use crate::translation_ui::{request_translation, take_response, unregister_translation_hwnd};
 
 // 컨트롤 ID
 mod ctrl_id {

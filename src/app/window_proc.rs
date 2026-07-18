@@ -18,7 +18,7 @@ use crate::constants::{
     MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
     WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
-use crate::translation::unregister_translation_hwnd;
+use crate::translation_ui::unregister_translation_hwnd;
 use crate::window;
 
 #[derive(Clone, Copy)]

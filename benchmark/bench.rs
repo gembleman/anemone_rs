@@ -6,64 +6,23 @@
 //!
 //! `next_steps.md` 1 항 권장 절차에 대응.
 
-use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
-
-/// QueryPerformanceCounter 기반 고해상도 타이머
-pub struct QpcTimer {
-    frequency: i64,
-}
-
-impl QpcTimer {
-    pub fn new() -> Self {
-        let mut freq: i64 = 0;
-        // SAFETY: QueryPerformanceFrequency 는 항상 성공하며 freq 에 cpu tick 빈도를 쓴다.
-        unsafe {
-            let _ = QueryPerformanceFrequency(&mut freq);
-        }
-        Self {
-            frequency: freq.max(1),
-        }
-    }
-
-    #[inline]
-    pub fn now(&self) -> i64 {
-        let mut t: i64 = 0;
-        // SAFETY: out 포인터는 로컬 스택 변수이며 함수는 항상 성공한다.
-        unsafe {
-            let _ = QueryPerformanceCounter(&mut t);
-        }
-        t
-    }
-
-    /// tick 차이를 마이크로초로 변환
-    #[inline]
-    pub fn to_micros(&self, ticks: i64) -> f64 {
-        (ticks as f64) * 1_000_000.0 / (self.frequency as f64)
-    }
-}
+use std::time::{Duration, Instant};
 
 /// 측정 샘플을 모아 통계로 요약한다.
 pub struct BenchAccumulator {
-    samples: Vec<i64>,
-    timer: QpcTimer,
+    samples: Vec<Duration>,
 }
 
 impl BenchAccumulator {
     pub fn with_capacity(n: usize) -> Self {
         Self {
             samples: Vec::with_capacity(n),
-            timer: QpcTimer::new(),
         }
     }
 
     #[inline]
-    pub fn timer(&self) -> &QpcTimer {
-        &self.timer
-    }
-
-    #[inline]
-    pub fn push(&mut self, ticks: i64) {
-        self.samples.push(ticks);
+    pub fn push(&mut self, elapsed: Duration) {
+        self.samples.push(elapsed);
     }
 
     /// 통계 출력 — tracing 으로 로그하고, GUI 서브시스템이라 콘솔이 없어도
@@ -76,20 +35,20 @@ impl BenchAccumulator {
 
         self.samples.sort_unstable();
         let n = self.samples.len();
-        let sum: i64 = self.samples.iter().sum();
         let min = self.samples[0];
         let max = self.samples[n - 1];
         let p50 = self.samples[n / 2];
         let p99 = self.samples[(n * 99 / 100).min(n - 1)];
-        let avg = sum / n as i64;
+        let avg_micros =
+            self.samples.iter().map(Duration::as_secs_f64).sum::<f64>() * 1_000_000.0 / n as f64;
 
         let line = format!(
             "[bench {label}] n={n} avg={:.1}us p50={:.1}us p99={:.1}us min={:.1}us max={:.1}us",
-            self.timer.to_micros(avg),
-            self.timer.to_micros(p50),
-            self.timer.to_micros(p99),
-            self.timer.to_micros(min),
-            self.timer.to_micros(max),
+            avg_micros,
+            p50.as_secs_f64() * 1_000_000.0,
+            p99.as_secs_f64() * 1_000_000.0,
+            min.as_secs_f64() * 1_000_000.0,
+            max.as_secs_f64() * 1_000_000.0,
         );
 
         tracing::info!("{line}");
@@ -140,39 +99,37 @@ pub fn paint_bench_iters() -> Option<usize> {
 /// - `present` — swap chain Present
 /// - `hit_region` — hit-test 사각형 갱신 (`background_visible=false` 시)
 pub struct PhaseRecord {
-    timer: QpcTimer,
-    pub lazy_init: i64,
-    pub swap_chain_wait: i64,
-    pub setup: i64,
-    pub begin_clear: i64,
-    pub border: i64,
-    pub text: i64,
-    pub end_draw: i64,
-    pub present: i64,
-    pub hit_region: i64,
+    pub lazy_init: Duration,
+    pub swap_chain_wait: Duration,
+    pub setup: Duration,
+    pub begin_clear: Duration,
+    pub border: Duration,
+    pub text: Duration,
+    pub end_draw: Duration,
+    pub present: Duration,
+    pub hit_region: Duration,
 }
 
 impl PhaseRecord {
     pub fn new() -> Self {
         Self {
-            timer: QpcTimer::new(),
-            lazy_init: 0,
-            swap_chain_wait: 0,
-            setup: 0,
-            begin_clear: 0,
-            border: 0,
-            text: 0,
-            end_draw: 0,
-            present: 0,
-            hit_region: 0,
+            lazy_init: Duration::ZERO,
+            swap_chain_wait: Duration::ZERO,
+            setup: Duration::ZERO,
+            begin_clear: Duration::ZERO,
+            border: Duration::ZERO,
+            text: Duration::ZERO,
+            end_draw: Duration::ZERO,
+            present: Duration::ZERO,
+            hit_region: Duration::ZERO,
         }
     }
 
-    /// 직전 `now()` 시점으로부터 경과 tick 을 phase 필드에 누적.
+    /// 직전 시점으로부터 경과 시간을 phase 필드에 누적.
     #[inline]
-    pub fn add(&mut self, field: PhaseField, since: i64) -> i64 {
-        let t = self.timer.now();
-        let delta = t - since;
+    pub fn add(&mut self, field: PhaseField, since: Instant) -> Instant {
+        let now = Instant::now();
+        let delta = now.duration_since(since);
         match field {
             PhaseField::LazyInit => self.lazy_init += delta,
             PhaseField::SwapChainWait => self.swap_chain_wait += delta,
@@ -184,12 +141,7 @@ impl PhaseRecord {
             PhaseField::Present => self.present += delta,
             PhaseField::HitRegion => self.hit_region += delta,
         }
-        t
-    }
-
-    #[inline]
-    pub fn timer(&self) -> &QpcTimer {
-        &self.timer
+        now
     }
 }
 
@@ -235,23 +187,23 @@ pub fn phase_end() -> Option<PhaseRecord> {
 /// let _ = phase_record(PhaseField::BeginClear, t0);
 /// ```
 #[inline]
-pub fn phase_now() -> i64 {
+pub fn phase_now() -> Option<Instant> {
     PHASE_RECORDER.with(|cell| {
         let borrow = cell.borrow();
         match borrow.as_ref() {
-            Some(rec) => rec.timer().now(),
-            None => 0,
+            Some(_) => Some(Instant::now()),
+            None => None,
         }
     })
 }
 
 #[inline]
-pub fn phase_record(field: PhaseField, since: i64) -> i64 {
+pub fn phase_record(field: PhaseField, since: Option<Instant>) -> Option<Instant> {
     PHASE_RECORDER.with(|cell| {
         let mut borrow = cell.borrow_mut();
-        match borrow.as_mut() {
-            Some(rec) => rec.add(field, since),
-            None => 0,
+        match (borrow.as_mut(), since) {
+            (Some(rec), Some(since)) => Some(rec.add(field, since)),
+            _ => None,
         }
     })
 }
@@ -287,7 +239,7 @@ impl PhasedBenchAccumulator {
         }
     }
 
-    pub fn push(&mut self, rec: &PhaseRecord, total_ticks: i64) {
+    pub fn push(&mut self, rec: &PhaseRecord, total: Duration) {
         self.lazy_init.push(rec.lazy_init);
         self.swap_chain_wait.push(rec.swap_chain_wait);
         self.setup.push(rec.setup);
@@ -297,7 +249,7 @@ impl PhasedBenchAccumulator {
         self.end_draw.push(rec.end_draw);
         self.present.push(rec.present);
         self.hit_region.push(rec.hit_region);
-        self.total.push(total_ticks);
+        self.total.push(total);
     }
 
     pub fn report(&mut self) {

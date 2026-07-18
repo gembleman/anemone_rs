@@ -25,8 +25,6 @@ features = [
     "Win32_UI_Accessibility",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
-    "Win32_System_Performance",
-    "Win32_System_SystemInformation",
     "Win32_System_Power",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Com",
@@ -47,9 +45,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.1"
 windows-numerics = "0.3"
+# `windows::core::implement`의 COM 코드 생성물이 `::windows_core`를 참조한다.
 windows-core = "0.62"
 eztrans-rs = { git = "https://github.com/gembleman/eztrans-rs.git", rev = "bf67b8935bed7ff7701319c782eb8645f7ae415d" }
 isolang = { version = "2.4" }
+time = { version = "0.3", default-features = false, features = ["local-offset"] }
 
 # Error handling & logging
 thiserror = "2.0"

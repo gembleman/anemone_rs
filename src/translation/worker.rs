@@ -1,34 +1,26 @@
 //! 번역 디스패치 (프로세스 단일 워커)
 //!
 //! 별도 스레드에서 tokio 런타임을 실행하여 async 번역을 수행한다.
-//! UI 스레드를 블로킹하지 않고 Windows 메시지로 결과를 전달한다.
+//! UI 스레드를 블로킹하지 않고 주입된 완료 알림 어댑터로 결과를 전달한다.
 //!
 //! 구조:
 //! - 프로세스 전역에 워커 스레드/tokio 런타임이 하나만 존재한다.
-//! - 런타임의 명령 루프는 hwnd별 task를 관리한다. 같은 hwnd의 새 요청은 이전
-//!   future를 abort하고 서로 다른 hwnd는 동시에 실행한다.
-//! - 호출자(메인 윈도우, 번역 다이얼로그 등)는 `translate(hwnd, …)` 헬퍼
-//!   (또는 `dispatch().request(hwnd, …)`) 로 자신의 hwnd 를 함께 전달한다.
-//! - 워커는 응답 도착 시 hwnd 별 원자 슬롯(`latest_snapshot`)으로 stale 을 거른 뒤
-//!   그 hwnd 에만 `WM_TRANSLATION_COMPLETE` 를 PostMessage 한다. WPARAM 은 `req_id` 다.
-//! - 호출자는 메시지 수신 시 `take_response(req_id)` 로 본인 응답만 꺼낸다.
-//! - 다이얼로그가 닫힐 때는 `unregister_hwnd(hwnd)` 로 라우팅/대기 응답을 청소한다.
+//! - 런타임의 명령 루프는 대상별 task를 관리한다. 같은 대상의 새 요청은 이전
+//!   future를 abort하고 서로 다른 대상은 동시에 실행한다.
+//! - 워커는 응답 도착 시 대상별 원자 슬롯으로 stale 응답을 거른 뒤 notifier를 깨운다.
+//! - UI 핸들 및 네이티브 메시지 게시 방식은 이 모듈 밖의 어댑터가 소유한다.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::constants::MAX_RESPONSE_STORAGE;
 use thiserror::Error;
 use tokio::sync::{Semaphore, watch};
-use windows::Win32::Foundation::HWND;
-use windows::Win32::Foundation::{LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-
-use crate::constants::{MAX_RESPONSE_STORAGE, WM_TRANSLATION_COMPLETE};
 
 use super::llm::{LlmCallParams, LlmProvider};
 use super::{Language, TranslationEngine, TranslationError, TranslationResult};
@@ -119,17 +111,36 @@ pub struct TranslationResponse {
     pub result: TranslationResult,
 }
 
-/// 큐에 실린 작업 (요청 + 라우팅 대상 hwnd_raw)
+/// 번역 완료 이벤트가 돌아갈 불투명 대상 ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TargetId(usize);
+
+impl TargetId {
+    pub(crate) const fn new(raw: usize) -> Self {
+        Self(raw)
+    }
+
+    pub(crate) const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// 완료 이벤트를 UI 또는 다른 소비자에게 전달하는 플랫폼 독립 경계.
+pub(crate) trait CompletionNotifier: Send + Sync {
+    fn notify(&self, target: TargetId, request_id: u64) -> Result<(), String>;
+}
+
+/// 큐에 실린 작업 (요청 + 라우팅 대상)
 struct DispatchJob {
-    hwnd_raw: usize,
+    target: TargetId,
     req: TranslationRequest,
     route: Arc<RouteSlot>,
     cancellation: watch::Receiver<u64>,
 }
 
-/// HWND 값 재사용과 요청 취소를 함께 처리하는 등록 세대.
-/// unregister 후 같은 raw HWND가 다시 등록되면 새로운 `Arc<RouteSlot>`이 생기므로
-/// 이전 창의 작업은 새 창에 결과를 전달할 수 없다.
+/// 대상 ID 재사용과 요청 취소를 함께 처리하는 등록 세대.
+/// unregister 후 같은 ID가 다시 등록되면 새로운 `Arc<RouteSlot>`이 생기므로
+/// 이전 소비자의 작업은 새 소비자에 결과를 전달할 수 없다.
 struct RouteSlot {
     latest_id: Arc<AtomicU64>,
     cancellation: watch::Sender<u64>,
@@ -169,7 +180,7 @@ struct DispatchState {
 
 struct PendingEntry {
     req_id: u64,
-    hwnd_raw: usize,
+    target: TargetId,
     response: TranslationResponse,
 }
 
@@ -205,56 +216,57 @@ impl DispatchState {
         self.pending.remove(idx).map(|e| e.response)
     }
 
-    #[cfg(not(test))]
     fn drop_response(&mut self, req_id: u64) {
         self.pending.retain(|entry| entry.req_id != req_id);
     }
 
-    fn drop_hwnd(&mut self, hwnd_raw: usize) {
-        self.pending.retain(|e| e.hwnd_raw != hwnd_raw);
+    fn drop_target(&mut self, target: TargetId) {
+        self.pending.retain(|entry| entry.target != target);
     }
 }
 
 /// 디스패치와 워커가 공유하는 상태.
 ///
-/// `OnceLock::get_or_init` 초기화 중 워커 스레드가 다시 `dispatch()` 를 호출하면
-/// 재진입 대기 위험이 있으므로, 워커에 필요한 상태는 `Arc` 로 직접 넘긴다.
 struct DispatchShared {
     state: Mutex<DispatchState>,
-    /// raw HWND별 현재 등록 세대. map 잠금은 응답 저장/PostMessage와 unregister를
+    /// 대상별 현재 등록 세대. map 잠금은 응답 저장/완료 통지와 unregister를
     /// 원자화하는 장벽으로도 사용한다.
     routes: Mutex<HashMap<usize, Arc<RouteSlot>>>,
+    notifier: Arc<dyn CompletionNotifier>,
 }
 
 impl DispatchShared {
-    fn new() -> Self {
+    fn new(notifier: Arc<dyn CompletionNotifier>) -> Self {
         Self {
             state: Mutex::new(DispatchState::new()),
             routes: Mutex::new(HashMap::new()),
+            notifier,
         }
     }
 
-    fn route(&self, hwnd_raw: usize) -> Arc<RouteSlot> {
+    fn route(&self, target: TargetId) -> Arc<RouteSlot> {
         let mut routes = self.routes.lock().expect("routes poisoned");
         routes
-            .entry(hwnd_raw)
+            .entry(target.get())
             .or_insert_with(|| Arc::new(RouteSlot::new()))
             .clone()
     }
 
     #[cfg(test)]
-    fn latest_atomic_lookup(&self, hwnd_raw: usize) -> Option<Arc<AtomicU64>> {
+    fn latest_atomic_lookup(&self, target: TargetId) -> Option<Arc<AtomicU64>> {
         let routes = self.routes.lock().expect("routes poisoned");
-        routes.get(&hwnd_raw).map(|route| route.latest_id.clone())
+        routes
+            .get(&target.get())
+            .map(|route| route.latest_id.clone())
     }
 
-    fn unregister(&self, hwnd_raw: usize) {
+    fn unregister(&self, target: TargetId) {
         let mut routes = self.routes.lock().expect("routes poisoned");
-        if let Some(route) = routes.remove(&hwnd_raw) {
+        if let Some(route) = routes.remove(&target.get()) {
             route.cancel();
         }
         let mut state = self.state.lock().expect("dispatch state poisoned");
-        state.drop_hwnd(hwnd_raw);
+        state.drop_target(target);
     }
 }
 
@@ -268,43 +280,10 @@ pub struct TranslationDispatch {
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
-static DISPATCH: OnceLock<TranslationDispatch> = OnceLock::new();
-
-/// 전역 디스패치 가져오기 (첫 호출 시 워커 스레드 spawn)
-pub fn dispatch() -> &'static TranslationDispatch {
-    DISPATCH.get_or_init(TranslationDispatch::spawn)
-}
-
-/// 응답 꺼내기 (수신측 핸들러용 단축 함수)
-pub fn take_response(req_id: u64) -> Option<TranslationResponse> {
-    dispatch().take_response(req_id)
-}
-
-/// 호출자가 사라질 때 라우팅/응답 정리
-pub fn unregister_hwnd(hwnd: HWND) {
-    dispatch().unregister_hwnd(hwnd);
-}
-
-/// 창은 유지하되 현재 요청과 아직 수거하지 않은 응답만 취소한다.
-pub fn cancel(hwnd: HWND) {
-    dispatch().cancel(hwnd);
-}
-
-/// 프로세스 종료 직전 호출. 워커 스레드를 정상 종료시켜 detached 백그라운드
-/// 스레드가 남지 않도록 한다.
-///
-/// 디스패치가 한 번도 사용되지 않은 경우 (`OnceLock` 미초기화) 에는 아무
-/// 작업도 하지 않는다.
-pub fn shutdown() {
-    if let Some(d) = DISPATCH.get() {
-        d.shutdown();
-    }
-}
-
 impl TranslationDispatch {
-    fn spawn() -> Self {
+    pub(crate) fn spawn(notifier: Arc<dyn CompletionNotifier>) -> Self {
         let (tx, rx) = mpsc::channel::<DispatchJob>();
-        let shared = Arc::new(DispatchShared::new());
+        let shared = Arc::new(DispatchShared::new(notifier));
         let worker_shared = shared.clone();
 
         // shutdown() 이 join 할 수 있도록 핸들 보관.
@@ -324,7 +303,7 @@ impl TranslationDispatch {
     /// 모든 sender가 drop되면 async 명령 루프가 모든 in-flight task를 abort하고
     /// join한 뒤 종료한다. 외부 join은 2초를 상한으로 하며, abort할 수 없는
     /// EzTrans spawn_blocking도 runtime shutdown timeout으로 제한한다.
-    fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         // 1. sender drop → 명령 루프가 채널 종료를 받고 모든 task abort/drain.
         {
             let mut s = self.sender.lock().expect("dispatch sender poisoned");
@@ -353,19 +332,18 @@ impl TranslationDispatch {
     }
 
     /// 번역 요청 송신. ID 를 즉시 반환하여 호출자가 응답 매칭에 사용할 수 있다.
-    pub fn request(
+    pub(crate) fn request(
         &self,
-        hwnd: HWND,
+        target: TargetId,
         mut req: TranslationRequest,
     ) -> Result<u64, TranslationRequestError> {
-        let hwnd_raw = hwnd.0 as usize;
         let id = {
             let mut st = self.shared.state.lock().expect("dispatch state poisoned");
             st.assign_id()
         };
         req.id = id;
 
-        let route = self.shared.route(hwnd_raw);
+        let route = self.shared.route(target);
         let cancellation = route.set_latest(id);
 
         // shutdown 이 진행됐다면 sender 가 None — 조용히 폐기.
@@ -373,7 +351,7 @@ impl TranslationDispatch {
             let s = self.sender.lock().expect("dispatch sender poisoned");
             match s.as_ref() {
                 Some(tx) => tx.send(DispatchJob {
-                    hwnd_raw,
+                    target,
                     req,
                     route: route.clone(),
                     cancellation,
@@ -406,19 +384,18 @@ impl TranslationDispatch {
     }
 
     /// 호출자(메인 윈도우 / 다이얼로그)가 자기 응답을 꺼낸다
-    pub fn take_response(&self, req_id: u64) -> Option<TranslationResponse> {
+    pub(crate) fn take_response(&self, req_id: u64) -> Option<TranslationResponse> {
         let mut st = self.shared.state.lock().expect("dispatch state poisoned");
         st.take_response(req_id)
     }
 
-    /// 다이얼로그가 닫히는 등 hwnd 가 사라질 때 호출
-    pub fn unregister_hwnd(&self, hwnd: HWND) {
-        let hwnd_raw = hwnd.0 as usize;
-        self.shared.unregister(hwnd_raw);
+    /// 소비자가 사라질 때 라우팅과 대기 응답을 함께 정리한다.
+    pub(crate) fn unregister(&self, target: TargetId) {
+        self.shared.unregister(target);
     }
 
-    pub fn cancel(&self, hwnd: HWND) {
-        self.shared.unregister(hwnd.0 as usize);
+    pub(crate) fn cancel(&self, target: TargetId) {
+        self.shared.unregister(target);
     }
 
     /// 워커 스레드 진입점
@@ -465,7 +442,7 @@ impl TranslationDispatch {
         http_limit: Arc<Semaphore>,
     ) {
         let DispatchJob {
-            hwnd_raw,
+            target,
             req,
             route,
             mut cancellation,
@@ -491,7 +468,7 @@ impl TranslationDispatch {
             }
         };
 
-        Self::route_response(&shared, hwnd_raw, &route, req.id, result);
+        Self::route_response(&shared, target, &route, req.id, result);
     }
 
     async fn wait_until_superseded(cancellation: &mut watch::Receiver<u64>, req_id: u64) {
@@ -507,16 +484,16 @@ impl TranslationDispatch {
 
     fn route_response(
         shared: &DispatchShared,
-        hwnd_raw: usize,
+        target: TargetId,
         route: &Arc<RouteSlot>,
         req_id: u64,
         result: TranslationResult,
     ) {
         // 이 잠금은 unregister와 동일한 장벽이다. 현재 등록 세대와 최신 요청을
-        // 확인한 상태에서 응답 저장과 PostMessage를 끝내므로 TOCTOU 구간이 없다.
+        // 확인한 상태에서 응답 저장과 완료 통지를 끝내므로 TOCTOU 구간이 없다.
         let routes = shared.routes.lock().expect("routes poisoned");
-        let Some(current) = routes.get(&hwnd_raw) else {
-            tracing::debug!("응답 #{} 폐기 (대상 HWND 등록 해제)", req_id);
+        let Some(current) = routes.get(&target.get()) else {
+            tracing::debug!("응답 #{} 폐기 (대상 등록 해제)", req_id);
             return;
         };
         if !Arc::ptr_eq(current, route) || route.latest_id.load(Ordering::Acquire) != req_id {
@@ -528,29 +505,15 @@ impl TranslationDispatch {
             let mut state = shared.state.lock().expect("dispatch state poisoned");
             state.push_response(PendingEntry {
                 req_id,
-                hwnd_raw,
+                target,
                 response: TranslationResponse { result },
             });
         }
 
-        // SAFETY: routes 잠금으로 unregister와 창 파괴 진입을 직렬화했고, current가
-        // 작업이 시작된 등록 세대와 같음을 확인했다. PostMessageW는 스레드 안전하다.
-        let posted = unsafe {
-            let hwnd = HWND(hwnd_raw as *mut std::ffi::c_void);
-            PostMessageW(
-                Some(hwnd),
-                WM_TRANSLATION_COMPLETE,
-                WPARAM(req_id as usize),
-                LPARAM(0),
-            )
-        };
-        if let Err(error) = posted {
-            #[cfg(not(test))]
-            {
-                let mut state = shared.state.lock().expect("dispatch state poisoned");
-                state.drop_response(req_id);
-            }
-            tracing::warn!("번역 완료 메시지 게시 실패 (#{}): {}", req_id, error);
+        if let Err(error) = shared.notifier.notify(target, req_id) {
+            let mut state = shared.state.lock().expect("dispatch state poisoned");
+            state.drop_response(req_id);
+            tracing::warn!("번역 완료 통지 실패 (#{}): {}", req_id, error);
         }
         drop(routes);
     }
@@ -801,32 +764,6 @@ impl TranslationDispatch {
             }
         }
     }
-}
-
-/// 호출자 측 간편 헬퍼: 가장 흔한 패턴(번역 요청 한 줄로 보내기)을 한 함수로.
-///
-/// `text` 는 호출자가 이미 가지고 있는 `String` 을 그대로 받아 내부에서
-/// `Arc<str>` 로 한 번 옮긴다 (`Arc::<str>::from(String)` 은 buffer 재사용 —
-/// 추가 alloc 없음). 이후 큐/워커/엔진 호출 경로는 모두 share-by-refcount.
-pub fn translate(
-    hwnd: HWND,
-    text: String,
-    engine: TranslationEngine,
-    source_lang: Language,
-    target_lang: Language,
-    credentials: EngineCredentials,
-) -> Result<u64, TranslationRequestError> {
-    dispatch().request(
-        hwnd,
-        TranslationRequest {
-            id: 0, // dispatch 에서 할당
-            text: Arc::from(text),
-            engine,
-            source_lang,
-            target_lang,
-            credentials,
-        },
-    )
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use super::{App, state};
 use crate::dialogs::{LogEntry, add_to_backlog};
-use crate::translation::{TranslationEngine, request_translation, take_response};
+use crate::translation::TranslationEngine;
+use crate::translation_ui::{request_translation, take_response};
 
 fn debounce_delay_ms(engine: TranslationEngine, configured_ms: u32) -> u32 {
     if engine == TranslationEngine::Llm {
@@ -103,7 +104,7 @@ impl App {
         }
         self.state.clipboard_debounce.clear();
         self.state.pending_translation = None;
-        crate::translation::cancel_translation(self.hwnd);
+        crate::translation_ui::cancel_translation(self.hwnd);
     }
 
     /// 비동기 번역 요청

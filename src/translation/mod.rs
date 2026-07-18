@@ -8,7 +8,7 @@
 //!
 //! 비동기 번역 지원:
 //! - `worker::TranslationDispatch`: 프로세스 단일 워커 스레드 + tokio 런타임
-//! - 호출자별 hwnd 라우팅. Windows 메시지로 결과 전달 (UI 블로킹 없음)
+//! - 호출자별 불투명 대상 라우팅. 완료 통지 방식은 UI 어댑터가 제공
 
 pub mod deepl;
 mod eztrans;
@@ -24,10 +24,7 @@ pub mod worker;
 pub use eztrans::EzTransTranslator;
 pub use job::TranslationJobSpec;
 pub use llm::LlmProvider;
-pub use worker::{
-    EngineCredentials, cancel as cancel_translation, shutdown, take_response,
-    translate as request_translation, unregister_hwnd as unregister_translation_hwnd,
-};
+pub use worker::EngineCredentials;
 
 use std::path::Path;
 use std::sync::{OnceLock, mpsc};
