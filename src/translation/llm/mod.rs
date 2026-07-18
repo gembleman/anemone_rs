@@ -10,9 +10,7 @@ pub mod gemini;
 pub mod openai_compat;
 pub mod usage;
 
-use isolang::Language;
-
-use super::lang_utils;
+use super::{EnumParseError, Language, lang_utils};
 
 /// LLM 제공자
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -26,25 +24,14 @@ pub enum LlmProvider {
 }
 
 impl LlmProvider {
-    pub fn from_u8(value: u8) -> Self {
+    pub fn from_u8(value: u8) -> Option<Self> {
         match value {
-            0 => Self::OpenAi,
-            1 => Self::Anthropic,
-            2 => Self::Gemini,
-            3 => Self::Grok,
-            4 => Self::OpenRouter,
-            _ => Self::OpenAi,
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "openai" => Self::OpenAi,
-            "anthropic" | "claude" => Self::Anthropic,
-            "gemini" | "google_ai" => Self::Gemini,
-            "grok" | "xai" => Self::Grok,
-            "openrouter" => Self::OpenRouter,
-            _ => Self::OpenAi,
+            0 => Some(Self::OpenAi),
+            1 => Some(Self::Anthropic),
+            2 => Some(Self::Gemini),
+            3 => Some(Self::Grok),
+            4 => Some(Self::OpenRouter),
+            _ => None,
         }
     }
 
@@ -101,6 +88,21 @@ impl LlmProvider {
     ];
 }
 
+impl std::str::FromStr for LlmProvider {
+    type Err = EnumParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "openai" => Ok(Self::OpenAi),
+            "anthropic" | "claude" => Ok(Self::Anthropic),
+            "gemini" | "google_ai" => Ok(Self::Gemini),
+            "grok" | "xai" => Ok(Self::Grok),
+            "openrouter" => Ok(Self::OpenRouter),
+            _ => Err(EnumParseError::new("LLM 제공자", value)),
+        }
+    }
+}
+
 /// 글로서리 한 항목 (캐릭터 이름/고유명사 고정 번역)
 #[derive(Clone, Debug, Default)]
 pub struct GlossaryEntry {
@@ -141,6 +143,14 @@ impl LlmCallParams {
             trimmed
         }
     }
+
+    pub fn effective_system_prompt(&self) -> &str {
+        if self.system_prompt.trim().is_empty() {
+            DEFAULT_SYSTEM_PROMPT
+        } else {
+            self.system_prompt.as_str()
+        }
+    }
 }
 
 /// 시스템 프롬프트의 `{source}` / `{target}` 치환 + 글로서리 부착
@@ -150,6 +160,11 @@ pub fn build_system_prompt_with_glossary(
     target: Language,
     glossary: &[GlossaryEntry],
 ) -> String {
+    let template = if template.trim().is_empty() {
+        DEFAULT_SYSTEM_PROMPT
+    } else {
+        template
+    };
     let mut s = template
         .replace("{source}", lang_utils::to_korean_name(source))
         .replace("{target}", lang_utils::to_korean_name(target));
@@ -171,3 +186,7 @@ pub fn build_system_prompt_with_glossary(
 
 /// 기본 시스템 프롬프트 — 사용자가 비워두면 이 값을 사용한다
 pub const DEFAULT_SYSTEM_PROMPT: &str = "당신은 게임/소설 텍스트 번역기입니다. {source}를 {target}로 번역하세요.\n- 캐릭터 이름과 고유명사는 자연스럽게 음차하거나 유지하세요.\n- 한국 사용자에게 자연스러운 어투를 사용하세요.\n- 의역을 허용합니다.\n- 번역 결과 텍스트만 출력하세요. 설명·접두어·따옴표 없이.";
+
+#[cfg(test)]
+#[path = "../../../tests/unit/translation/llm/mod.rs"]
+mod tests;

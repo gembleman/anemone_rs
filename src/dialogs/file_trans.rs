@@ -311,21 +311,37 @@ impl FileTransDialog {
         use crate::translation::lang_utils::to_korean_name;
         let (engine_name, source, target) = {
             let config = self.config.borrow();
-            let engine = config.translation.get_engine();
+            let engine = match config.translation.get_engine() {
+                Ok(engine) => engine,
+                Err(error) => {
+                    let _ = set_window_text(self.engine_label, &format!("번역 설정 오류: {error}"));
+                    return;
+                }
+            };
             let engine_name: String = match engine {
                 TranslationEngine::EzTrans => "EzTrans".into(),
                 TranslationEngine::Google => "Google".into(),
                 TranslationEngine::DeepL => "DeepL".into(),
                 TranslationEngine::Papago => "Papago".into(),
-                TranslationEngine::Llm => {
-                    format!(
-                        "LLM: {}",
-                        config.translation.llm.get_provider().display_name()
-                    )
+                TranslationEngine::Llm => match config.translation.llm.get_provider() {
+                    Ok(provider) => format!("LLM: {}", provider.display_name()),
+                    Err(error) => format!("LLM 설정 오류: {error}"),
+                },
+            };
+            let source = match config.translation.get_source_language() {
+                Ok(language) => to_korean_name(language),
+                Err(error) => {
+                    let _ = set_window_text(self.engine_label, &format!("번역 설정 오류: {error}"));
+                    return;
                 }
             };
-            let source = to_korean_name(config.translation.get_source_language());
-            let target = to_korean_name(config.translation.get_target_language());
+            let target = match config.translation.get_target_language() {
+                Ok(language) => to_korean_name(language),
+                Err(error) => {
+                    let _ = set_window_text(self.engine_label, &format!("번역 설정 오류: {error}"));
+                    return;
+                }
+            };
             (engine_name, source, target)
         };
         let text = format!(

@@ -173,6 +173,7 @@ impl App {
                 composition: None,
                 composition_init_failures: 0,
                 composition_retry_scheduled: false,
+                pending_clipboard_translation: None,
                 hit_region: Vec::new(),
             }));
 

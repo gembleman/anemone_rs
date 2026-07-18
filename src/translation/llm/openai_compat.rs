@@ -3,10 +3,8 @@
 //! OpenAI / xAI Grok / OpenRouter 가 동일한 `POST {base}/chat/completions` 형식을 공유한다.
 //! 본 모듈은 이 셋을 한 번에 처리한다.
 
-use isolang::Language;
-
 use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
-use super::super::{TranslationError, TranslationResult};
+use super::super::{Language, TranslationError, TranslationResult};
 use super::{LlmCallParams, LlmProvider, build_system_prompt_with_glossary};
 
 /// OpenAI 호환 chat completions 요청
@@ -23,8 +21,12 @@ pub async fn translate_async_with_client(
         return Err(TranslationError::MissingApiKey);
     }
 
-    let system =
-        build_system_prompt_with_glossary(&params.system_prompt, source, target, &params.glossary);
+    let system = build_system_prompt_with_glossary(
+        params.effective_system_prompt(),
+        source,
+        target,
+        &params.glossary,
+    );
     let payload = serde_json::json!({
         "model": params.effective_model(),
         "messages": [
@@ -76,17 +78,9 @@ fn parse_chat_completion(json: &str) -> TranslationResult {
         // finish_reason == "length" 는 max_tokens 한계로 응답이 절단됐다는 뜻.
         // 사용자에게 명시적으로 알려야 짤린 번역을 그대로 쓰는 사고를 막을 수 있다.
         if finish_reason == "length" {
-            return Err(TranslationError::Api {
-                code: 0,
-                message: format!(
-                    "LLM 응답이 max_tokens 한계로 절단됨 (finish_reason=length). 부분 결과: {}",
-                    if trimmed.chars().count() > 80 {
-                        let head: String = trimmed.chars().take(80).collect();
-                        format!("{head}...")
-                    } else {
-                        trimmed.clone()
-                    }
-                ),
+            return Err(TranslationError::OutputTruncated {
+                provider: "OpenAI 호환 API",
+                reason: "finish_reason=length".to_string(),
             });
         }
         if !trimmed.is_empty() {
@@ -103,6 +97,7 @@ fn parse_chat_completion(json: &str) -> TranslationResult {
         return Err(TranslationError::Api {
             code: 0,
             message: format!("LLM 응답 거부됨: {refusal}"),
+            retry_after: None,
         });
     }
 
@@ -117,7 +112,11 @@ fn parse_chat_completion(json: &str) -> TranslationResult {
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(0);
-        return Err(TranslationError::Api { code, message });
+        return Err(TranslationError::Api {
+            code,
+            message,
+            retry_after: None,
+        });
     }
 
     // finish_reason 이 비-STOP 인데 텍스트도 없으면 그 사실을 그대로 전달.
@@ -125,6 +124,7 @@ fn parse_chat_completion(json: &str) -> TranslationResult {
         return Err(TranslationError::Api {
             code: 0,
             message: format!("LLM 응답에 텍스트 없음 (finish_reason={finish_reason})"),
+            retry_after: None,
         });
     }
 

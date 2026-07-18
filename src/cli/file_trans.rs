@@ -50,7 +50,7 @@ pub(super) fn run(args: Args) -> Result<(), String> {
     } = args;
 
     let config = Config::load_or_default();
-    let engine = resolve_engine(engine, &config);
+    let engine = resolve_engine(engine, &config)?;
     let (source_lang, target_lang) = resolve_languages(&source, &target, &config)?;
 
     let spec = TranslationJobSpec::with_engine_languages(

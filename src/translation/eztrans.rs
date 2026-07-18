@@ -2,19 +2,13 @@
 //!
 //! eztrans-rs 라이브러리를 사용하여 일본어-한국어 번역 수행
 
-use super::{TranslationError, TranslationResult};
+use super::{Language, TranslationError, TranslationResult};
 use eztrans_rs::EzTransEngine;
-use isolang::Language;
-use std::sync::Mutex;
 
 /// EzTrans 번역기
 pub struct EzTransTranslator {
-    engine: Mutex<EzTransEngine>,
+    engine: EzTransEngine,
 }
-
-// Mutex로 감싸서 Send + Sync 구현
-unsafe impl Send for EzTransTranslator {}
-unsafe impl Sync for EzTransTranslator {}
 
 impl EzTransTranslator {
     /// 새 EzTrans 번역기 생성
@@ -31,9 +25,7 @@ impl EzTransTranslator {
             .initialize_ex("CSUSER123455", dat_path)
             .map_err(|e| format!("초기화 실패: {:?}", e))?;
 
-        Ok(Self {
-            engine: Mutex::new(engine),
-        })
+        Ok(Self { engine })
     }
 
     /// 일본어→한국어 번역 수행. 다른 언어 쌍은 `UnsupportedLanguagePair`.
@@ -42,12 +34,7 @@ impl EzTransTranslator {
             return Err(TranslationError::UnsupportedLanguagePair);
         }
 
-        let engine = self
-            .engine
-            .lock()
-            .map_err(|e| TranslationError::Engine(format!("엔진 잠금 실패: {}", e)))?;
-
-        engine
+        self.engine
             .default_translate(text)
             .map_err(|e| TranslationError::Engine(format!("번역 실패: {:?}", e)))
     }

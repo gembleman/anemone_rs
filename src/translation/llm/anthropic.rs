@@ -5,10 +5,8 @@
 //! - 시스템 프롬프트: `messages` 밖의 별도 `system` 필드
 //! - 응답: `content[0].text`
 
-use isolang::Language;
-
 use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
-use super::super::{TranslationError, TranslationResult};
+use super::super::{Language, TranslationError, TranslationResult};
 use super::{LlmCallParams, build_system_prompt_with_glossary};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -26,8 +24,12 @@ pub async fn translate_async_with_client(
         return Err(TranslationError::MissingApiKey);
     }
 
-    let system =
-        build_system_prompt_with_glossary(&params.system_prompt, source, target, &params.glossary);
+    let system = build_system_prompt_with_glossary(
+        params.effective_system_prompt(),
+        source,
+        target,
+        &params.glossary,
+    );
     // 프롬프트 캐싱: 게임 번역처럼 같은 시스템 프롬프트로 연속 호출하는 시나리오에서
     // 비용/지연을 줄임. cache_control: ephemeral 은 5분 TTL. 시스템 프롬프트가
     // 짧으면(< ~1024 토큰) 캐시 미스만 발생하고 무해. 글로서리가 길어질수록 이득 큼.
@@ -63,6 +65,23 @@ fn parse_messages_response(json: &str) -> TranslationResult {
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|e| TranslationError::Parse(e.to_string()))?;
 
+    let stop_reason = value.get("stop_reason").and_then(|v| v.as_str());
+    if stop_reason == Some("max_tokens") {
+        return Err(TranslationError::OutputTruncated {
+            provider: "Anthropic",
+            reason: "stop_reason=max_tokens".to_string(),
+        });
+    }
+    if let Some(reason) = stop_reason
+        && !matches!(reason, "end_turn" | "stop_sequence")
+    {
+        return Err(TranslationError::Api {
+            code: 0,
+            message: format!("Anthropic 응답 중단: {reason}"),
+            retry_after: None,
+        });
+    }
+
     if let Some(arr) = value.get("content").and_then(|v| v.as_array()) {
         let mut out = String::new();
         for block in arr {
@@ -91,10 +110,18 @@ fn parse_messages_response(json: &str) -> TranslationResult {
             "api_error" => 500,
             _ => 0,
         };
-        return Err(TranslationError::Api { code, message });
+        return Err(TranslationError::Api {
+            code,
+            message,
+            retry_after: None,
+        });
     }
 
     Err(TranslationError::Parse(
         "Anthropic 응답에서 번역 결과를 찾을 수 없습니다.".to_string(),
     ))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/translation/llm/anthropic.rs"]
+mod tests;

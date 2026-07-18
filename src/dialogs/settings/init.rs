@@ -115,7 +115,12 @@ impl SettingsDialog {
         }
 
         self.adjust_dialog_size_for_tab(TAB_APPEARANCE);
-        let engine = self.config.borrow().translation.get_engine();
+        let engine = self
+            .config
+            .borrow()
+            .translation
+            .get_engine()
+            .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
         self.apply_engine_state(engine);
         Ok(())
     }
@@ -243,7 +248,10 @@ impl SettingsDialog {
         self.initialize_combo(
             ctrl_id::TRANS_ENGINE,
             &["EzTrans", "Google", "DeepL", "Papago", "LLM"],
-            config.translation.engine_as_u8() as usize,
+            config
+                .translation
+                .engine_as_u8()
+                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))? as usize,
         )?;
         self.set_text(
             ctrl_id::EZTRANS_DLL_EDIT,
@@ -294,7 +302,12 @@ impl SettingsDialog {
         self.initialize_combo(
             ctrl_id::LLM_PROVIDER,
             &providers,
-            config.translation.llm.get_provider() as u8 as usize,
+            config
+                .translation
+                .llm
+                .get_provider()
+                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))? as u8
+                as usize,
         )?;
         self.set_text(ctrl_id::LLM_MODEL_EDIT, &config.translation.llm.model)?;
         self.set_text(ctrl_id::LLM_API_KEY_EDIT, &config.translation.llm.api_key)?;

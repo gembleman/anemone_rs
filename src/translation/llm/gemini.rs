@@ -4,10 +4,8 @@
 //! - 페이로드: `system_instruction` + `contents` + `generationConfig`
 //! - 응답: `candidates[0].content.parts[*].text`
 
-use isolang::Language;
-
 use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
-use super::super::{TranslationError, TranslationResult};
+use super::super::{Language, TranslationError, TranslationResult};
 use super::{LlmCallParams, build_system_prompt_with_glossary};
 
 pub async fn translate_async_with_client(
@@ -23,8 +21,12 @@ pub async fn translate_async_with_client(
         return Err(TranslationError::MissingApiKey);
     }
 
-    let system =
-        build_system_prompt_with_glossary(&params.system_prompt, source, target, &params.glossary);
+    let system = build_system_prompt_with_glossary(
+        params.effective_system_prompt(),
+        source,
+        target,
+        &params.glossary,
+    );
     let payload = serde_json::json!({
         "system_instruction": { "parts": [{ "text": system }] },
         "contents": [
@@ -61,6 +63,25 @@ fn parse_generate_content_response(json: &str) -> TranslationResult {
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|e| TranslationError::Parse(e.to_string()))?;
 
+    let finish_reason = value
+        .pointer("/candidates/0/finishReason")
+        .and_then(|v| v.as_str());
+    if finish_reason == Some("MAX_TOKENS") {
+        return Err(TranslationError::OutputTruncated {
+            provider: "Gemini",
+            reason: "finishReason=MAX_TOKENS".to_string(),
+        });
+    }
+    if let Some(reason) = finish_reason
+        && reason != "STOP"
+    {
+        return Err(TranslationError::Api {
+            code: 0,
+            message: format!("Gemini 응답 중단: {reason}"),
+            retry_after: None,
+        });
+    }
+
     if let Some(parts) = value
         .pointer("/candidates/0/content/parts")
         .and_then(|v| v.as_array())
@@ -76,18 +97,6 @@ fn parse_generate_content_response(json: &str) -> TranslationResult {
         }
     }
 
-    // 안전 필터로 차단된 경우
-    if let Some(reason) = value
-        .pointer("/candidates/0/finishReason")
-        .and_then(|v| v.as_str())
-        && reason != "STOP"
-    {
-        return Err(TranslationError::Api {
-            code: 0,
-            message: format!("Gemini 응답 중단: {}", reason),
-        });
-    }
-
     if let Some(err) = value.get("error") {
         let message = err
             .get("message")
@@ -95,10 +104,18 @@ fn parse_generate_content_response(json: &str) -> TranslationResult {
             .unwrap_or("Gemini 응답 에러")
             .to_string();
         let code = err.get("code").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-        return Err(TranslationError::Api { code, message });
+        return Err(TranslationError::Api {
+            code,
+            message,
+            retry_after: None,
+        });
     }
 
     Err(TranslationError::Parse(
         "Gemini 응답에서 번역 결과를 찾을 수 없습니다.".to_string(),
     ))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/translation/llm/gemini.rs"]
+mod tests;

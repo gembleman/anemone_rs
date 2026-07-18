@@ -33,6 +33,7 @@ const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
 const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
 const WINDOW_TITLE: PCWSTR = w!("아네모네");
 pub(super) const COMPOSITION_RETRY_TIMER: usize = 0xD2D0;
+pub(super) const CLIPBOARD_TRANSLATION_TIMER: usize = 0xD2D1;
 
 pub struct App {
     hwnd: HWND,
@@ -55,6 +56,8 @@ pub struct App {
     /// 반복하지 않도록 timer 기반 backoff를 적용한다.
     composition_init_failures: u32,
     composition_retry_scheduled: bool,
+    /// LLM 자동 번역 디바운스 동안 보관하는 최신 클립보드 원문.
+    pending_clipboard_translation: Option<String>,
     /// 텍스트가 차지하는 라인 단위 사각형 (클라이언트 좌표).
     ///
     /// 비어 있으면 `WM_NCHITTEST` 가 윈도우 사각 전체를 `HTCAPTION` 으로

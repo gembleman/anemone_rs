@@ -13,7 +13,10 @@ pub struct LlmGlossaryEntry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LlmConfig {
     /// 제공자: "openai", "anthropic", "gemini", "grok", "openrouter"
-    #[serde(default = "default_llm_provider")]
+    #[serde(
+        default = "default_llm_provider",
+        deserialize_with = "deserialize_llm_provider"
+    )]
     pub provider: String,
     /// 모델 ID (비우면 제공자 기본값 사용)
     #[serde(default)]
@@ -44,6 +47,18 @@ pub struct LlmConfig {
 
 fn default_llm_provider() -> String {
     "openai".to_string()
+}
+
+fn deserialize_llm_provider<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = String::deserialize(deserializer)?;
+    value
+        .parse::<crate::translation::LlmProvider>()
+        .map_err(D::Error::custom)?;
+    Ok(value)
 }
 
 fn default_llm_system_prompt() -> String {
@@ -79,8 +94,10 @@ impl Default for LlmConfig {
 }
 
 impl LlmConfig {
-    pub fn get_provider(&self) -> crate::translation::LlmProvider {
-        crate::translation::LlmProvider::from_str(&self.provider)
+    pub fn get_provider(
+        &self,
+    ) -> Result<crate::translation::LlmProvider, crate::translation::EnumParseError> {
+        self.provider.parse()
     }
 
     pub fn set_provider(&mut self, provider: crate::translation::LlmProvider) {
@@ -88,9 +105,11 @@ impl LlmConfig {
     }
 
     /// 워커에 전달할 호출 파라미터 빌드
-    pub fn to_call_params(&self) -> crate::translation::llm::LlmCallParams {
-        crate::translation::llm::LlmCallParams {
-            provider: self.get_provider(),
+    pub fn to_call_params(
+        &self,
+    ) -> Result<crate::translation::llm::LlmCallParams, crate::translation::EnumParseError> {
+        Ok(crate::translation::llm::LlmCallParams {
+            provider: self.get_provider()?,
             model: self.model.clone(),
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
@@ -105,6 +124,6 @@ impl LlmConfig {
                     target: e.target.clone(),
                 })
                 .collect(),
-        }
+        })
     }
 }

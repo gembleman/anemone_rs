@@ -2,7 +2,7 @@
 
 use crate::config::TranslationConfig;
 use crate::translation::worker::EngineCredentials;
-use crate::translation::{Language, TranslationEngine, get_eztrans_manager};
+use crate::translation::{Language, TranslationEngine, prepare_eztrans};
 
 /// 비밀 자격증명을 포함할 수 있는 실행 사양. 의도적으로 `Debug`를 구현하지 않는다.
 #[derive(Clone)]
@@ -17,12 +17,16 @@ pub struct TranslationJobSpec {
 
 impl TranslationJobSpec {
     pub fn from_config(config: &TranslationConfig) -> Result<Self, TranslationConfigError> {
-        Self::with_engine_languages(
-            config,
-            config.get_engine(),
-            config.get_source_language(),
-            config.get_target_language(),
-        )
+        let engine = config
+            .get_engine()
+            .map_err(|error| TranslationConfigError::InvalidSetting(error.to_string()))?;
+        let source = config
+            .get_source_language()
+            .map_err(|error| TranslationConfigError::InvalidSetting(error.to_string()))?;
+        let target = config
+            .get_target_language()
+            .map_err(|error| TranslationConfigError::InvalidSetting(error.to_string()))?;
+        Self::with_engine_languages(config, engine, source, target)
     }
 
     /// CLI 등의 명시적 엔진/언어 재정의도 동일한 자격증명 구성 규칙을 사용한다.
@@ -32,45 +36,46 @@ impl TranslationJobSpec {
         source_lang: Language,
         target_lang: Language,
     ) -> Result<Self, TranslationConfigError> {
-        if !engine.supported_source_languages().contains(&source_lang)
-            || !engine.supported_target_languages().contains(&target_lang)
-        {
+        if !engine.supports_pair(source_lang, target_lang) {
             return Err(TranslationConfigError::UnsupportedLanguagePair {
                 engine: engine.to_str(),
             });
         }
-        let credentials = match engine {
-            TranslationEngine::EzTrans | TranslationEngine::Google => EngineCredentials::None,
-            TranslationEngine::DeepL => {
-                let keys = config.deepl_effective_keys();
-                if keys.is_empty() {
-                    return Err(TranslationConfigError::MissingCredential("DeepL API 키"));
+        let credentials =
+            match engine {
+                TranslationEngine::EzTrans | TranslationEngine::Google => EngineCredentials::None,
+                TranslationEngine::DeepL => {
+                    let keys = config.deepl_effective_keys();
+                    if keys.is_empty() {
+                        return Err(TranslationConfigError::MissingCredential("DeepL API 키"));
+                    }
+                    EngineCredentials::DeepL {
+                        keys,
+                        strategy: config.deepl_strategy(),
+                    }
                 }
-                EngineCredentials::DeepL {
-                    keys,
-                    strategy: config.deepl_strategy(),
+                TranslationEngine::Papago => {
+                    if config.papago_client_id.trim().is_empty()
+                        || config.papago_client_secret.trim().is_empty()
+                    {
+                        return Err(TranslationConfigError::MissingCredential(
+                            "Papago client_id/client_secret",
+                        ));
+                    }
+                    EngineCredentials::Papago {
+                        client_id: config.papago_client_id.clone(),
+                        client_secret: config.papago_client_secret.clone(),
+                    }
                 }
-            }
-            TranslationEngine::Papago => {
-                if config.papago_client_id.trim().is_empty()
-                    || config.papago_client_secret.trim().is_empty()
-                {
-                    return Err(TranslationConfigError::MissingCredential(
-                        "Papago client_id/client_secret",
-                    ));
+                TranslationEngine::Llm => {
+                    if config.llm.api_key.trim().is_empty() {
+                        return Err(TranslationConfigError::MissingCredential("LLM API 키"));
+                    }
+                    EngineCredentials::Llm(config.llm.to_call_params().map_err(|error| {
+                        TranslationConfigError::InvalidSetting(error.to_string())
+                    })?)
                 }
-                EngineCredentials::Papago {
-                    client_id: config.papago_client_id.clone(),
-                    client_secret: config.papago_client_secret.clone(),
-                }
-            }
-            TranslationEngine::Llm => {
-                if config.llm.api_key.trim().is_empty() {
-                    return Err(TranslationConfigError::MissingCredential("LLM API 키"));
-                }
-                EngineCredentials::Llm(config.llm.to_call_params())
-            }
-        };
+            };
         if engine == TranslationEngine::EzTrans
             && (config.eztrans_dll_path.trim().is_empty()
                 || config.eztrans_dat_path.trim().is_empty())
@@ -92,12 +97,7 @@ impl TranslationJobSpec {
         if self.engine != TranslationEngine::EzTrans {
             return Ok(());
         }
-        let manager = get_eztrans_manager();
-        let mut manager = manager
-            .lock()
-            .map_err(|_| TranslationPrepareError::ManagerLock)?;
-        manager
-            .init(&self.eztrans_dll_path, &self.eztrans_dat_path)
+        prepare_eztrans(&self.eztrans_dll_path, &self.eztrans_dat_path)
             .map_err(TranslationPrepareError::EzTransInitialization)
     }
 
@@ -123,12 +123,12 @@ pub enum TranslationConfigError {
     MissingEzTransPath,
     #[error("{engine} 엔진은 선택한 언어 조합을 지원하지 않습니다.")]
     UnsupportedLanguagePair { engine: &'static str },
+    #[error("잘못된 번역 설정: {0}")]
+    InvalidSetting(String),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum TranslationPrepareError {
-    #[error("EzTrans 매니저 잠금 실패")]
-    ManagerLock,
     #[error("EzTrans 초기화 실패: {0}")]
     EzTransInitialization(String),
 }

@@ -43,3 +43,17 @@ fn out_of_range_toml_is_normalized_at_deserialize_boundary() {
         assert_eq!(style.font_style, 3);
     }
 }
+
+#[test]
+fn invalid_translation_values_are_rejected_instead_of_defaulted() {
+    for mutate in [
+        |config: &mut Config| config.translation.engine = "typo-engine".into(),
+        |config: &mut Config| config.translation.source_lang = "not-a-language".into(),
+        |config: &mut Config| config.translation.llm.provider = "typo-provider".into(),
+    ] {
+        let mut raw = Config::default();
+        mutate(&mut raw);
+        let text = toml::to_string(&raw).expect("serialize invalid test config");
+        assert!(Config::from_toml_str(&text).is_err(), "config: {text}");
+    }
+}

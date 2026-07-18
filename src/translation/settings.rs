@@ -43,6 +43,8 @@ pub enum TranslationSettingsError {
     UnsupportedTargetLanguage,
     #[error("{engine:?} 엔진에 지원 언어가 없습니다.")]
     NoSupportedLanguage { engine: TranslationEngine },
+    #[error("현재 번역 설정이 잘못되었습니다: {0}")]
+    InvalidCurrentConfig(String),
 }
 
 pub struct TranslationSettingsEditor;
@@ -76,27 +78,66 @@ impl TranslationSettingsEditor {
                     value.supported_target_languages(),
                     value,
                 )?;
+                let source = crate::translation::lang_utils::from_code(&config.source_lang)
+                    .ok_or_else(|| {
+                        TranslationSettingsError::InvalidCurrentConfig(
+                            "소스 언어를 해석할 수 없습니다".into(),
+                        )
+                    })?;
+                let target = crate::translation::lang_utils::from_code(&config.target_lang)
+                    .ok_or_else(|| {
+                        TranslationSettingsError::InvalidCurrentConfig(
+                            "대상 언어를 해석할 수 없습니다".into(),
+                        )
+                    })?;
+                if !value.supports_pair(source, target) {
+                    let replacement = value
+                        .supported_targets_for(source)
+                        .into_iter()
+                        .next()
+                        .ok_or(TranslationSettingsError::NoSupportedLanguage { engine: value })?;
+                    changed |= set_if_changed(
+                        &mut config.target_lang,
+                        crate::translation::lang_utils::to_code(replacement).to_string(),
+                    );
+                }
                 changed
             }
             TranslationSettingChange::SourceLanguage(value) => {
-                if !config
-                    .get_engine()
-                    .supported_source_languages()
-                    .contains(&value)
-                {
+                let engine = config.get_engine().map_err(|error| {
+                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
+                })?;
+                if !engine.supported_source_languages().contains(&value) {
                     return Err(TranslationSettingsError::UnsupportedSourceLanguage);
                 }
-                set_if_changed(
+                let mut changed = set_if_changed(
                     &mut config.source_lang,
                     crate::translation::lang_utils::to_code(value).to_string(),
-                )
+                );
+                let target = config.get_target_language().map_err(|error| {
+                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
+                })?;
+                if !engine.supports_pair(value, target) {
+                    let replacement = engine
+                        .supported_targets_for(value)
+                        .into_iter()
+                        .next()
+                        .ok_or(TranslationSettingsError::NoSupportedLanguage { engine })?;
+                    changed |= set_if_changed(
+                        &mut config.target_lang,
+                        crate::translation::lang_utils::to_code(replacement).to_string(),
+                    );
+                }
+                changed
             }
             TranslationSettingChange::TargetLanguage(value) => {
-                if !config
-                    .get_engine()
-                    .supported_target_languages()
-                    .contains(&value)
-                {
+                let engine = config.get_engine().map_err(|error| {
+                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
+                })?;
+                let source = config.get_source_language().map_err(|error| {
+                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
+                })?;
+                if !engine.supports_pair(source, value) {
                     return Err(TranslationSettingsError::UnsupportedTargetLanguage);
                 }
                 set_if_changed(
@@ -105,7 +146,9 @@ impl TranslationSettingsEditor {
                 )
             }
             TranslationSettingChange::LlmProvider(value) => {
-                let before = config.llm.get_provider();
+                let before = config.llm.get_provider().map_err(|error| {
+                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
+                })?;
                 config.llm.set_provider(value);
                 before != value
             }
@@ -184,7 +227,7 @@ impl TranslationSettingsEditor {
 
     /// 선택된 EzTrans 설정이 완전할 때만 런타임 초기화를 시도한다.
     pub fn sync_runtime(config: &TranslationConfig) -> Result<(), String> {
-        if config.get_engine() != TranslationEngine::EzTrans
+        if config.get_engine().map_err(|error| error.to_string())? != TranslationEngine::EzTrans
             || config.eztrans_dll_path.trim().is_empty()
             || config.eztrans_dat_path.trim().is_empty()
         {

@@ -442,7 +442,9 @@ impl SettingsDialog {
             match id {
                 TRANS_ENGINE => {
                     use crate::translation::TranslationEngine;
-                    let engine = TranslationEngine::from_u8(sel as u8);
+                    let Some(engine) = TranslationEngine::from_u8(sel as u8) else {
+                        return;
+                    };
                     if self
                         .apply_translation_change(TranslationSettingChange::Engine(engine))
                         .is_err()
@@ -453,16 +455,28 @@ impl SettingsDialog {
                     self.apply_engine_state(engine);
                 }
                 TRANS_SOURCE_LANG => {
-                    let engine = self.config.borrow().translation.get_engine();
-                    if let Some(&language) = engine.supported_source_languages().get(sel) {
-                        let _ = self.apply_translation_change(
-                            TranslationSettingChange::SourceLanguage(language),
-                        );
+                    let Ok(engine) = self.config.borrow().translation.get_engine() else {
+                        return;
+                    };
+                    if let Some(&language) = engine.supported_source_languages().get(sel)
+                        && self
+                            .apply_translation_change(TranslationSettingChange::SourceLanguage(
+                                language,
+                            ))
+                            .is_ok()
+                    {
+                        self.refresh_language_combos(engine);
                     }
                 }
                 TRANS_TARGET_LANG => {
-                    let engine = self.config.borrow().translation.get_engine();
-                    if let Some(&language) = engine.supported_target_languages().get(sel) {
+                    let Ok(engine) = self.config.borrow().translation.get_engine() else {
+                        return;
+                    };
+                    let Ok(source) = self.config.borrow().translation.get_source_language() else {
+                        return;
+                    };
+                    let targets = engine.supported_targets_for(source);
+                    if let Some(&language) = targets.get(sel) {
                         let _ = self.apply_translation_change(
                             TranslationSettingChange::TargetLanguage(language),
                         );
@@ -470,7 +484,9 @@ impl SettingsDialog {
                 }
                 LLM_PROVIDER => {
                     use crate::translation::LlmProvider;
-                    let provider = LlmProvider::from_u8(sel as u8);
+                    let Some(provider) = LlmProvider::from_u8(sel as u8) else {
+                        return;
+                    };
                     let _ = self
                         .apply_translation_change(TranslationSettingChange::LlmProvider(provider));
                 }
