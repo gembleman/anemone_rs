@@ -6,7 +6,7 @@ pub mod openai_compat;
 pub mod usage;
 
 use super::{EnumParseError, Language, lang_utils};
-use secrecy::SecretString;
+use std::fmt;
 
 /// LLM 제공자
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -107,11 +107,11 @@ pub struct GlossaryEntry {
 }
 
 /// LLM 호출 시 사용할 파라미터 묶음
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LlmCallParams {
     pub provider: LlmProvider,
     pub model: String,
-    pub api_key: SecretString,
+    pub api_key: String,
     /// 비어 있으면 `provider.default_base_url()` 사용
     pub base_url: String,
     /// `{source}`, `{target}` 플레이스홀더가 치환됨
@@ -120,6 +120,22 @@ pub struct LlmCallParams {
     pub max_tokens: u32,
     /// 고정 번역 사전 (캐릭터 이름 등). 비어 있으면 프롬프트에 추가되지 않음.
     pub glossary: Vec<GlossaryEntry>,
+}
+
+impl fmt::Debug for LlmCallParams {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LlmCallParams")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("api_key", &"[REDACTED]")
+            .field("base_url", &self.base_url)
+            .field("system_prompt", &self.system_prompt)
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("glossary", &self.glossary)
+            .finish()
+    }
 }
 
 impl LlmCallParams {

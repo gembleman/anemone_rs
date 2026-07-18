@@ -5,7 +5,6 @@
 use super::Language;
 use super::http_common::{send_and_read_body, validate_not_empty};
 use super::{TranslationError, TranslationResult, lang_utils};
-use secrecy::{ExposeSecret, SecretString};
 
 /// 공유 Client를 받는 비동기 번역 함수
 pub async fn translate_async_with_client(
@@ -13,10 +12,9 @@ pub async fn translate_async_with_client(
     text: &str,
     source: Language,
     target: Language,
-    api_key: &SecretString,
+    api_key: &str,
 ) -> TranslationResult {
     validate_not_empty(text)?;
-    let api_key = api_key.expose_secret();
 
     if api_key.is_empty() {
         return Err(TranslationError::MissingApiKey);

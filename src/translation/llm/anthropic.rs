@@ -8,7 +8,6 @@
 use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
 use super::super::{Language, TranslationError, TranslationResult};
 use super::{LlmCallParams, build_system_prompt_with_glossary};
-use secrecy::ExposeSecret;
 use serde::Serialize;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -84,7 +83,7 @@ pub async fn translate_async_with_client(
 ) -> TranslationResult {
     validate_not_empty(text)?;
 
-    if params.api_key.expose_secret().is_empty() {
+    if params.api_key.is_empty() {
         return Err(TranslationError::MissingApiKey);
     }
 
@@ -103,7 +102,7 @@ pub async fn translate_async_with_client(
     let response = client
         .post(&url)
         .timeout(LLM_REQUEST_TIMEOUT)
-        .header("x-api-key", params.api_key.expose_secret())
+        .header("x-api-key", &params.api_key)
         .header("anthropic-version", ANTHROPIC_VERSION)
         .header("content-type", "application/json")
         .json(&payload)

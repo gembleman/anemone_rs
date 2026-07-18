@@ -111,7 +111,7 @@ impl LlmConfig {
         Ok(crate::translation::llm::LlmCallParams {
             provider: self.get_provider()?,
             model: self.model.clone(),
-            api_key: secrecy::SecretString::from(self.api_key.clone()),
+            api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
             system_prompt: self.system_prompt.clone(),
             temperature: self.temperature,

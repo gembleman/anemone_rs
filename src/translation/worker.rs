@@ -12,7 +12,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::constants::MAX_RESPONSE_STORAGE;
-use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 use tokio::sync::{Semaphore, watch};
 
@@ -44,13 +43,13 @@ pub enum EngineCredentials {
     None,
     /// DeepL API 키. `keys`는 최소 1개; `strategy`에 따라 폴백/순회.
     DeepL {
-        keys: Vec<SecretString>,
+        keys: Vec<String>,
         strategy: DeepLStrategy,
     },
     /// Ncloud Papago Application 인증 키 쌍
     Papago {
-        client_id: SecretString,
-        client_secret: SecretString,
+        client_id: String,
+        client_secret: String,
     },
     /// LLM 호출 파라미터 일체 (제공자/모델/키/프롬프트/샘플링)
     Llm(LlmCallParams),
@@ -527,10 +526,10 @@ impl TranslationDispatch {
         text: &str,
         source: Language,
         target: Language,
-        keys: &[SecretString],
+        keys: &[String],
         strategy: DeepLStrategy,
     ) -> TranslationResult {
-        if keys.is_empty() || keys.iter().all(|key| key.expose_secret().is_empty()) {
+        if keys.is_empty() || keys.iter().all(String::is_empty) {
             return Err(TranslationError::MissingApiKey);
         }
 
@@ -548,7 +547,7 @@ impl TranslationDispatch {
         for offset in 0..keys.len() {
             let idx = (start + offset) % keys.len();
             let key = &keys[idx];
-            if key.expose_secret().is_empty() {
+            if key.is_empty() {
                 continue;
             }
             match super::deepl::translate_async_with_client(client, text, source, target, key).await
@@ -693,7 +692,7 @@ impl TranslationDispatch {
                 .await
             }
             TranslationEngine::Papago => {
-                let empty = SecretString::default();
+                let empty = String::new();
                 let (client_id, client_secret) = match &req.credentials {
                     EngineCredentials::Papago {
                         client_id,

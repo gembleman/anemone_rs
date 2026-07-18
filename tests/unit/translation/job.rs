@@ -1,6 +1,5 @@
 use super::*;
 use crate::translation::TranslationError;
-use secrecy::ExposeSecret;
 
 #[test]
 fn rejects_missing_credentials_without_exposing_values() {
@@ -50,7 +49,7 @@ fn builds_deepl_credentials_from_the_effective_key_list() {
     assert_eq!(spec.engine(), TranslationEngine::DeepL);
     assert!(
         matches!(spec.credentials(), EngineCredentials::DeepL { keys, .. }
-            if keys.iter().map(|key| key.expose_secret()).eq(["first", "second"]))
+            if keys == ["first", "second"])
     );
 }
 
