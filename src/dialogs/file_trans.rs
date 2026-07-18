@@ -30,7 +30,6 @@ use crate::file_trans::{
     FileTransJobData, FileTransRunner, WriteType, default_output_paths, validate_job_paths,
 };
 use crate::translation::{TranslationEngine, TranslationJobSpec};
-use crate::util::to_wide;
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -393,13 +392,8 @@ impl FileTransDialog {
             Err(error) => {
                 self.input_files.clear();
                 unsafe {
-                    let message = to_wide(&error);
-                    let _ = MessageBoxW(
-                        Some(self.hwnd),
-                        PCWSTR(message.as_ptr()),
-                        w!("경로 오류"),
-                        MB_ICONERROR,
-                    );
+                    let message = HSTRING::from(error);
+                    let _ = MessageBoxW(Some(self.hwnd), &message, w!("경로 오류"), MB_ICONERROR);
                 }
                 return;
             }
@@ -474,14 +468,9 @@ impl FileTransDialog {
 
     fn show_file_dialog_error(&self, error: &windows::core::Error) {
         tracing::error!("파일 대화상자 오류: {error}");
-        let message = to_wide(&format!("파일 대화상자를 열 수 없습니다.\n{error}"));
+        let message = HSTRING::from(format!("파일 대화상자를 열 수 없습니다.\n{error}"));
         unsafe {
-            let _ = MessageBoxW(
-                Some(self.hwnd),
-                PCWSTR(message.as_ptr()),
-                w!("오류"),
-                MB_ICONERROR,
-            );
+            let _ = MessageBoxW(Some(self.hwnd), &message, w!("오류"), MB_ICONERROR);
         }
     }
 
@@ -509,13 +498,8 @@ impl FileTransDialog {
 
         if let Err(error) = validate_job_paths(&self.input_files, &self.output_files) {
             unsafe {
-                let message = to_wide(&error);
-                let _ = MessageBoxW(
-                    Some(self.hwnd),
-                    PCWSTR(message.as_ptr()),
-                    w!("경로 오류"),
-                    MB_ICONERROR,
-                );
+                let message = HSTRING::from(error);
+                let _ = MessageBoxW(Some(self.hwnd), &message, w!("경로 오류"), MB_ICONERROR);
             }
             return;
         }
@@ -528,10 +512,10 @@ impl FileTransDialog {
             Ok(spec) => spec,
             Err(error) => {
                 unsafe {
-                    let message = to_wide(&error.to_string());
+                    let message = HSTRING::from(error.to_string());
                     let _ = MessageBoxW(
                         Some(self.hwnd),
-                        PCWSTR(message.as_ptr()),
+                        &message,
                         w!("번역 설정 오류"),
                         MB_ICONERROR,
                     );

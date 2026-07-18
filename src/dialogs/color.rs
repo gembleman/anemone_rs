@@ -12,7 +12,6 @@ use windows::{
 };
 
 use crate::constants::{COLOR_BLUE_EDIT, COLOR_GREEN_EDIT, COLOR_RED_EDIT, TBM_GETPOS_VAL};
-use crate::util::to_wide;
 
 // 알파 채널 컨트롤 ID
 const IDC_ALPHA_TRACKBAR: u16 = 10001;
@@ -307,10 +306,8 @@ impl ColorDialog {
                     );
 
                     // 에디트 초기값
-                    let alpha_str = to_wide(&format!("{}", initial_alpha));
-                    if let Err(e) =
-                        SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, PCWSTR(alpha_str.as_ptr()))
-                    {
+                    let alpha = HSTRING::from(initial_alpha.to_string());
+                    if let Err(e) = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &alpha) {
                         tracing::warn!("SetDlgItemTextW failed: {e}");
                     }
 
@@ -376,9 +373,8 @@ impl ColorDialog {
                     };
 
                     // 에디트 업데이트
-                    let alpha_str = to_wide(&format!("{}", alpha));
-                    let _ =
-                        SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, PCWSTR(alpha_str.as_ptr()));
+                    let alpha_text = HSTRING::from(alpha.to_string());
+                    let _ = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &alpha_text);
 
                     // 컨텍스트에 알파값 저장
                     HOOK_CONTEXT.with(|ctx| {
@@ -425,12 +421,8 @@ impl ColorDialog {
                                 }
                             });
                             if notification == EN_KILLFOCUS && value != alpha {
-                                let value = to_wide(&alpha.to_string());
-                                let _ = SetDlgItemTextW(
-                                    hdlg,
-                                    IDC_ALPHA_EDIT as i32,
-                                    PCWSTR(value.as_ptr()),
-                                );
+                                let value = HSTRING::from(alpha.to_string());
+                                let _ = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &value);
                             }
                         }
                     }

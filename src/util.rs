@@ -6,7 +6,7 @@ use std::path::Path;
 
 /// UTF-8 문자열을 null-terminated UTF-16 `Vec<u16>`로 변환한다.
 ///
-/// Win32 API에 문자열을 전달할 때 사용.
+/// raw 포인터, mutable 버퍼 또는 고정 길이 배열을 요구하는 Win32 경계에 사용.
 pub fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }

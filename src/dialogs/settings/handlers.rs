@@ -626,8 +626,7 @@ impl SettingsDialog {
             if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32)
                 && !ctrl.is_invalid()
             {
-                let text_wide = to_wide(text);
-                let _ = SetWindowTextW(ctrl, PCWSTR(text_wide.as_ptr()));
+                let _ = SetWindowTextW(ctrl, &HSTRING::from(text));
             }
         }
     }
@@ -650,14 +649,9 @@ impl SettingsDialog {
 
     fn show_file_dialog_error(&self, error: &windows::core::Error) {
         tracing::error!("설정 파일 대화상자 오류: {error}");
-        let message = to_wide(&format!("파일 대화상자를 열 수 없습니다.\n{error}"));
+        let message = HSTRING::from(format!("파일 대화상자를 열 수 없습니다.\n{error}"));
         unsafe {
-            let _ = MessageBoxW(
-                Some(self.hwnd),
-                PCWSTR(message.as_ptr()),
-                w!("오류"),
-                MB_ICONERROR,
-            );
+            let _ = MessageBoxW(Some(self.hwnd), &message, w!("오류"), MB_ICONERROR);
         }
     }
 

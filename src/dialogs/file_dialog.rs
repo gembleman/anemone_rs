@@ -10,7 +10,7 @@ use windows::Win32::UI::Shell::{
     FOS_PICKFOLDERS, FileOpenDialog, FileSaveDialog, IFileOpenDialog, IFileSaveDialog, IShellItem,
     SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
 };
-use windows::core::{HRESULT, PCWSTR, Result};
+use windows::core::{HRESULT, HSTRING, PCWSTR, Result};
 
 use crate::util::to_wide;
 
@@ -74,8 +74,7 @@ pub fn open_file(hwnd: HWND, title: &str, filters: &[FileFilter]) -> Result<Opti
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
 
         if !title.is_empty() {
-            let title_w = to_wide(title);
-            dialog.SetTitle(PCWSTR(title_w.as_ptr()))?;
+            dialog.SetTitle(&HSTRING::from(title))?;
         }
 
         let storage = build_filters(filters);
@@ -105,8 +104,7 @@ pub fn open_files_multi(
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
 
         if !title.is_empty() {
-            let title_w = to_wide(title);
-            dialog.SetTitle(PCWSTR(title_w.as_ptr()))?;
+            dialog.SetTitle(&HSTRING::from(title))?;
         }
 
         let storage = build_filters(filters);
@@ -140,8 +138,7 @@ pub fn pick_folder(hwnd: HWND, title: &str) -> Result<Option<PathBuf>> {
         dialog.SetOptions(FOS_PICKFOLDERS)?;
 
         if !title.is_empty() {
-            let title_w = to_wide(title);
-            dialog.SetTitle(PCWSTR(title_w.as_ptr()))?;
+            dialog.SetTitle(&HSTRING::from(title))?;
         }
 
         if !show_was_accepted(dialog.Show(Some(hwnd)))? {
@@ -166,8 +163,7 @@ pub fn save_file(
         let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)?;
 
         if !title.is_empty() {
-            let title_w = to_wide(title);
-            dialog.SetTitle(PCWSTR(title_w.as_ptr()))?;
+            dialog.SetTitle(&HSTRING::from(title))?;
         }
 
         let storage = build_filters(filters);
@@ -176,21 +172,17 @@ pub fn save_file(
         }
 
         if let Some(ext) = default_ext {
-            let ext_w = to_wide(ext);
-            dialog.SetDefaultExtension(PCWSTR(ext_w.as_ptr()))?;
+            dialog.SetDefaultExtension(&HSTRING::from(ext))?;
         }
 
         if let Some(path) = initial {
             if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                let name_w = to_wide(name);
-                dialog.SetFileName(PCWSTR(name_w.as_ptr()))?;
+                dialog.SetFileName(&HSTRING::from(name))?;
             }
             if let Some(folder) = path.parent().and_then(|s| s.to_str())
                 && !folder.is_empty()
             {
-                let folder_w = to_wide(folder);
-                let item: IShellItem =
-                    SHCreateItemFromParsingName(PCWSTR(folder_w.as_ptr()), None)?;
+                let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(folder), None)?;
                 dialog.SetFolder(&item)?;
             }
         }
