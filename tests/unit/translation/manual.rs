@@ -1,15 +1,15 @@
 use super::*;
 
 #[test]
-fn prepare_input_normalizes_crlf_and_standalone_lf() {
+fn prepare_input_normalizes_all_common_line_endings() {
     let options = ManualTranslationOptions {
         remove_linefeeds: true,
         ..ManualTranslationOptions::default()
     };
 
     assert_eq!(
-        options.prepare_input("첫째\r\n둘째\n셋째"),
-        "첫째 둘째 셋째"
+        options.prepare_input("첫째\r\n둘째\n셋째\r넷째"),
+        "첫째 둘째 셋째 넷째"
     );
 }
 

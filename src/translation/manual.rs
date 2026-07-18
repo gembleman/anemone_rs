@@ -17,7 +17,7 @@ pub enum ManualOutputFormat {
 impl ManualTranslationOptions {
     pub fn prepare_input(&self, source: &str) -> String {
         if self.remove_linefeeds {
-            source.replace("\r\n", " ").replace('\n', " ")
+            source.replace("\r\n", " ").replace(['\r', '\n'], " ")
         } else {
             source.to_string()
         }
