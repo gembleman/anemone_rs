@@ -165,13 +165,5 @@ impl Drop for ContextMenu {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn popup_returns_commands_without_notifying_owner() {
-        let flags = popup_flags().0;
-        assert_ne!(flags & TPM_RETURNCMD.0, 0);
-        assert_ne!(flags & TPM_NONOTIFY.0, 0);
-    }
-}
+#[path = "../tests/unit/menu.rs"]
+mod tests;
