@@ -175,3 +175,16 @@ fn identical_engine_language_and_string_changes_have_no_follow_up_policy() {
         );
     }
 }
+
+#[test]
+fn custom_api_fields_are_applied_without_runtime_reinitialization() {
+    let mut config = TranslationConfig::default();
+    let result = TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::CustomRequestTemplate(r#"{"q":"{text}"}"#.into()),
+    )
+    .unwrap();
+    assert_eq!(config.custom.request_template, r#"{"q":"{text}"}"#);
+    assert!(result.changed);
+    assert!(!result.runtime_sync_required);
+}

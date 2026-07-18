@@ -15,6 +15,7 @@ use crate::constants::MAX_RESPONSE_STORAGE;
 use thiserror::Error;
 use tokio::sync::{Semaphore, watch};
 
+use super::custom::CustomApiCallParams;
 use super::llm::{LlmCallParams, LlmProvider};
 use super::{Language, TranslationEngine, TranslationError, TranslationResult};
 
@@ -52,6 +53,8 @@ pub enum EngineCredentials {
     },
     /// LLM 호출 파라미터 일체 (제공자/모델/키/프롬프트/샘플링)
     Llm(LlmCallParams),
+    /// 사용자 정의 JSON REST API 호출 파라미터
+    Custom(CustomApiCallParams),
 }
 
 impl std::fmt::Debug for EngineCredentials {
@@ -69,6 +72,7 @@ impl std::fmt::Debug for EngineCredentials {
                 .field("provider", &parameters.provider)
                 .field("model", &parameters.effective_model())
                 .finish(),
+            Self::Custom(_) => formatter.write_str("Custom(<redacted>)"),
         }
     }
 }
@@ -724,6 +728,20 @@ impl TranslationDispatch {
                     super::llm::usage::record(req.text.len(), output.len());
                 }
                 result
+            }
+            TranslationEngine::Custom => {
+                let params = match &req.credentials {
+                    EngineCredentials::Custom(params) => params,
+                    _ => return Err(TranslationError::EngineNotInitialized("Custom API")),
+                };
+                super::custom::translate_async_with_client(
+                    client,
+                    &req.text,
+                    req.source_lang,
+                    req.target_lang,
+                    params,
+                )
+                .await
             }
         }
     }

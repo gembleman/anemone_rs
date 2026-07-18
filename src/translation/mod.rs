@@ -1,5 +1,6 @@
-//! EzTrans, Google, DeepL, Papago, LLM 번역 엔진과 비동기 dispatch를 제공한다.
+//! EzTrans, Google, DeepL, Papago, LLM, 커스텀 API 번역 엔진과 비동기 dispatch를 제공한다.
 
+pub mod custom;
 pub mod deepl;
 mod error;
 mod eztrans;

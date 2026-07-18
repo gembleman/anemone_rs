@@ -23,6 +23,13 @@ pub enum TranslationSettingChange {
     LlmMaxTokensText(String),
     LlmDebounceText(String),
     LlmTemperatureSlider(i32),
+    CustomUrl(String),
+    CustomApiKey(String),
+    CustomAuthHeader(String),
+    CustomAuthScheme(String),
+    CustomHeaders(String),
+    CustomRequestTemplate(String),
+    CustomResponsePath(String),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -216,6 +223,27 @@ impl TranslationSettingsEditor {
                 &mut config.llm.temperature,
                 (value as f32 / 100.0).clamp(0.0, 2.0),
             ),
+            TranslationSettingChange::CustomUrl(value) => {
+                set_if_changed(&mut config.custom.url, value)
+            }
+            TranslationSettingChange::CustomApiKey(value) => {
+                set_if_changed(&mut config.custom.api_key, value)
+            }
+            TranslationSettingChange::CustomAuthHeader(value) => {
+                set_if_changed(&mut config.custom.auth_header, value)
+            }
+            TranslationSettingChange::CustomAuthScheme(value) => {
+                set_if_changed(&mut config.custom.auth_scheme, value)
+            }
+            TranslationSettingChange::CustomHeaders(value) => {
+                set_if_changed(&mut config.custom.headers, value)
+            }
+            TranslationSettingChange::CustomRequestTemplate(value) => {
+                set_if_changed(&mut config.custom.request_template, value)
+            }
+            TranslationSettingChange::CustomResponsePath(value) => {
+                set_if_changed(&mut config.custom.response_path, value)
+            }
         };
         Ok(SettingsApplyResult {
             changed,

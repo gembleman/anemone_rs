@@ -327,6 +327,7 @@ impl FileTransDialog {
                     Ok(provider) => format!("LLM: {}", provider.display_name()),
                     Err(error) => format!("LLM 설정 오류: {error}"),
                 },
+                TranslationEngine::Custom => "Custom API".into(),
             };
             let source = match config.translation.get_source_language() {
                 Ok(language) => to_korean_name(language),

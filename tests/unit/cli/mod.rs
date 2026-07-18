@@ -50,6 +50,13 @@ fn rejects_extra_arguments_and_invalid_engine() {
 }
 
 #[test]
+fn accepts_custom_engine() {
+    assert!(
+        Cli::try_parse_from(["anemone_rs", "translate", "테스트", "--engine", "custom"]).is_ok()
+    );
+}
+
+#[test]
 fn translate_requires_exactly_one_input_source() {
     assert!(Cli::try_parse_from(["anemone_rs", "translate"]).is_err());
     assert!(Cli::try_parse_from(["anemone_rs", "translate", "테스트", "--stdin"]).is_err());

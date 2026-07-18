@@ -2,12 +2,12 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::LlmConfig;
+use super::{CustomApiConfig, LlmConfig};
 
 /// 번역 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TranslationConfig {
-    /// 번역 엔진: "eztrans", "google", "deepl", "papago", "llm"
+    /// 번역 엔진: "eztrans", "google", "deepl", "papago", "llm", "custom"
     #[serde(default = "default_engine", deserialize_with = "deserialize_engine")]
     pub engine: String,
     /// 소스 언어 (ISO 639-1 코드): "ja", "ko", "en", "zh", etc.
@@ -46,6 +46,9 @@ pub struct TranslationConfig {
     /// LLM 설정
     #[serde(default)]
     pub llm: LlmConfig,
+    /// 사용자 정의 JSON REST API 설정
+    #[serde(default)]
+    pub custom: CustomApiConfig,
 }
 
 fn default_engine() -> String {
@@ -204,6 +207,7 @@ impl Default for TranslationConfig {
             papago_client_id: String::new(),
             papago_client_secret: String::new(),
             llm: LlmConfig::default(),
+            custom: CustomApiConfig::default(),
         }
     }
 }

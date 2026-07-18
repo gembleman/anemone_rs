@@ -13,7 +13,7 @@ use crate::translation::TranslationEngine;
 
 const AFTER_HELP: &str = r#"인자 없이 실행하면 GUI 모드로 시작합니다.
 
-ENGINE: eztrans | google | deepl | papago | llm
+ENGINE: eztrans | google | deepl | papago | llm | custom
 LANG:   ISO 639-1 (예: ja, ko, en, zh)
 
 CONFIG KEYS (대표):
@@ -21,6 +21,7 @@ CONFIG KEYS (대표):
     translation.eztrans_dll_path, translation.eztrans_dat_path
     translation.llm.provider, translation.llm.model
     translation.llm.base_url, translation.llm.temperature, translation.llm.max_tokens
+    translation.custom.url, translation.custom.request_template, translation.custom.response_path
     clipboard_watch, click_through, magnetic_mode, background_visible
     border_visible, window_topmost, window_visible
 
@@ -68,6 +69,8 @@ pub(super) enum Engine {
     Papago,
     #[value(name = "llm")]
     Llm,
+    #[value(name = "custom")]
+    Custom,
 }
 
 impl From<Engine> for TranslationEngine {
@@ -78,6 +81,7 @@ impl From<Engine> for TranslationEngine {
             Engine::DeepL => Self::DeepL,
             Engine::Papago => Self::Papago,
             Engine::Llm => Self::Llm,
+            Engine::Custom => Self::Custom,
         }
     }
 }

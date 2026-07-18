@@ -53,6 +53,27 @@ fn builds_deepl_credentials_from_the_effective_key_list() {
 }
 
 #[test]
+fn builds_and_validates_custom_api_credentials() {
+    let mut config = TranslationConfig {
+        engine: "custom".into(),
+        ..TranslationConfig::default()
+    };
+    config.custom.url = "https://example.com/translate".into();
+    config.custom.api_key = "secret".into();
+    config.custom.headers = r#"{"X-Source":"{source}"}"#.into();
+    config.custom.request_template = r#"{"q":"{text}"}"#.into();
+    let spec = TranslationJobSpec::from_config(&config).unwrap();
+    assert_eq!(spec.engine(), TranslationEngine::Custom);
+    assert!(matches!(spec.credentials(), EngineCredentials::Custom(_)));
+
+    config.custom.request_template = "invalid json".into();
+    assert!(matches!(
+        TranslationJobSpec::from_config(&config),
+        Err(TranslationConfigError::InvalidSetting(_))
+    ));
+}
+
+#[test]
 fn consuming_job_spec_moves_credentials_without_reallocating() {
     let mut config = TranslationConfig {
         engine: "llm".into(),

@@ -86,6 +86,13 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::LLM_DEBOUNCE_EDIT,
     ctrl_id::LLM_GLOSSARY_EDIT_BTN,
     ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
+    ctrl_id::CUSTOM_URL_EDIT,
+    ctrl_id::CUSTOM_API_KEY_EDIT,
+    ctrl_id::CUSTOM_AUTH_HEADER_EDIT,
+    ctrl_id::CUSTOM_AUTH_SCHEME_EDIT,
+    ctrl_id::CUSTOM_REQUEST_TEMPLATE_EDIT,
+    ctrl_id::CUSTOM_RESPONSE_PATH_EDIT,
+    ctrl_id::CUSTOM_HEADERS_EDIT,
 ];
 
 impl SettingsDialog {
@@ -174,6 +181,19 @@ impl SettingsDialog {
                 ctrl_id::LLM_GLOSSARY_EDIT_BTN,
                 ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
             ],
+        )?;
+        self.register_engine_ids(EngineGroup::Custom, ctrl_id::CUSTOM_STATIC_IDS)?;
+        self.register_engine_ids(
+            EngineGroup::Custom,
+            &[
+                ctrl_id::CUSTOM_URL_EDIT,
+                ctrl_id::CUSTOM_API_KEY_EDIT,
+                ctrl_id::CUSTOM_AUTH_HEADER_EDIT,
+                ctrl_id::CUSTOM_AUTH_SCHEME_EDIT,
+                ctrl_id::CUSTOM_REQUEST_TEMPLATE_EDIT,
+                ctrl_id::CUSTOM_RESPONSE_PATH_EDIT,
+                ctrl_id::CUSTOM_HEADERS_EDIT,
+            ],
         )
     }
 
@@ -252,7 +272,7 @@ impl SettingsDialog {
 
         self.initialize_combo(
             ctrl_id::TRANS_ENGINE,
-            &["EzTrans", "Google", "DeepL", "Papago", "LLM"],
+            &["EzTrans", "Google", "DeepL", "Papago", "LLM", "Custom"],
             config
                 .translation
                 .engine_as_u8()
@@ -340,6 +360,31 @@ impl SettingsDialog {
         self.set_text(
             ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
             &format!("사전 항목: {}", config.translation.llm.glossary.len()),
+        )?;
+        self.set_text(ctrl_id::CUSTOM_URL_EDIT, &config.translation.custom.url)?;
+        self.set_text(
+            ctrl_id::CUSTOM_API_KEY_EDIT,
+            &config.translation.custom.api_key,
+        )?;
+        self.set_text(
+            ctrl_id::CUSTOM_AUTH_HEADER_EDIT,
+            &config.translation.custom.auth_header,
+        )?;
+        self.set_text(
+            ctrl_id::CUSTOM_AUTH_SCHEME_EDIT,
+            &config.translation.custom.auth_scheme,
+        )?;
+        self.set_text(
+            ctrl_id::CUSTOM_REQUEST_TEMPLATE_EDIT,
+            &config.translation.custom.request_template,
+        )?;
+        self.set_text(
+            ctrl_id::CUSTOM_RESPONSE_PATH_EDIT,
+            &config.translation.custom.response_path,
+        )?;
+        self.set_text(
+            ctrl_id::CUSTOM_HEADERS_EDIT,
+            &config.translation.custom.headers,
         )
     }
 

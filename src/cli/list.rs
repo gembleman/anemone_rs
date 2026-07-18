@@ -14,6 +14,7 @@ pub(super) fn engines() -> Result<(), String> {
         TranslationEngine::DeepL,
         TranslationEngine::Papago,
         TranslationEngine::Llm,
+        TranslationEngine::Custom,
     ];
     for e in ENGINES {
         println!("{}", e.to_str());

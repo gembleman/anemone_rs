@@ -56,6 +56,8 @@ pub enum TranslationEngine {
     Papago = 3,
     /// LLM 기반 번역 (제공자/모델은 LlmConfig에서 지정)
     Llm = 4,
+    /// 사용자 정의 JSON REST API
+    Custom = 5,
 }
 
 impl TranslationEngine {
@@ -66,6 +68,7 @@ impl TranslationEngine {
             2 => Some(Self::DeepL),
             3 => Some(Self::Papago),
             4 => Some(Self::Llm),
+            5 => Some(Self::Custom),
             _ => None,
         }
     }
@@ -77,6 +80,7 @@ impl TranslationEngine {
             Self::DeepL => "deepl",
             Self::Papago => "papago",
             Self::Llm => "llm",
+            Self::Custom => "custom",
         }
     }
 
@@ -87,7 +91,7 @@ impl TranslationEngine {
             Self::Google => super::GOOGLE_SUPPORTED_LANGUAGES,
             Self::DeepL => super::DEEPL_SUPPORTED_LANGUAGES,
             Self::Papago => super::PAPAGO_SUPPORTED_LANGUAGES,
-            Self::Llm => super::GOOGLE_SUPPORTED_LANGUAGES,
+            Self::Llm | Self::Custom => super::GOOGLE_SUPPORTED_LANGUAGES,
         }
     }
 
@@ -98,7 +102,7 @@ impl TranslationEngine {
             Self::Google => super::GOOGLE_SUPPORTED_LANGUAGES,
             Self::DeepL => super::DEEPL_SUPPORTED_LANGUAGES,
             Self::Papago => super::PAPAGO_SUPPORTED_LANGUAGES,
-            Self::Llm => super::GOOGLE_SUPPORTED_LANGUAGES,
+            Self::Llm | Self::Custom => super::GOOGLE_SUPPORTED_LANGUAGES,
         }
     }
 
@@ -121,7 +125,7 @@ impl TranslationEngine {
     pub fn max_input_chars(self) -> usize {
         match self {
             Self::Google | Self::Papago => 5_000,
-            Self::DeepL | Self::Llm | Self::EzTrans => 100_000,
+            Self::DeepL | Self::Llm | Self::Custom | Self::EzTrans => 100_000,
         }
     }
 
@@ -144,6 +148,7 @@ impl std::str::FromStr for TranslationEngine {
             "deepl" => Ok(Self::DeepL),
             "papago" => Ok(Self::Papago),
             "llm" => Ok(Self::Llm),
+            "custom" => Ok(Self::Custom),
             _ => Err(EnumParseError::new("번역 엔진", value)),
         }
     }

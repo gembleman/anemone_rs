@@ -624,6 +624,13 @@ impl SettingsDialog {
             LLM_SYSTEM_PROMPT_EDIT => TranslationSettingChange::LlmSystemPrompt(text),
             LLM_MAX_TOKENS_EDIT => TranslationSettingChange::LlmMaxTokensText(text),
             LLM_DEBOUNCE_EDIT => TranslationSettingChange::LlmDebounceText(text),
+            CUSTOM_URL_EDIT => TranslationSettingChange::CustomUrl(text),
+            CUSTOM_API_KEY_EDIT => TranslationSettingChange::CustomApiKey(text),
+            CUSTOM_AUTH_HEADER_EDIT => TranslationSettingChange::CustomAuthHeader(text),
+            CUSTOM_AUTH_SCHEME_EDIT => TranslationSettingChange::CustomAuthScheme(text),
+            CUSTOM_HEADERS_EDIT => TranslationSettingChange::CustomHeaders(text),
+            CUSTOM_REQUEST_TEMPLATE_EDIT => TranslationSettingChange::CustomRequestTemplate(text),
+            CUSTOM_RESPONSE_PATH_EDIT => TranslationSettingChange::CustomResponsePath(text),
             _ => return,
         };
         if let Err(error) = self.apply_translation_change(change) {

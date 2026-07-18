@@ -41,6 +41,7 @@ pub(super) enum EngineGroup {
     DeepL = 1,
     Papago = 2,
     Llm = 3,
+    Custom = 4,
 }
 
 /// 반복 모드 라벨 (repeat_text_mode 값에 대응)
@@ -92,7 +93,7 @@ pub struct SettingsDialog {
     scroll_max: i32,
     pending_disk_save: Cell<bool>,
     /// 엔진별 컨트롤 (EnableWindow 토글용)
-    pub(super) engine_controls: [Vec<HWND>; 4],
+    pub(super) engine_controls: [Vec<HWND>; 5],
 }
 
 define_dialog_instance!(SETTINGS_INSTANCE: SettingsDialog);
@@ -141,7 +142,7 @@ unsafe extern "system" fn settings_dialog_proc(
                 scroll_pos: 0,
                 scroll_max: 0,
                 pending_disk_save: Cell::new(false),
-                engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+                engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             }));
             SETTINGS_INSTANCE.with(|slot| {
                 *slot.borrow_mut() = Some(dialog.clone());
@@ -461,7 +462,7 @@ impl SettingsDialog {
         let target_height = match tab {
             TAB_APPEARANCE => 505,
             TAB_DISPLAY => 305,
-            TAB_TRANSLATION => 865,
+            TAB_TRANSLATION => 1180,
             _ => 505,
         };
         // SAFETY: self.hwnd is valid. SetWindowPos uses valid parameters.
@@ -678,6 +679,7 @@ impl SettingsDialog {
             TranslationEngine::DeepL => EngineGroup::DeepL as usize,
             TranslationEngine::Papago => EngineGroup::Papago as usize,
             TranslationEngine::Llm => EngineGroup::Llm as usize,
+            TranslationEngine::Custom => EngineGroup::Custom as usize,
             // Google은 별도 입력란이 없으므로 전부 비활성
             TranslationEngine::Google => usize::MAX,
         };

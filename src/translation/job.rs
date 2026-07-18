@@ -75,6 +75,21 @@ impl TranslationJobSpec {
                         TranslationConfigError::InvalidSetting(error.to_string())
                     })?)
                 }
+                TranslationEngine::Custom => {
+                    let params = crate::translation::custom::CustomApiCallParams {
+                        url: config.custom.url.clone(),
+                        api_key: config.custom.api_key.clone(),
+                        auth_header: config.custom.auth_header.clone(),
+                        auth_scheme: config.custom.auth_scheme.clone(),
+                        headers: config.custom.headers.clone(),
+                        request_template: config.custom.request_template.clone(),
+                        response_path: config.custom.response_path.clone(),
+                    };
+                    params
+                        .validate()
+                        .map_err(TranslationConfigError::InvalidSetting)?;
+                    EngineCredentials::Custom(params)
+                }
             };
         if engine == TranslationEngine::EzTrans
             && (config.eztrans_dll_path.trim().is_empty()

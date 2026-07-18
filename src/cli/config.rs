@@ -89,6 +89,7 @@ fn is_sensitive_key(key: &str) -> bool {
             | "translation.papago_client_id"
             | "translation.papago_client_secret"
             | "translation.llm.api_key"
+            | "translation.custom.api_key"
     )
 }
 
@@ -100,6 +101,7 @@ fn redact_config(config: &mut Config) {
     config.translation.papago_client_id = "***".to_string();
     config.translation.papago_client_secret = "***".to_string();
     config.translation.llm.api_key = "***".to_string();
+    config.translation.custom.api_key = "***".to_string();
 }
 
 fn read_secret() -> Result<String, String> {
@@ -236,6 +238,7 @@ mod tests {
         config.translation.papago_client_id = "client-id".to_string();
         config.translation.papago_client_secret = "papago-secret".to_string();
         config.translation.llm.api_key = "llm-secret".to_string();
+        config.translation.custom.api_key = "custom-secret".to_string();
 
         redact_config(&mut config);
         let shown = toml::to_string(&config).unwrap();
@@ -246,6 +249,7 @@ mod tests {
             "client-id",
             "papago-secret",
             "llm-secret",
+            "custom-secret",
         ] {
             assert!(!shown.contains(secret), "{shown}");
         }
@@ -270,6 +274,7 @@ mod tests {
             "translation.papago_client_id",
             "translation.papago_client_secret",
             "translation.llm.api_key",
+            "translation.custom.api_key",
         ] {
             assert!(is_sensitive_key(key), "{key}");
         }

@@ -3,13 +3,13 @@
 
 #define IDD_SETTINGS 100
 
-IDD_SETTINGS DIALOGEX 0, 0, 277, 461
+IDD_SETTINGS DIALOGEX 0, 0, 277, 630
 STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
 EXSTYLE WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW
 CAPTION "아네모네 설정"
 FONT 9, "맑은 고딕", 400, 0, 0x81
 BEGIN
-    CONTROL         "", 1290, "SysTabControl32", WS_TABSTOP | WS_CLIPSIBLINGS, 3, 3, 271, 424
+    CONTROL         "", 1290, "SysTabControl32", WS_TABSTOP | WS_CLIPSIBLINGS, 3, 3, 271, 593
 
     // 외관 탭
     GROUPBOX        "배경 설정", 2000, 9, 19, 126, 40
@@ -150,5 +150,22 @@ BEGIN
     PUSHBUTTON      "사전 편집...", 1297, 194, 376, 71, 12
     LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 392, 249, 10
 
-    DEFPUSHBUTTON   "닫기", 1300, 211, 427, 57, 16
+    GROUPBOX        "커스텀 API (JSON POST)", 2240, 9, 413, 263, 177
+    LTEXT           "URL:", 2241, 17, 427, 29, 10
+    EDITTEXT        1310, 46, 426, 220, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "API 키:", 2242, 17, 443, 29, 10
+    EDITTEXT        1311, 46, 442, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    LTEXT           "인증 헤더:", 2243, 17, 459, 40, 10
+    EDITTEXT        1312, 59, 458, 94, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "스킴:", 2244, 159, 459, 23, 10
+    EDITTEXT        1313, 183, 458, 83, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "추가 헤더:", 2248, 17, 475, 40, 10
+    EDITTEXT        1316, 59, 474, 207, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "응답 경로:", 2245, 17, 491, 40, 10
+    EDITTEXT        1315, 59, 490, 207, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "요청 JSON 템플릿:", 2246, 17, 507, 69, 10
+    EDITTEXT        1314, 17, 518, 249, 51, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "변수: {text}, {source}, {target}, {api_key} · 응답 경로를 비우면 본문 전체 사용", 2247, 17, 573, 249, 10
+
+    DEFPUSHBUTTON   "닫기", 1300, 211, 598, 57, 16
 END
