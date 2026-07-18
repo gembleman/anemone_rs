@@ -704,11 +704,27 @@ impl SettingsDialog {
                     Some(LPARAM(w.as_ptr() as isize)),
                 );
             }
-            let src_sel = self.config.borrow().translation.source_lang_index(engine);
+            let src_sel = match self.config.borrow().translation.source_lang_index(engine) {
+                Ok(index) => index,
+                Err(error) => {
+                    tracing::error!("번역 언어 설정 오류: {error}");
+                    return;
+                }
+            };
             let _ = SendMessageW(src, CB_SETCURSEL, Some(WPARAM(src_sel)), Some(LPARAM(0)));
 
+            let source = engine
+                .supported_source_languages()
+                .get(src_sel)
+                .copied()
+                .or_else(|| engine.supported_source_languages().first().copied());
+            let Some(source) = source else {
+                return;
+            };
+            let targets = engine.supported_targets_for(source);
+
             let _ = SendMessageW(tgt, CB_RESETCONTENT, Some(WPARAM(0)), Some(LPARAM(0)));
-            for &lang in engine.supported_target_languages() {
+            for &lang in &targets {
                 let w = to_wide(lang_utils::to_korean_name(lang));
                 let _ = SendMessageW(
                     tgt,
@@ -717,7 +733,10 @@ impl SettingsDialog {
                     Some(LPARAM(w.as_ptr() as isize)),
                 );
             }
-            let tgt_sel = self.config.borrow().translation.target_lang_index(engine);
+            let configured_target = self.config.borrow().translation.get_target_language().ok();
+            let tgt_sel = configured_target
+                .and_then(|target| targets.iter().position(|&language| language == target))
+                .unwrap_or(0);
             let _ = SendMessageW(tgt, CB_SETCURSEL, Some(WPARAM(tgt_sel)), Some(LPARAM(0)));
         }
     }

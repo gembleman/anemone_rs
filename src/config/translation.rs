@@ -8,13 +8,19 @@ use super::LlmConfig;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TranslationConfig {
     /// 번역 엔진: "eztrans", "google", "deepl", "papago", "llm"
-    #[serde(default = "default_engine")]
+    #[serde(default = "default_engine", deserialize_with = "deserialize_engine")]
     pub engine: String,
     /// 소스 언어 (ISO 639-1 코드): "ja", "ko", "en", "zh", etc.
-    #[serde(default = "default_source_lang")]
+    #[serde(
+        default = "default_source_lang",
+        deserialize_with = "deserialize_language"
+    )]
     pub source_lang: String,
     /// 타겟 언어 (ISO 639-1 코드): "ja", "ko", "en", "zh", etc.
-    #[serde(default = "default_target_lang")]
+    #[serde(
+        default = "default_target_lang",
+        deserialize_with = "deserialize_language"
+    )]
     pub target_lang: String,
     /// EzTrans DLL 경로
     #[serde(default)]
@@ -31,10 +37,10 @@ pub struct TranslationConfig {
     /// DeepL 다중 키 전략: "failover" | "round-robin"
     #[serde(default = "default_deepl_strategy")]
     pub deepl_strategy: String,
-    /// Papago Naver Client ID
+    /// Ncloud Papago Application Client ID
     #[serde(default)]
     pub papago_client_id: String,
-    /// Papago Naver Client Secret
+    /// Ncloud Papago Application Client Secret
     #[serde(default)]
     pub papago_client_secret: String,
     /// LLM 설정
@@ -60,20 +66,22 @@ fn default_deepl_strategy() -> String {
 
 impl TranslationConfig {
     /// 엔진 문자열로 가져오기
-    pub fn get_engine(&self) -> crate::translation::TranslationEngine {
-        crate::translation::TranslationEngine::from_str(&self.engine)
+    pub fn get_engine(
+        &self,
+    ) -> Result<crate::translation::TranslationEngine, crate::translation::EnumParseError> {
+        self.engine.parse()
     }
 
-    /// 소스 언어를 isolang::Language로 가져오기
-    pub fn get_source_language(&self) -> isolang::Language {
+    /// 소스 언어를 번역용 언어 태그로 가져오기
+    pub fn get_source_language(&self) -> Result<crate::translation::Language, InvalidLanguageCode> {
         crate::translation::lang_utils::from_code(&self.source_lang)
-            .unwrap_or(isolang::Language::Jpn)
+            .ok_or_else(|| InvalidLanguageCode(self.source_lang.clone()))
     }
 
-    /// 타겟 언어를 isolang::Language로 가져오기
-    pub fn get_target_language(&self) -> isolang::Language {
+    /// 타겟 언어를 번역용 언어 태그로 가져오기
+    pub fn get_target_language(&self) -> Result<crate::translation::Language, InvalidLanguageCode> {
         crate::translation::lang_utils::from_code(&self.target_lang)
-            .unwrap_or(isolang::Language::Kor)
+            .ok_or_else(|| InvalidLanguageCode(self.target_lang.clone()))
     }
 
     /// 엔진 설정
@@ -82,41 +90,38 @@ impl TranslationConfig {
     }
 
     /// 소스 언어 설정
-    pub fn set_source_language(&mut self, lang: isolang::Language) {
+    pub fn set_source_language(&mut self, lang: crate::translation::Language) {
         self.source_lang = crate::translation::lang_utils::to_code(lang).to_string();
     }
 
     /// 타겟 언어 설정
-    pub fn set_target_language(&mut self, lang: isolang::Language) {
+    pub fn set_target_language(&mut self, lang: crate::translation::Language) {
         self.target_lang = crate::translation::lang_utils::to_code(lang).to_string();
     }
 
     // ========== 하위 호환용 메서드들 (UI에서 사용) ==========
 
     /// 엔진 문자열을 u8로 변환 (UI 호환용)
-    pub fn engine_as_u8(&self) -> u8 {
-        match self.engine.to_lowercase().as_str() {
-            "eztrans" => 0,
-            "google" => 1,
-            "deepl" => 2,
-            "papago" => 3,
-            "llm" => 4,
-            _ => 0,
-        }
+    pub fn engine_as_u8(&self) -> Result<u8, crate::translation::EnumParseError> {
+        self.get_engine().map(|engine| engine as u8)
     }
 
     /// 언어 인덱스를 가져오기 (UI 콤보박스용)
-    pub fn source_lang_index(&self, engine: crate::translation::TranslationEngine) -> usize {
-        let lang = self.get_source_language();
+    pub fn source_lang_index(
+        &self,
+        engine: crate::translation::TranslationEngine,
+    ) -> Result<usize, String> {
+        let lang = self
+            .get_source_language()
+            .map_err(|error| error.to_string())?;
         let supported = engine.supported_source_languages();
-        supported.iter().position(|&l| l == lang).unwrap_or(0)
-    }
-
-    /// 언어 인덱스를 가져오기 (UI 콤보박스용)
-    pub fn target_lang_index(&self, engine: crate::translation::TranslationEngine) -> usize {
-        let lang = self.get_target_language();
-        let supported = engine.supported_target_languages();
-        supported.iter().position(|&l| l == lang).unwrap_or(0)
+        supported.iter().position(|&l| l == lang).ok_or_else(|| {
+            format!(
+                "{} 엔진이 소스 언어 {}를 지원하지 않습니다",
+                engine.to_str(),
+                self.source_lang
+            )
+        })
     }
 
     /// DeepL 멀티 키 전략
@@ -147,6 +152,33 @@ impl TranslationConfig {
         keys
     }
 }
+
+fn deserialize_engine<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = String::deserialize(deserializer)?;
+    value
+        .parse::<crate::translation::TranslationEngine>()
+        .map_err(D::Error::custom)?;
+    Ok(value)
+}
+
+fn deserialize_language<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = String::deserialize(deserializer)?;
+    crate::translation::lang_utils::from_code(&value)
+        .ok_or_else(|| D::Error::custom(format!("알 수 없는 번역 언어 코드: {value}")))?;
+    Ok(value)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("알 수 없는 번역 언어 코드: {0}")]
+pub struct InvalidLanguageCode(pub String);
 
 /// 실행 파일 옆 `eztrans_dll/` 내부 경로를 문자열로 반환한다.
 /// 실행 경로 조회에 실패하면 상대 경로(`eztrans_dll/<sub>`)로 폴백한다.

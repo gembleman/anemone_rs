@@ -1,6 +1,15 @@
-use super::{App, state};
+use super::{App, CLIPBOARD_TRANSLATION_TIMER, state};
 use crate::dialogs::{LogEntry, add_to_backlog};
-use crate::translation::{request_translation, take_response};
+use crate::translation::{TranslationEngine, request_translation, take_response};
+use windows::Win32::UI::WindowsAndMessaging::SetTimer;
+
+fn debounce_delay_ms(engine: TranslationEngine, configured_ms: u32) -> u32 {
+    if engine == TranslationEngine::Llm {
+        configured_ms
+    } else {
+        0
+    }
+}
 
 impl App {
     pub(super) fn handle_clipboard_change(&mut self) {
@@ -21,7 +30,33 @@ impl App {
             // 클립보드 텍스트 처리
             tracing::debug!("Clipboard: {}", text);
 
-            // 자동 번역 처리 (비동기)
+            let delay_ms = {
+                let config = self.config.borrow();
+                let engine = match config.translation.get_engine() {
+                    Ok(engine) => engine,
+                    Err(error) => {
+                        tracing::error!("자동 번역 설정 오류: {error}");
+                        return;
+                    }
+                };
+                debounce_delay_ms(engine, config.translation.llm.debounce_ms)
+            };
+            if delay_ms == 0 {
+                self.pending_clipboard_translation = None;
+                self.request_translation_async(&text);
+            } else {
+                self.pending_clipboard_translation = Some(text);
+                // 같은 ID의 timer를 다시 설정하면 카운트다운이 재시작되어 최신
+                // 클립보드 값 하나만 큐에 들어간다.
+                unsafe {
+                    SetTimer(Some(self.hwnd), CLIPBOARD_TRANSLATION_TIMER, delay_ms, None);
+                }
+            }
+        }
+    }
+
+    pub(super) fn flush_debounced_translation(&mut self) {
+        if let Some(text) = self.pending_clipboard_translation.take() {
             self.request_translation_async(&text);
         }
     }
@@ -117,3 +152,7 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/app/translation.rs"]
+mod tests;

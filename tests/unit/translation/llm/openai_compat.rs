@@ -36,12 +36,13 @@ fn flags_length_truncation_as_api_error() {
             "finish_reason": "length"
         }]
     }"#;
-    match parse_chat_completion(json) {
-        Err(TranslationError::Api { code: 0, message }) => {
-            assert!(message.contains("max_tokens"), "message: {message}");
-        }
-        other => panic!("expected Api error for length, got {other:?}"),
-    }
+    assert!(matches!(
+        parse_chat_completion(json),
+        Err(TranslationError::OutputTruncated {
+            provider: "OpenAI 호환 API",
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -53,7 +54,9 @@ fn flags_refusal_when_content_null() {
         }]
     }"#;
     match parse_chat_completion(json) {
-        Err(TranslationError::Api { code: 0, message }) => {
+        Err(TranslationError::Api {
+            code: 0, message, ..
+        }) => {
             assert!(message.contains("거부"), "message: {message}");
         }
         other => panic!("expected Api error for refusal, got {other:?}"),
@@ -64,7 +67,9 @@ fn flags_refusal_when_content_null() {
 fn maps_error_object_to_api_error() {
     let json = r#"{ "error": { "message": "Invalid key", "code": "401" } }"#;
     match parse_chat_completion(json) {
-        Err(TranslationError::Api { code: 401, message }) => {
+        Err(TranslationError::Api {
+            code: 401, message, ..
+        }) => {
             assert_eq!(message, "Invalid key");
         }
         other => panic!("expected Api(401), got {other:?}"),

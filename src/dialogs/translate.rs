@@ -72,6 +72,8 @@ mod subclass_id {
     pub const DEST_EDIT: usize = 2;
 }
 
+const AUTO_TRANSLATE_TIMER: usize = 0xA710;
+
 /// 번역 대화상자
 pub struct TranslateDialog {
     hwnd: HWND,
@@ -92,8 +94,9 @@ pub struct TranslateDialog {
     llm_api_key_edit: HWND,
     one_go: bool,
     manual_options: ManualTranslationOptions,
-    /// 번역 진행 중 여부
-    translating: bool,
+    /// 현재 최신 요청 ID. 새 자동 요청이 들어오면 워커가 이전 요청을 취소한다.
+    in_flight_id: Option<u64>,
+    last_submitted_source: String,
 }
 
 define_dialog_instance!(TRANSLATE_INSTANCE: TranslateDialog);
@@ -172,9 +175,16 @@ unsafe extern "system" fn translate_dialog_proc(
                     let _ = DestroyWindow(hwnd);
                 } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     if id == ctrl_id::SOURCE_EDIT && notify_code == EN_CHANGE && dialog.one_go {
-                        dialog.do_translate();
+                        dialog.schedule_auto_translate();
                     }
                     dialog.handle_command(id, notify_code);
+                }
+                1
+            }
+            WM_TIMER if wparam.0 == AUTO_TRANSLATE_TIMER => {
+                let _ = KillTimer(Some(hwnd), AUTO_TRANSLATE_TIMER);
+                if let Ok(mut dialog) = dialog.try_borrow_mut() {
+                    dialog.do_translate();
                 }
                 1
             }
@@ -183,6 +193,7 @@ unsafe extern "system" fn translate_dialog_proc(
                 1
             }
             WM_DESTROY => {
+                let _ = KillTimer(Some(hwnd), AUTO_TRANSLATE_TIMER);
                 unregister_translation_hwnd(hwnd);
                 unregister_resource_dialog(hwnd);
                 TRANSLATE_INSTANCE.with(|slot| {
@@ -217,7 +228,8 @@ impl TranslateDialog {
             llm_api_key_edit: HWND::default(),
             one_go: false,
             manual_options: ManualTranslationOptions::default(),
-            translating: false,
+            in_flight_id: None,
+            last_submitted_source: String::new(),
         }
     }
 
@@ -337,13 +349,43 @@ impl TranslateDialog {
 
         let (engine, engine_index, source_index, target_index, provider_index, model, api_key) = {
             let config = self.config.borrow();
-            let engine = config.translation.get_engine();
+            let engine = config
+                .translation
+                .get_engine()
+                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
+            let engine_index = config
+                .translation
+                .engine_as_u8()
+                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?
+                as usize;
+            let provider_index = config
+                .translation
+                .llm
+                .get_provider()
+                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?
+                as u8 as usize;
+            let source = config
+                .translation
+                .get_source_language()
+                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
+            let target = config
+                .translation
+                .get_target_language()
+                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
+            let target_index = engine
+                .supported_targets_for(source)
+                .iter()
+                .position(|&language| language == target)
+                .unwrap_or(0);
             (
                 engine,
-                config.translation.engine_as_u8() as usize,
-                config.translation.source_lang_index(engine),
-                config.translation.target_lang_index(engine),
-                config.translation.llm.get_provider() as u8 as usize,
+                engine_index,
+                config
+                    .translation
+                    .source_lang_index(engine)
+                    .map_err(|error| Error::new(E_INVALIDARG, error))?,
+                target_index,
+                provider_index,
                 config.translation.llm.model.clone(),
                 config.translation.llm.api_key.clone(),
             )
@@ -358,6 +400,11 @@ impl TranslateDialog {
             );
         }
         self.populate_language_combos(engine);
+        let selected_source = engine
+            .supported_source_languages()
+            .get(source_index)
+            .copied()
+            .ok_or_else(|| Error::new(E_INVALIDARG, "잘못된 소스 언어 설정"))?;
         unsafe {
             let _ = SendMessageW(
                 self.source_lang_combo,
@@ -365,6 +412,7 @@ impl TranslateDialog {
                 Some(WPARAM(source_index)),
                 None,
             );
+            self.populate_target_combo(engine, selected_source);
             let _ = SendMessageW(
                 self.target_lang_combo,
                 CB_SETCURSEL,
@@ -410,10 +458,22 @@ impl TranslateDialog {
         use ctrl_id::*;
 
         match cmd {
-            BTN_TRANSLATE => self.do_translate(),
+            BTN_TRANSLATE => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), AUTO_TRANSLATE_TIMER);
+                }
+                self.do_translate();
+            }
             BTN_COPY => self.copy_to_clipboard(),
             BTN_CLEAR => self.clear_text(),
-            CHK_ONE_GO => self.one_go = !self.one_go,
+            CHK_ONE_GO => {
+                self.one_go = !self.one_go;
+                if !self.one_go {
+                    unsafe {
+                        let _ = KillTimer(Some(self.hwnd), AUTO_TRANSLATE_TIMER);
+                    }
+                }
+            }
             CHK_NO_LINEFEED => {
                 self.manual_options.remove_linefeeds = !self.manual_options.remove_linefeeds;
             }
@@ -427,9 +487,24 @@ impl TranslateDialog {
                     let engine_idx = unsafe {
                         SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8
                     };
-                    let engine = TranslationEngine::from_u8(engine_idx);
+                    let Some(engine) = TranslationEngine::from_u8(engine_idx) else {
+                        return;
+                    };
                     self.populate_language_combos(engine);
                     self.update_llm_group_visibility(engine);
+                } else if cmd == COMBO_SOURCE_LANG {
+                    let engine_idx = unsafe {
+                        SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8
+                    };
+                    let source_idx = unsafe {
+                        SendMessageW(self.source_lang_combo, CB_GETCURSEL, None, None).0 as usize
+                    };
+                    let Some(engine) = TranslationEngine::from_u8(engine_idx) else {
+                        return;
+                    };
+                    if let Some(&source) = engine.supported_source_languages().get(source_idx) {
+                        self.populate_target_combo(engine, source);
+                    }
                 }
                 self.apply_current_settings();
             }
@@ -460,8 +535,23 @@ impl TranslateDialog {
             let _ = SendMessageW(self.source_lang_combo, CB_SETCURSEL, Some(WPARAM(0)), None);
 
             let _ = SendMessageW(self.target_lang_combo, CB_RESETCONTENT, None, None);
-            for &lang in engine.supported_target_languages() {
-                self.add_combobox_item(self.target_lang_combo, lang_utils::to_korean_name(lang));
+            let source = engine
+                .supported_source_languages()
+                .first()
+                .copied()
+                .unwrap_or(Language::Jpn);
+            self.populate_target_combo(engine, source);
+        }
+    }
+
+    fn populate_target_combo(&self, engine: TranslationEngine, source: Language) {
+        unsafe {
+            let _ = SendMessageW(self.target_lang_combo, CB_RESETCONTENT, None, None);
+            for lang in engine.supported_targets_for(source) {
+                self.add_combobox_item(
+                    self.target_lang_combo,
+                    crate::translation::lang_utils::to_korean_name(lang),
+                );
             }
             let _ = SendMessageW(self.target_lang_combo, CB_SETCURSEL, Some(WPARAM(0)), None);
         }
@@ -490,7 +580,9 @@ impl TranslateDialog {
         // SAFETY: 콤보 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
         let sel =
             unsafe { SendMessageW(self.llm_provider_combo, CB_GETCURSEL, None, None).0 as u8 };
-        let provider = LlmProvider::from_u8(sel);
+        let Some(provider) = LlmProvider::from_u8(sel) else {
+            return;
+        };
         self.config
             .borrow_mut()
             .translation
@@ -562,6 +654,26 @@ impl TranslateDialog {
         let _ = set_window_text(self.dest_edit, text);
     }
 
+    fn schedule_auto_translate(&mut self) {
+        let engine_idx =
+            unsafe { SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8 };
+        let Some(engine) = TranslationEngine::from_u8(engine_idx) else {
+            return;
+        };
+        let delay_ms = if engine == TranslationEngine::Llm {
+            self.config.borrow().translation.llm.debounce_ms
+        } else {
+            0
+        };
+        if delay_ms == 0 {
+            self.do_translate();
+        } else {
+            unsafe {
+                SetTimer(Some(self.hwnd), AUTO_TRANSLATE_TIMER, delay_ms, None);
+            }
+        }
+    }
+
     /// 현재 선택된 엔진/언어를 매니저에 적용
     fn apply_current_settings(&self) {
         // SAFETY: combo handles are valid controls from the resource template. SendMessageW with
@@ -573,18 +685,20 @@ impl TranslateDialog {
             let target_idx =
                 SendMessageW(self.target_lang_combo, CB_GETCURSEL, None, None).0 as usize;
 
-            let engine = TranslationEngine::from_u8(engine_idx as u8);
+            let Some(engine) = TranslationEngine::from_u8(engine_idx as u8) else {
+                tracing::error!("잘못된 번역 엔진 콤보 선택: {engine_idx}");
+                return;
+            };
             let supported_source = engine.supported_source_languages();
-            let supported_target = engine.supported_target_languages();
-
-            let source_lang = supported_source
-                .get(source_idx)
-                .copied()
-                .unwrap_or(Language::Jpn);
-            let target_lang = supported_target
-                .get(target_idx)
-                .copied()
-                .unwrap_or(Language::Kor);
+            let Some(source_lang) = supported_source.get(source_idx).copied() else {
+                tracing::error!("잘못된 소스 언어 콤보 선택: {source_idx}");
+                return;
+            };
+            let supported_target = engine.supported_targets_for(source_lang);
+            let Some(target_lang) = supported_target.get(target_idx).copied() else {
+                tracing::error!("잘못된 대상 언어 콤보 선택: {target_idx}");
+                return;
+            };
 
             let mut config = self.config.borrow_mut();
             config.translation.set_engine(engine);
@@ -599,7 +713,7 @@ impl TranslateDialog {
         if source.is_empty() {
             return;
         }
-        if self.translating {
+        if self.in_flight_id.is_some() && source == self.last_submitted_source {
             return;
         }
 
@@ -624,9 +738,7 @@ impl TranslateDialog {
         }
 
         self.set_dest_text("[번역 중...]");
-        self.translating = true;
-
-        if let Err(error) = request_translation(
+        match request_translation(
             self.hwnd,
             text,
             spec.engine(),
@@ -634,8 +746,14 @@ impl TranslateDialog {
             spec.target_lang(),
             spec.credentials(),
         ) {
-            self.translating = false;
-            self.set_dest_text(&format!("[오류] {error}"));
+            Ok(req_id) => {
+                self.in_flight_id = Some(req_id);
+                self.last_submitted_source = source;
+            }
+            Err(error) => {
+                self.in_flight_id = None;
+                self.set_dest_text(&format!("[오류] {error}"));
+            }
         }
     }
 
@@ -644,8 +762,10 @@ impl TranslateDialog {
         let Some(response) = take_response(req_id) else {
             return;
         };
-
-        self.translating = false;
+        if self.in_flight_id != Some(req_id) {
+            return;
+        }
+        self.in_flight_id = None;
 
         let result = match response.result {
             Ok(translated) => self.manual_options.format_output(translated),

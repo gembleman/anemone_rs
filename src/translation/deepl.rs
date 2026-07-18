@@ -2,9 +2,9 @@
 //!
 //! DeepL 공식 API 비동기 번역. 워커 스레드에서 호출되는 async 함수만 제공한다.
 
+use super::Language;
 use super::http_common::{send_and_read_body, validate_not_empty};
 use super::{TranslationError, TranslationResult, lang_utils};
-use isolang::Language;
 
 /// 공유 Client를 받는 비동기 번역 함수
 pub async fn translate_async_with_client(
@@ -20,8 +20,8 @@ pub async fn translate_async_with_client(
         return Err(TranslationError::MissingApiKey);
     }
 
-    let source_code = lang_utils::to_deepl_code(source);
-    let target_code = lang_utils::to_deepl_code(target);
+    let source_code = lang_utils::to_deepl_code(source)?;
+    let target_code = lang_utils::to_deepl_code(target)?;
 
     // API 엔드포인트 결정 (Free API vs Pro API)
     let base_url = if api_key.ends_with(":fx") {
@@ -71,6 +71,7 @@ fn parse_deepl_response(json: &str) -> TranslationResult {
         return Err(TranslationError::Api {
             code: 0,
             message: s.to_string(),
+            retry_after: None,
         });
     }
 

@@ -53,6 +53,7 @@ pub fn shared_client() -> reqwest::Client {
 /// 성공이면 body 문자열을 반환, 실패면 `TranslationError::Api`를 반환.
 pub async fn send_and_read_body(response: reqwest::Response) -> Result<String, TranslationError> {
     let status = response.status();
+    let retry_after = parse_retry_after(response.headers());
     let body = response
         .text()
         .await
@@ -62,10 +63,19 @@ pub async fn send_and_read_body(response: reqwest::Response) -> Result<String, T
         return Err(TranslationError::Api {
             code: status.as_u16(),
             message: body,
+            retry_after,
         });
     }
 
     Ok(body)
+}
+
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
 }
 
 /// 빈 텍스트 검증
@@ -75,3 +85,7 @@ pub fn validate_not_empty(text: &str) -> Result<(), TranslationError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/translation/http_common.rs"]
+mod tests;

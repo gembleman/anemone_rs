@@ -1,12 +1,12 @@
 //! Papago (네이버) 번역 엔진
 //!
-//! Naver 개발자센터 Papago N2MT API. 워커 스레드에서 호출되는 async 함수만 제공한다.
+//! Ncloud Papago Text Translation API. 워커 스레드에서 호출되는 async 함수만 제공한다.
 
+use super::Language;
 use super::http_common::{send_and_read_body, validate_not_empty};
 use super::{TranslationError, TranslationResult, lang_utils};
-use isolang::Language;
 
-const ENDPOINT: &str = "https://openapi.naver.com/v1/papago/n2mt";
+const ENDPOINT: &str = "https://papago.apigw.ntruss.com/nmt/v1/translation";
 
 /// 공유 Client를 받는 비동기 번역 함수
 pub async fn translate_async_with_client(
@@ -19,12 +19,16 @@ pub async fn translate_async_with_client(
 ) -> TranslationResult {
     validate_not_empty(text)?;
 
+    if !super::TranslationEngine::Papago.supports_pair(source, target) {
+        return Err(TranslationError::UnsupportedLanguagePair);
+    }
+
     if client_id.is_empty() || client_secret.is_empty() {
         return Err(TranslationError::MissingApiKey);
     }
 
-    let source_code = lang_utils::to_papago_code(source);
-    let target_code = lang_utils::to_papago_code(target);
+    let source_code = lang_utils::to_papago_code(source)?;
+    let target_code = lang_utils::to_papago_code(target)?;
 
     let params = [
         ("source", source_code),
@@ -34,8 +38,8 @@ pub async fn translate_async_with_client(
 
     let response = client
         .post(ENDPOINT)
-        .header("X-Naver-Client-Id", client_id)
-        .header("X-Naver-Client-Secret", client_secret)
+        .header("X-NCP-APIGW-API-KEY-ID", client_id)
+        .header("X-NCP-APIGW-API-KEY", client_secret)
         .form(&params)
         .send()
         .await
@@ -65,6 +69,7 @@ fn parse_papago_response(json: &str) -> TranslationResult {
         return Err(TranslationError::Api {
             code,
             message: msg.to_string(),
+            retry_after: None,
         });
     }
 

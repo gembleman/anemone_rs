@@ -13,7 +13,7 @@ use windows::Win32::{
     },
 };
 
-use super::{APP, App, COMPOSITION_RETRY_TIMER};
+use super::{APP, App, CLIPBOARD_TRANSLATION_TIMER, COMPOSITION_RETRY_TIMER};
 use crate::constants::{
     MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
     WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
@@ -172,6 +172,12 @@ impl App {
                     if let Err(e) = self.paint() {
                         tracing::warn!("composition retry paint failed: {e}");
                     }
+                    Some(LRESULT(0))
+                }
+
+                WM_TIMER if wparam.0 == CLIPBOARD_TRANSLATION_TIMER => {
+                    let _ = KillTimer(Some(hwnd), CLIPBOARD_TRANSLATION_TIMER);
+                    self.flush_debounced_translation();
                     Some(LRESULT(0))
                 }
 

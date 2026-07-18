@@ -38,7 +38,7 @@ pub(super) fn run(args: Args) -> Result<(), String> {
     }
 
     let config = Config::load_or_default();
-    let engine = resolve_engine(args.engine, &config);
+    let engine = resolve_engine(args.engine, &config)?;
     let (source_lang, target_lang) = resolve_languages(&args.source, &args.target, &config)?;
 
     let spec = TranslationJobSpec::with_engine_languages(
@@ -78,10 +78,13 @@ fn run_translation(spec: &TranslationJobSpec, text: &str) -> Result<String, Stri
 pub(super) fn resolve_engine(
     override_value: Option<super::Engine>,
     config: &Config,
-) -> TranslationEngine {
+) -> Result<TranslationEngine, String> {
     match override_value {
-        Some(engine) => engine.into(),
-        None => config.translation.get_engine(),
+        Some(engine) => Ok(engine.into()),
+        None => config
+            .translation
+            .get_engine()
+            .map_err(|error| error.to_string()),
     }
 }
 
@@ -94,13 +97,19 @@ pub(super) fn resolve_languages(
         Some(s) => {
             lang_utils::from_code(s).ok_or_else(|| format!("알 수 없는 소스 언어 코드: {s}"))?
         }
-        None => config.translation.get_source_language(),
+        None => config
+            .translation
+            .get_source_language()
+            .map_err(|error| error.to_string())?,
     };
     let target = match to {
         Some(s) => {
             lang_utils::from_code(s).ok_or_else(|| format!("알 수 없는 타겟 언어 코드: {s}"))?
         }
-        None => config.translation.get_target_language(),
+        None => config
+            .translation
+            .get_target_language()
+            .map_err(|error| error.to_string())?,
     };
     Ok((source, target))
 }
