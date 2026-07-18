@@ -162,6 +162,7 @@ impl Config {
         self.repeat_text_mode = self.repeat_text_mode.min(4);
         self.translation.eztrans_process_count =
             self.translation.eztrans_process_count.clamp(1, 16);
+        self.translation.normalize_custom_apis();
 
         for style in [
             &mut self.name_style,

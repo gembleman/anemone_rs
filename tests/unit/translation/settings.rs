@@ -188,3 +188,37 @@ fn custom_api_fields_are_applied_without_runtime_reinitialization() {
     assert!(result.changed);
     assert!(!result.runtime_sync_required);
 }
+
+#[test]
+fn custom_api_fields_update_only_the_selected_named_entry() {
+    let first = crate::config::CustomApiConfig {
+        name: "first".into(),
+        ..Default::default()
+    };
+    let second = crate::config::CustomApiConfig {
+        name: "second".into(),
+        ..Default::default()
+    };
+    let mut config = TranslationConfig {
+        custom_api: "first".into(),
+        custom_apis: vec![first, second],
+        ..TranslationConfig::default()
+    };
+
+    TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::SelectCustomApi("second".into()),
+    )
+    .unwrap();
+    TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::CustomUrl("https://second.example/translate".into()),
+    )
+    .unwrap();
+
+    assert!(config.custom_apis[0].url.is_empty());
+    assert_eq!(
+        config.custom_apis[1].url,
+        "https://second.example/translate"
+    );
+}

@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// 요청 템플릿의 문자열 값에서는 `{text}`, `{source}`, `{target}`, `{api_key}`를
 /// 사용할 수 있다. 응답 경로가 비어 있으면 응답 본문 전체를 번역문으로 사용한다.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomApiConfig {
+    /// 엔진 선택 목록과 `translation.custom_api`에서 사용할 이름.
+    #[serde(default = "default_name")]
+    pub name: String,
     /// POST 요청을 보낼 전체 URL.
     #[serde(default)]
     pub url: String,
@@ -27,6 +30,10 @@ pub struct CustomApiConfig {
     /// 번역문이 들어 있는 JSON 경로. `/data/text` 또는 `data.text` 형식.
     #[serde(default = "default_response_path")]
     pub response_path: String,
+}
+
+fn default_name() -> String {
+    "Custom".to_string()
 }
 
 fn default_auth_header() -> String {
@@ -52,6 +59,7 @@ fn default_response_path() -> String {
 impl Default for CustomApiConfig {
     fn default() -> Self {
         Self {
+            name: default_name(),
             url: String::new(),
             api_key: String::new(),
             auth_header: default_auth_header(),
@@ -60,5 +68,11 @@ impl Default for CustomApiConfig {
             request_template: default_request_template(),
             response_path: default_response_path(),
         }
+    }
+}
+
+impl CustomApiConfig {
+    pub(super) fn is_default(&self) -> bool {
+        self == &Self::default()
     }
 }

@@ -89,6 +89,62 @@ fn builds_and_validates_custom_api_credentials() {
 }
 
 #[test]
+fn builds_credentials_from_the_selected_named_custom_api() {
+    let primary = crate::config::CustomApiConfig {
+        name: "primary".into(),
+        url: "https://primary.example/translate".into(),
+        ..Default::default()
+    };
+    let backup = crate::config::CustomApiConfig {
+        name: "backup".into(),
+        url: "https://backup.example/translate".into(),
+        ..Default::default()
+    };
+
+    let config = TranslationConfig {
+        engine: "custom".into(),
+        custom_api: "backup".into(),
+        custom_apis: vec![primary, backup],
+        ..TranslationConfig::default()
+    };
+    let spec = TranslationJobSpec::from_config(&config).unwrap();
+    assert!(matches!(
+        spec.credentials(),
+        EngineCredentials::Custom(params)
+            if params.url == "https://backup.example/translate"
+    ));
+}
+
+#[test]
+fn rejects_ambiguous_or_missing_named_custom_api_selection() {
+    let first = crate::config::CustomApiConfig {
+        name: "same".into(),
+        url: "https://first.example/translate".into(),
+        ..Default::default()
+    };
+    let mut second = first.clone();
+    second.url = "https://second.example/translate".into();
+
+    let mut config = TranslationConfig {
+        engine: "custom".into(),
+        custom_api: "same".into(),
+        custom_apis: vec![first, second],
+        ..TranslationConfig::default()
+    };
+    assert!(matches!(
+        TranslationJobSpec::from_config(&config),
+        Err(TranslationConfigError::InvalidSetting(message)) if message.contains("중복")
+    ));
+
+    config.custom_apis[1].name = "other".into();
+    config.custom_api = "missing".into();
+    assert!(matches!(
+        TranslationJobSpec::from_config(&config),
+        Err(TranslationConfigError::InvalidSetting(message)) if message.contains("찾을 수 없습니다")
+    ));
+}
+
+#[test]
 fn consuming_job_spec_moves_credentials_without_reallocating() {
     let mut config = TranslationConfig {
         engine: "llm".into(),

@@ -270,14 +270,40 @@ impl SettingsDialog {
         self.set_checked(ctrl_id::CLIPBOARD_WATCH, config.clipboard_watch)?;
         self.set_checked(ctrl_id::WNDCLICK_THROUGH, config.click_through)?;
 
-        self.initialize_combo(
-            ctrl_id::TRANS_ENGINE,
-            &["EzTrans", "Google", "DeepL", "Papago", "LLM", "Custom"],
-            config
-                .translation
-                .engine_as_u8()
-                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))? as usize,
-        )?;
+        let mut engine_names = vec!["EzTrans", "Google", "DeepL", "Papago", "LLM"];
+        if config.translation.custom_apis.is_empty() {
+            engine_names.push(&config.translation.custom.name);
+        } else {
+            engine_names.extend(
+                config
+                    .translation
+                    .custom_apis
+                    .iter()
+                    .map(|api| api.name.as_str()),
+            );
+        }
+        let engine = config
+            .translation
+            .get_engine()
+            .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
+        let engine_index = if engine == crate::translation::TranslationEngine::Custom {
+            crate::translation::TranslationEngine::Custom as usize
+                + config
+                    .translation
+                    .active_custom_api_index()
+                    .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?
+        } else {
+            engine as usize
+        };
+        self.initialize_combo(ctrl_id::TRANS_ENGINE, &engine_names, engine_index)?;
+        unsafe {
+            let _ = SendMessageW(
+                self.control(ctrl_id::TRANS_ENGINE)?,
+                CB_SETDROPPEDWIDTH,
+                Some(WPARAM(220)),
+                None,
+            );
+        }
         self.set_text(
             ctrl_id::EZTRANS_DLL_EDIT,
             &config.translation.eztrans_dll_path,
@@ -361,31 +387,20 @@ impl SettingsDialog {
             ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
             &format!("사전 항목: {}", config.translation.llm.glossary.len()),
         )?;
-        self.set_text(ctrl_id::CUSTOM_URL_EDIT, &config.translation.custom.url)?;
-        self.set_text(
-            ctrl_id::CUSTOM_API_KEY_EDIT,
-            &config.translation.custom.api_key,
-        )?;
-        self.set_text(
-            ctrl_id::CUSTOM_AUTH_HEADER_EDIT,
-            &config.translation.custom.auth_header,
-        )?;
-        self.set_text(
-            ctrl_id::CUSTOM_AUTH_SCHEME_EDIT,
-            &config.translation.custom.auth_scheme,
-        )?;
+        let custom = config
+            .translation
+            .active_custom_api()
+            .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
+        self.set_text(ctrl_id::CUSTOM_URL_EDIT, &custom.url)?;
+        self.set_text(ctrl_id::CUSTOM_API_KEY_EDIT, &custom.api_key)?;
+        self.set_text(ctrl_id::CUSTOM_AUTH_HEADER_EDIT, &custom.auth_header)?;
+        self.set_text(ctrl_id::CUSTOM_AUTH_SCHEME_EDIT, &custom.auth_scheme)?;
         self.set_text(
             ctrl_id::CUSTOM_REQUEST_TEMPLATE_EDIT,
-            &config.translation.custom.request_template,
+            &custom.request_template,
         )?;
-        self.set_text(
-            ctrl_id::CUSTOM_RESPONSE_PATH_EDIT,
-            &config.translation.custom.response_path,
-        )?;
-        self.set_text(
-            ctrl_id::CUSTOM_HEADERS_EDIT,
-            &config.translation.custom.headers,
-        )
+        self.set_text(ctrl_id::CUSTOM_RESPONSE_PATH_EDIT, &custom.response_path)?;
+        self.set_text(ctrl_id::CUSTOM_HEADERS_EDIT, &custom.headers)
     }
 
     fn control(&self, id: u16) -> Result<HWND> {

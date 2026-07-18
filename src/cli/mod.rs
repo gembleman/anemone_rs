@@ -22,7 +22,7 @@ CONFIG KEYS (대표):
     translation.eztrans_process_count (파일 번역 helper 프로세스 수, 1..16)
     translation.llm.provider, translation.llm.model
     translation.llm.base_url, translation.llm.temperature, translation.llm.max_tokens
-    translation.custom.url, translation.custom.request_template, translation.custom.response_path
+    translation.custom_api (선택 이름), translation.custom_apis (config.toml에서 직접 편집)
     clipboard_watch, click_through, magnetic_mode, background_visible
     border_visible, window_topmost, window_visible
 

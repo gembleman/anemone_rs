@@ -77,14 +77,17 @@ impl TranslationJobSpec {
                     })?)
                 }
                 TranslationEngine::Custom => {
+                    let custom = config.active_custom_api().map_err(|error| {
+                        TranslationConfigError::InvalidSetting(error.to_string())
+                    })?;
                     let params = crate::translation::custom::CustomApiCallParams {
-                        url: config.custom.url.clone(),
-                        api_key: config.custom.api_key.clone(),
-                        auth_header: config.custom.auth_header.clone(),
-                        auth_scheme: config.custom.auth_scheme.clone(),
-                        headers: config.custom.headers.clone(),
-                        request_template: config.custom.request_template.clone(),
-                        response_path: config.custom.response_path.clone(),
+                        url: custom.url.clone(),
+                        api_key: custom.api_key.clone(),
+                        auth_header: custom.auth_header.clone(),
+                        auth_scheme: custom.auth_scheme.clone(),
+                        headers: custom.headers.clone(),
+                        request_template: custom.request_template.clone(),
+                        response_path: custom.response_path.clone(),
                     };
                     params
                         .validate()

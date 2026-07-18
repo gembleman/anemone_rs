@@ -75,6 +75,55 @@ fn partial_config_uses_defaults_for_missing_top_level_fields() {
 }
 
 #[test]
+fn named_custom_api_list_round_trips_and_selects_by_name() {
+    let text = r#"
+[translation]
+engine = "custom"
+custom_api = "backup"
+
+[[translation.custom_apis]]
+name = "primary"
+url = "https://primary.example/translate"
+
+[[translation.custom_apis]]
+name = "backup"
+url = "https://backup.example/translate"
+request_template = '{"q":"{text}"}'
+response_path = "result.text"
+"#;
+
+    let loaded = Config::from_toml_str(text).unwrap();
+    assert_eq!(loaded.translation.custom_apis.len(), 2);
+    assert_eq!(
+        loaded.translation.active_custom_api().unwrap().url,
+        "https://backup.example/translate"
+    );
+
+    let serialized = toml::to_string_pretty(&loaded).unwrap();
+    assert!(serialized.contains("[[translation.custom_apis]]"));
+    assert!(!serialized.contains("[translation.custom]\n"));
+}
+
+#[test]
+fn legacy_single_custom_api_is_migrated_to_the_named_list() {
+    let text = r#"
+[translation]
+engine = "custom"
+
+[translation.custom]
+url = "https://legacy.example/translate"
+"#;
+
+    let loaded = Config::from_toml_str(text).unwrap();
+    assert_eq!(loaded.translation.custom_api, "Custom");
+    assert_eq!(loaded.translation.custom_apis.len(), 1);
+    assert_eq!(
+        loaded.translation.active_custom_api().unwrap().url,
+        "https://legacy.example/translate"
+    );
+}
+
+#[test]
 fn llm_limits_are_normalized_at_every_config_boundary() {
     let mut raw = Config::default();
     raw.translation.llm.max_tokens = u32::MAX;

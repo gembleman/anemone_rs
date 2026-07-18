@@ -90,7 +90,8 @@ fn is_sensitive_key(key: &str) -> bool {
             | "translation.papago_client_secret"
             | "translation.llm.api_key"
             | "translation.custom.api_key"
-    )
+    ) || key == "translation.custom_apis"
+        || key.starts_with("translation.custom_apis.")
 }
 
 fn redact_config(config: &mut Config) {
@@ -102,6 +103,9 @@ fn redact_config(config: &mut Config) {
     config.translation.papago_client_secret = "***".to_string();
     config.translation.llm.api_key = "***".to_string();
     config.translation.custom.api_key = "***".to_string();
+    for api in &mut config.translation.custom_apis {
+        api.api_key = "***".to_string();
+    }
 }
 
 fn read_secret() -> Result<String, String> {
@@ -239,6 +243,12 @@ mod tests {
         config.translation.papago_client_secret = "papago-secret".to_string();
         config.translation.llm.api_key = "llm-secret".to_string();
         config.translation.custom.api_key = "custom-secret".to_string();
+        let named_custom = crate::config::CustomApiConfig {
+            name: "named".to_string(),
+            api_key: "named-custom-secret".to_string(),
+            ..Default::default()
+        };
+        config.translation.custom_apis.push(named_custom);
 
         redact_config(&mut config);
         let shown = toml::to_string(&config).unwrap();
@@ -250,6 +260,7 @@ mod tests {
             "papago-secret",
             "llm-secret",
             "custom-secret",
+            "named-custom-secret",
         ] {
             assert!(!shown.contains(secret), "{shown}");
         }
@@ -277,6 +288,8 @@ mod tests {
             "translation.papago_client_secret",
             "translation.llm.api_key",
             "translation.custom.api_key",
+            "translation.custom_apis",
+            "translation.custom_apis.0.api_key",
         ] {
             assert!(is_sensitive_key(key), "{key}");
         }

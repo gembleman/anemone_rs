@@ -23,6 +23,7 @@ pub enum TranslationSettingChange {
     LlmMaxTokensText(String),
     LlmDebounceText(String),
     LlmTemperatureSlider(i32),
+    SelectCustomApi(String),
     CustomUrl(String),
     CustomApiKey(String),
     CustomAuthHeader(String),
@@ -223,26 +224,31 @@ impl TranslationSettingsEditor {
                 &mut config.llm.temperature,
                 (value as f32 / 100.0).clamp(0.0, 2.0),
             ),
+            TranslationSettingChange::SelectCustomApi(value) => {
+                config.select_custom_api(&value).map_err(|error| {
+                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
+                })?
+            }
             TranslationSettingChange::CustomUrl(value) => {
-                set_if_changed(&mut config.custom.url, value)
+                set_if_changed(&mut active_custom_api_mut(config)?.url, value)
             }
             TranslationSettingChange::CustomApiKey(value) => {
-                set_if_changed(&mut config.custom.api_key, value)
+                set_if_changed(&mut active_custom_api_mut(config)?.api_key, value)
             }
             TranslationSettingChange::CustomAuthHeader(value) => {
-                set_if_changed(&mut config.custom.auth_header, value)
+                set_if_changed(&mut active_custom_api_mut(config)?.auth_header, value)
             }
             TranslationSettingChange::CustomAuthScheme(value) => {
-                set_if_changed(&mut config.custom.auth_scheme, value)
+                set_if_changed(&mut active_custom_api_mut(config)?.auth_scheme, value)
             }
             TranslationSettingChange::CustomHeaders(value) => {
-                set_if_changed(&mut config.custom.headers, value)
+                set_if_changed(&mut active_custom_api_mut(config)?.headers, value)
             }
             TranslationSettingChange::CustomRequestTemplate(value) => {
-                set_if_changed(&mut config.custom.request_template, value)
+                set_if_changed(&mut active_custom_api_mut(config)?.request_template, value)
             }
             TranslationSettingChange::CustomResponsePath(value) => {
-                set_if_changed(&mut config.custom.response_path, value)
+                set_if_changed(&mut active_custom_api_mut(config)?.response_path, value)
             }
         };
         Ok(SettingsApplyResult {
@@ -266,6 +272,14 @@ impl TranslationSettingsEditor {
             .prepare()
             .map_err(|error| error.to_string())
     }
+}
+
+fn active_custom_api_mut(
+    config: &mut TranslationConfig,
+) -> Result<&mut crate::config::CustomApiConfig, TranslationSettingsError> {
+    config
+        .active_custom_api_mut()
+        .map_err(|error| TranslationSettingsError::InvalidCurrentConfig(error.to_string()))
 }
 
 fn normalize_language(

@@ -68,6 +68,7 @@ mod subclass_id {
 }
 
 const AUTO_TRANSLATE_TIMER: usize = 0xA710;
+const CUSTOM_ENGINE_INDEX: usize = TranslationEngine::Custom as usize;
 
 /// 번역 대화상자
 pub struct TranslateDialog {
@@ -341,6 +342,24 @@ impl TranslateDialog {
         for name in ["EzTrans", "Google", "DeepL", "Papago", "LLM"] {
             self.add_combobox_item(self.engine_combo, name);
         }
+        {
+            let config = self.config.borrow();
+            if config.translation.custom_apis.is_empty() {
+                self.add_combobox_item(self.engine_combo, &config.translation.custom.name);
+            } else {
+                for api in &config.translation.custom_apis {
+                    self.add_combobox_item(self.engine_combo, &api.name);
+                }
+            }
+        }
+        unsafe {
+            let _ = SendMessageW(
+                self.engine_combo,
+                CB_SETDROPPEDWIDTH,
+                Some(WPARAM(220)),
+                None,
+            );
+        }
         for provider in LlmProvider::ALL {
             self.add_combobox_item(self.llm_provider_combo, provider.display_name());
         }
@@ -351,11 +370,15 @@ impl TranslateDialog {
                 .translation
                 .get_engine()
                 .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
-            let engine_index = config
-                .translation
-                .engine_as_u8()
-                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?
-                as usize;
+            let engine_index = if engine == TranslationEngine::Custom {
+                CUSTOM_ENGINE_INDEX
+                    + config
+                        .translation
+                        .active_custom_api_index()
+                        .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?
+            } else {
+                engine as usize
+            };
             let provider_index = config
                 .translation
                 .llm
@@ -485,7 +508,7 @@ impl TranslateDialog {
                     let engine_idx = unsafe {
                         SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8
                     };
-                    let Some(engine) = TranslationEngine::from_u8(engine_idx) else {
+                    let Some(engine) = engine_from_combo_index(engine_idx as usize) else {
                         return;
                     };
                     self.populate_language_combos(engine);
@@ -497,7 +520,7 @@ impl TranslateDialog {
                     let source_idx = unsafe {
                         SendMessageW(self.source_lang_combo, CB_GETCURSEL, None, None).0 as usize
                     };
-                    let Some(engine) = TranslationEngine::from_u8(engine_idx) else {
+                    let Some(engine) = engine_from_combo_index(engine_idx as usize) else {
                         return;
                     };
                     if let Some(&source) = engine.supported_source_languages().get(source_idx) {
@@ -652,7 +675,7 @@ impl TranslateDialog {
     fn schedule_auto_translate(&mut self) {
         let engine_idx =
             unsafe { SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8 };
-        let Some(engine) = TranslationEngine::from_u8(engine_idx) else {
+        let Some(engine) = engine_from_combo_index(engine_idx as usize) else {
             return;
         };
         let delay_ms = if engine == TranslationEngine::Llm {
@@ -680,7 +703,7 @@ impl TranslateDialog {
             let target_idx =
                 SendMessageW(self.target_lang_combo, CB_GETCURSEL, None, None).0 as usize;
 
-            let Some(engine) = TranslationEngine::from_u8(engine_idx as u8) else {
+            let Some(engine) = engine_from_combo_index(engine_idx) else {
                 tracing::error!("잘못된 번역 엔진 콤보 선택: {engine_idx}");
                 return;
             };
@@ -696,6 +719,26 @@ impl TranslateDialog {
             };
 
             let mut config = self.config.borrow_mut();
+            if engine == TranslationEngine::Custom {
+                let custom_index = engine_idx - CUSTOM_ENGINE_INDEX;
+                let custom_name = if config.translation.custom_apis.is_empty() {
+                    (custom_index == 0).then(|| config.translation.custom.name.clone())
+                } else {
+                    config
+                        .translation
+                        .custom_apis
+                        .get(custom_index)
+                        .map(|api| api.name.clone())
+                };
+                let Some(custom_name) = custom_name else {
+                    tracing::error!("잘못된 Custom API 콤보 선택: {custom_index}");
+                    return;
+                };
+                if let Err(error) = config.translation.select_custom_api(&custom_name) {
+                    tracing::error!("Custom API 선택 실패: {error}");
+                    return;
+                }
+            }
             config.translation.set_engine(engine);
             config.translation.set_source_language(source_lang);
             config.translation.set_target_language(target_lang);
@@ -845,5 +888,13 @@ impl TranslateDialog {
             crate::translation_ui::cancel_translation(self.hwnd);
         }
         self.last_submitted_source.clear();
+    }
+}
+
+fn engine_from_combo_index(index: usize) -> Option<TranslationEngine> {
+    if index >= CUSTOM_ENGINE_INDEX {
+        Some(TranslationEngine::Custom)
+    } else {
+        TranslationEngine::from_u8(index as u8)
     }
 }

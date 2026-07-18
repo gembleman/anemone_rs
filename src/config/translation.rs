@@ -49,9 +49,15 @@ pub struct TranslationConfig {
     /// LLM 설정
     #[serde(default)]
     pub llm: LlmConfig,
-    /// 사용자 정의 JSON REST API 설정
-    #[serde(default)]
+    /// 이전 버전의 단일 사용자 정의 API 설정. 로드 시 `custom_apis`로 마이그레이션된다.
+    #[serde(default, skip_serializing_if = "CustomApiConfig::is_default")]
     pub custom: CustomApiConfig,
+    /// 현재 선택된 사용자 정의 API 이름. 비어 있으면 첫 항목을 사용한다.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub custom_api: String,
+    /// 이름을 가진 사용자 정의 JSON REST API 설정 목록.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_apis: Vec<CustomApiConfig>,
 }
 
 fn default_engine() -> String {
@@ -97,6 +103,101 @@ impl TranslationConfig {
     /// 엔진 설정
     pub fn set_engine(&mut self, engine: crate::translation::TranslationEngine) {
         self.engine = engine.to_str().to_string();
+    }
+
+    /// 현재 선택된 Custom API를 반환한다. 새 목록이 없으면 이전 단일 설정을 사용한다.
+    pub fn active_custom_api(&self) -> Result<&CustomApiConfig, CustomApiSelectionError> {
+        if self.custom_apis.is_empty() {
+            return Ok(&self.custom);
+        }
+
+        self.validate_custom_api_names()?;
+        if self.custom_api.is_empty() {
+            return Ok(&self.custom_apis[0]);
+        }
+        self.custom_apis
+            .iter()
+            .find(|api| api.name == self.custom_api)
+            .ok_or_else(|| CustomApiSelectionError::NotFound(self.custom_api.clone()))
+    }
+
+    /// 현재 선택된 Custom API를 변경 가능하게 반환한다.
+    pub fn active_custom_api_mut(
+        &mut self,
+    ) -> Result<&mut CustomApiConfig, CustomApiSelectionError> {
+        if self.custom_apis.is_empty() {
+            return Ok(&mut self.custom);
+        }
+
+        self.validate_custom_api_names()?;
+        let index = if self.custom_api.is_empty() {
+            0
+        } else {
+            self.custom_apis
+                .iter()
+                .position(|api| api.name == self.custom_api)
+                .ok_or_else(|| CustomApiSelectionError::NotFound(self.custom_api.clone()))?
+        };
+        Ok(&mut self.custom_apis[index])
+    }
+
+    pub fn active_custom_api_index(&self) -> Result<usize, CustomApiSelectionError> {
+        if self.custom_apis.is_empty() {
+            return Ok(0);
+        }
+        self.validate_custom_api_names()?;
+        if self.custom_api.is_empty() {
+            return Ok(0);
+        }
+        self.custom_apis
+            .iter()
+            .position(|api| api.name == self.custom_api)
+            .ok_or_else(|| CustomApiSelectionError::NotFound(self.custom_api.clone()))
+    }
+
+    pub fn select_custom_api(&mut self, name: &str) -> Result<bool, CustomApiSelectionError> {
+        if self.custom_apis.is_empty() {
+            if name == self.custom.name {
+                return Ok(false);
+            }
+            return Err(CustomApiSelectionError::NotFound(name.to_string()));
+        }
+        self.validate_custom_api_names()?;
+        if !self.custom_apis.iter().any(|api| api.name == name) {
+            return Err(CustomApiSelectionError::NotFound(name.to_string()));
+        }
+        if self.custom_api == name {
+            return Ok(false);
+        }
+        self.custom_api = name.to_string();
+        Ok(true)
+    }
+
+    fn validate_custom_api_names(&self) -> Result<(), CustomApiSelectionError> {
+        let mut names = std::collections::HashSet::new();
+        for api in &self.custom_apis {
+            if api.name.trim().is_empty() {
+                return Err(CustomApiSelectionError::EmptyName);
+            }
+            if !names.insert(api.name.as_str()) {
+                return Err(CustomApiSelectionError::DuplicateName(api.name.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// 이전 단일 Custom API 설정을 이름 기반 목록으로 옮긴다.
+    pub fn normalize_custom_apis(&mut self) {
+        if self.custom_apis.is_empty() && !self.custom.is_default() {
+            let legacy = std::mem::take(&mut self.custom);
+            self.custom_api = legacy.name.clone();
+            self.custom_apis.push(legacy);
+        } else if !self.custom_apis.is_empty() {
+            self.custom = CustomApiConfig::default();
+            if self.custom_api.is_empty() {
+                self.custom_api = self.custom_apis[0].name.clone();
+            }
+        }
     }
 
     /// 소스 언어 설정
@@ -216,6 +317,18 @@ impl Default for TranslationConfig {
             papago_client_secret: String::new(),
             llm: LlmConfig::default(),
             custom: CustomApiConfig::default(),
+            custom_api: String::new(),
+            custom_apis: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CustomApiSelectionError {
+    #[error("Custom API 이름은 비워 둘 수 없습니다.")]
+    EmptyName,
+    #[error("Custom API 이름이 중복되었습니다: {0}")]
+    DuplicateName(String),
+    #[error("선택한 Custom API를 찾을 수 없습니다: {0}")]
+    NotFound(String),
 }
