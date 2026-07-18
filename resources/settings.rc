@@ -165,5 +165,6 @@ BEGIN
     EDITTEXT        1314, 17, 518, 249, 51, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
     LTEXT           "변수: {text}, {source}, {target}, {api_key} · 응답 경로를 비우면 본문 전체 사용", 2247, 17, 573, 249, 10
 
+    PUSHBUTTON      "적용", 1301, 149, 598, 57, 16
     DEFPUSHBUTTON   "닫기", 1300, 211, 598, 57, 16
 END

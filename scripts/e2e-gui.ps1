@@ -362,7 +362,9 @@ try {
     [AnemoneE2E.NativeMethods]::SelectCombo($engineCombo, 1)
     [AnemoneE2E.NativeMethods]::SendCommand($settingsWindow, 1260, 1, $engineCombo)
 
-    # Closing the dialog flushes pending settings through the production save path.
+    # Settings are persisted only when Apply is clicked.
+    $applyButton = [AnemoneE2E.NativeMethods]::RequireControl($settingsWindow, 1301)
+    [AnemoneE2E.NativeMethods]::SendCommand($settingsWindow, 1301, 0, $applyButton)
     $closeButton = [AnemoneE2E.NativeMethods]::RequireControl($settingsWindow, 1300)
     [AnemoneE2E.NativeMethods]::SendCommand($settingsWindow, 1300, 0, $closeButton)
     Wait-WindowClosed `

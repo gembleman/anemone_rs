@@ -61,10 +61,6 @@ pub(super) fn mask_secret(secret: &str) -> String {
     format!("••••{suffix}")
 }
 
-fn should_persist_trackbar(code: u32) -> bool {
-    code == TB_ENDTRACK
-}
-
 /// 설정 대화상자
 pub struct SettingsDialog {
     hwnd: HWND,
@@ -76,7 +72,7 @@ pub struct SettingsDialog {
     applied_dpi: u32,
     scroll_pos: i32,
     scroll_max: i32,
-    pending_disk_save: Cell<bool>,
+    has_unapplied_changes: Cell<bool>,
     /// 엔진별 컨트롤 (EnableWindow 토글용)
     pub(super) engine_controls: [Vec<HWND>; 5],
 }
@@ -119,7 +115,7 @@ unsafe extern "system" fn settings_dialog_proc(
                 applied_dpi: crate::dpi::dpi_for_window(hwnd),
                 scroll_pos: 0,
                 scroll_max: 0,
-                pending_disk_save: Cell::new(false),
+                has_unapplied_changes: Cell::new(false),
                 engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             }));
             SETTINGS_INSTANCE.with(|slot| {
@@ -196,23 +192,10 @@ unsafe extern "system" fn settings_dialog_proc(
                 1
             }
             WM_CLOSE => {
-                match dialog.try_borrow() {
-                    Ok(dialog) => {
-                        let should_close = dialog.persist_pending_changes();
-                        drop(dialog);
-                        can_flush = true;
-                        if should_close {
-                            let _ = DestroyWindow(hwnd);
-                        }
-                    }
-                    Err(_) => super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam),
-                }
+                let _ = DestroyWindow(hwnd);
                 1
             }
             WM_DESTROY => {
-                if let Ok(dialog) = dialog.try_borrow() {
-                    let _ = dialog.persist_pending_changes();
-                }
                 unregister_resource_dialog(hwnd);
                 SETTINGS_INSTANCE.with(|slot| {
                     if let Ok(mut guard) = slot.try_borrow_mut() {
@@ -929,9 +912,6 @@ impl SettingsDialog {
                     };
 
                     self.handle_trackbar(id, value);
-                    if should_persist_trackbar(code) {
-                        self.persist_pending_changes();
-                    }
                 }
                 Some(LRESULT(0))
             }

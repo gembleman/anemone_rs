@@ -133,7 +133,6 @@ pub(super) struct AppModel {
 #[derive(Clone)]
 pub(super) enum AppAction {
     Command(AppCommand),
-    PreviewSettings(SettingsDraft),
     CommitSettings(SettingsDraft),
     ClearBacklog,
 }
@@ -164,10 +163,6 @@ impl AppModel {
     pub(super) fn update(&mut self, action: AppAction) -> Vec<Effect> {
         match action {
             AppAction::Command(command) => self.update_command(command),
-            AppAction::PreviewSettings(draft) => {
-                self.config = draft.into_config();
-                vec![Effect::SyncWindowState, Effect::Repaint]
-            }
             AppAction::CommitSettings(draft) => {
                 self.config = draft.into_config();
                 vec![Effect::SyncWindowState, Effect::Repaint, Effect::SaveConfig]

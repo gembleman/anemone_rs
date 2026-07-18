@@ -124,7 +124,8 @@ pub const CUSTOM_HEADERS_EDIT: u16 = 1316;
 // 탭 컨트롤
 pub const TAB_CONTROL: u16 = 1290;
 
-// 닫기 버튼
+// 적용/닫기 버튼
+pub const APPLY: u16 = 1301;
 pub const CLOSE: u16 = 1300;
 
 // 리소스에서만 텍스트/그룹 박스를 식별하기 위한 ID. 탭 전환과 엔진별

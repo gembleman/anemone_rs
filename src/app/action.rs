@@ -34,10 +34,6 @@ impl AppActionSender {
         }
     }
 
-    pub(crate) fn preview_settings(&self, draft: SettingsDraft) {
-        self.send(AppAction::PreviewSettings(draft));
-    }
-
     pub(crate) fn commit_settings(&self, draft: SettingsDraft) {
         self.send(AppAction::CommitSettings(draft));
     }

@@ -1,5 +1,4 @@
-use super::{mask_secret, should_persist_trackbar};
-use windows::Win32::UI::Controls::{TB_ENDTRACK, TB_LINEDOWN, TB_THUMBTRACK};
+use super::mask_secret;
 
 #[test]
 fn secret_mask_never_contains_the_complete_secret() {
@@ -7,13 +6,6 @@ fn secret_mask_never_contains_the_complete_secret() {
     assert_eq!(masked, "••••1234");
     assert!(!masked.contains("super-secret"));
     assert_eq!(mask_secret("abc"), "••••");
-}
-
-#[test]
-fn persists_trackbar_only_when_tracking_ends() {
-    assert!(!should_persist_trackbar(TB_THUMBTRACK));
-    assert!(!should_persist_trackbar(TB_LINEDOWN));
-    assert!(should_persist_trackbar(TB_ENDTRACK));
 }
 
 #[test]

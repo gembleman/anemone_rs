@@ -1,26 +1,17 @@
-use super::persist_if_pending;
+use super::take_unapplied_changes;
 use std::cell::Cell;
 
 #[test]
-fn failed_save_preserves_retry_flag() {
+fn apply_consumes_unapplied_changes() {
     let pending = Cell::new(true);
 
-    let result = persist_if_pending(&pending, || Err::<(), _>("disk full"));
-
-    assert_eq!(result, Err("disk full"));
-    assert!(pending.get());
+    assert!(take_unapplied_changes(&pending));
+    assert!(!pending.get());
 }
 
 #[test]
-fn no_pending_save_skips_persistence() {
+fn apply_without_changes_is_a_noop() {
     let pending = Cell::new(false);
-    let called = Cell::new(false);
 
-    let result = persist_if_pending(&pending, || {
-        called.set(true);
-        Ok::<(), ()>(())
-    });
-
-    assert_eq!(result, Ok(false));
-    assert!(!called.get());
+    assert!(!take_unapplied_changes(&pending));
 }

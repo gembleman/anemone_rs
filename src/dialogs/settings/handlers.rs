@@ -19,19 +19,8 @@ use crate::translation::settings::{
 };
 use crate::util::to_wide;
 
-#[cfg(test)]
-fn persist_if_pending<E>(
-    pending: &std::cell::Cell<bool>,
-    save: impl FnOnce() -> std::result::Result<(), E>,
-) -> std::result::Result<bool, E> {
-    if !pending.replace(false) {
-        return Ok(false);
-    }
-    if let Err(error) = save() {
-        pending.set(true);
-        return Err(error);
-    }
-    Ok(true)
+fn take_unapplied_changes(pending: &std::cell::Cell<bool>) -> bool {
+    pending.replace(false)
 }
 
 /// +/- 버튼 처리 매크로: config에서 값을 읽고, 범위 내에서 증감 후, UI 업데이트
@@ -72,11 +61,12 @@ impl SettingsDialog {
         use ctrl_id::*;
 
         match cmd {
+            APPLY => self.apply_changes(),
+
             // SAFETY: self.hwnd is a valid window handle from dialog creation.
-            CLOSE if self.persist_pending_changes() => unsafe {
+            CLOSE => unsafe {
                 let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
             },
-            CLOSE => {}
 
             // 배경 색상
             BACKGROUND_COLOR => {
@@ -392,7 +382,7 @@ impl SettingsDialog {
             MARGIN_NAME_TRACKBAR => NumericSetting::NameMargin,
             BORDER_SIZE_TRACKBAR => NumericSetting::BorderWidth,
             LLM_TEMPERATURE_TRACKBAR => {
-                let _ = self.apply_translation_change_deferred(
+                let _ = self.apply_translation_change(
                     TranslationSettingChange::LlmTemperatureSlider(value),
                 );
                 let temp = self.draft.borrow().translation.llm.temperature;
@@ -401,7 +391,7 @@ impl SettingsDialog {
             }
             _ => return,
         };
-        self.apply_settings_change_deferred(SettingsChange::Numeric { setting, value });
+        self.apply_settings_change(SettingsChange::Numeric { setting, value });
         if id == TEXTSIZE_TRACKBAR {
             let size = self.draft.borrow().translation_style.size;
             self.set_control_text(TEXTSIZE_TEXT, &format!("크기: {size}"));
@@ -548,25 +538,13 @@ impl SettingsDialog {
 
     fn apply_settings_change(&self, change: SettingsChange) -> SettingsChangeResult {
         let result = SettingsEditor::apply(&mut self.draft.borrow_mut(), change);
-        self.finish_settings_change(result, true);
+        self.finish_settings_change(result);
         result
     }
 
-    fn apply_settings_change_deferred(&self, change: SettingsChange) -> SettingsChangeResult {
-        let result = SettingsEditor::apply(&mut self.draft.borrow_mut(), change);
-        self.finish_settings_change(result, false);
-        result
-    }
-
-    fn finish_settings_change(&self, result: SettingsChangeResult, persist_now: bool) {
-        if result.preview_refresh_required {
-            self.notify_preview();
-        }
+    fn finish_settings_change(&self, result: SettingsChangeResult) {
         if result.save_required {
-            self.pending_disk_save.set(true);
-            if persist_now {
-                self.persist_pending_changes();
-            }
+            self.has_unapplied_changes.set(true);
         }
     }
 
@@ -576,32 +554,13 @@ impl SettingsDialog {
     ) -> std::result::Result<SettingsApplyResult, TranslationSettingsError> {
         let result =
             TranslationSettingsEditor::apply(&mut self.draft.borrow_mut().translation, change)?;
-        self.finish_translation_change(result, true);
+        self.finish_translation_change(result);
         Ok(result)
     }
 
-    fn apply_translation_change_deferred(
-        &self,
-        change: TranslationSettingChange,
-    ) -> std::result::Result<SettingsApplyResult, TranslationSettingsError> {
-        let result =
-            TranslationSettingsEditor::apply(&mut self.draft.borrow_mut().translation, change)?;
-        self.finish_translation_change(result, false);
-        Ok(result)
-    }
-
-    fn finish_translation_change(&self, result: SettingsApplyResult, persist_now: bool) {
-        if result.runtime_sync_required {
-            self.sync_translation_manager();
-        }
-        if result.preview_refresh_required {
-            self.notify_preview();
-        }
+    fn finish_translation_change(&self, result: SettingsApplyResult) {
         if result.save_required {
-            self.pending_disk_save.set(true);
-            if persist_now {
-                self.persist_pending_changes();
-            }
+            self.has_unapplied_changes.set(true);
         }
     }
 
@@ -723,26 +682,19 @@ impl SettingsDialog {
         self.set_control_text(ctrl_id::TEXTSIZE_TEXT, &format!("크기: {}", size));
     }
 
-    fn notify_preview(&self) {
-        if let Some(actions) = &self.actions {
-            actions.preview_settings(self.draft.borrow().clone());
-        }
-    }
-
     pub(super) fn glossary_applied(&self) {
         self.refresh_glossary_count();
-        self.pending_disk_save.set(true);
-        self.notify_preview();
-        self.persist_pending_changes();
+        self.has_unapplied_changes.set(true);
     }
 
-    pub(super) fn persist_pending_changes(&self) -> bool {
-        if self.pending_disk_save.replace(false)
-            && let Some(actions) = &self.actions
-        {
+    fn apply_changes(&self) {
+        if !take_unapplied_changes(&self.has_unapplied_changes) {
+            return;
+        }
+        self.sync_translation_manager();
+        if let Some(actions) = &self.actions {
             actions.commit_settings(self.draft.borrow().clone());
         }
-        true
     }
 }
 
