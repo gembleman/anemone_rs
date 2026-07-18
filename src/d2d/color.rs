@@ -1,3 +1,4 @@
+use crate::config::TextAlign;
 use windows::Win32::Graphics::{Direct2D::Common::*, DirectWrite::*};
 
 // ── ARGB 컬러 변환 헬퍼 ─────────────────────────────────
@@ -31,3 +32,16 @@ pub(super) fn font_style_to_dwrite(bits: u8) -> (DWRITE_FONT_WEIGHT, DWRITE_FONT
     };
     (weight, style)
 }
+
+#[inline]
+pub(super) fn text_align_to_dwrite(align: TextAlign) -> DWRITE_TEXT_ALIGNMENT {
+    match align {
+        TextAlign::Left => DWRITE_TEXT_ALIGNMENT_LEADING,
+        TextAlign::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
+        TextAlign::Right => DWRITE_TEXT_ALIGNMENT_TRAILING,
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/d2d/color.rs"]
+mod tests;

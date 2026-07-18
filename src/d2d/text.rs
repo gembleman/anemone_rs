@@ -13,10 +13,50 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
     TextBox,
-    cache::{OutlineBitmap, OutlineBitmapKey, OutlineBitmapKeyRef},
+    cache::{EffectiveOutlineStyle, OutlineBitmap, OutlineBitmapKey, OutlineBitmapKeyRef},
     color::argb_to_color_f,
     renderer::D2DRenderer,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct OutlineBitmapBounds {
+    width: f32,
+    height: f32,
+    layout_origin_x: f32,
+    layout_origin_y: f32,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_outline_bitmap_bounds(
+    layout_width: f32,
+    layout_height: f32,
+    overhang: DWRITE_OVERHANG_METRICS,
+    outline_total: f32,
+    shadow_dx: f32,
+    shadow_dy: f32,
+) -> OutlineBitmapBounds {
+    let effect_left = outline_total + (-shadow_dx).max(0.0);
+    let effect_top = outline_total + (-shadow_dy).max(0.0);
+    let effect_right = outline_total + shadow_dx.max(0.0);
+    let effect_bottom = outline_total + shadow_dy.max(0.0);
+    let overhang_left = overhang.left.max(0.0);
+    let overhang_top = overhang.top.max(0.0);
+    let overhang_right = overhang.right.max(0.0);
+    let overhang_bottom = overhang.bottom.max(0.0);
+    let layout_origin_x = effect_left + overhang_left;
+    let layout_origin_y = effect_top + overhang_top;
+
+    OutlineBitmapBounds {
+        width: (layout_origin_x + layout_width.max(0.0) + overhang_right + effect_right)
+            .ceil()
+            .max(1.0),
+        height: (layout_origin_y + layout_height.max(0.0) + overhang_bottom + effect_bottom)
+            .ceil()
+            .max(1.0),
+        layout_origin_x,
+        layout_origin_y,
+    }
+}
 
 impl D2DRenderer {
     /// 텍스트 그리기 (외곽선, 그림자 포함).
@@ -45,10 +85,9 @@ impl D2DRenderer {
             max_width,
             max_height,
         } = bbox;
-        let outline_total = style.outline1_size + style.outline2_size;
-        let has_shadow =
-            style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0);
-        let has_outline = outline_total > 0;
+        let effects = EffectiveOutlineStyle::from_style(style);
+        let has_shadow = effects.has_shadow;
+        let has_outline = effects.outline_total > 0;
 
         // outline / shadow 둘 다 없으면 본문 한 줄만 그린다.
         if !has_outline && !has_shadow {
@@ -80,7 +119,7 @@ impl D2DRenderer {
         // 비트맵을 만들지 않더라도 텍스트가 안정화되면 ring 이 hit 으로
         // 채워져 자동 복귀한다.
         //
-        // 폭주 모드 진입 시 `outline_bitmap` 을 명시적으로 `take()` — stale 한
+        // 폭주 모드 진입 시 `outline_bitmap = None` — stale 한
         // 비트맵 GPU 리소스를 즉시 회수하고, 폭주 종료 후 정상 경로 복귀 시
         // `ensure_outline_bitmap` 이 새 키로 빌드한다 (이 1 회는 자연 miss).
         if self.miss_tracker.is_overloaded() {
@@ -178,9 +217,9 @@ impl D2DRenderer {
             max_width,
             max_height,
         } = bbox;
-        let outline_total = (style.outline1_size + style.outline2_size).max(0);
-        let has_shadow =
-            style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0);
+        let effects = EffectiveOutlineStyle::from_style(style);
+        let outline_total = effects.outline_total;
+        let has_shadow = effects.has_shadow;
 
         // outline geometry + layout 확보 (캐시 hit/miss 처리 포함).
         let _ = self.get_or_create_outline_geometry(text, style, max_width, max_height)?;
@@ -191,9 +230,9 @@ impl D2DRenderer {
         unsafe {
             // 1. 그림자 (outline + 본문 모두 shadow_color 로).
             if has_shadow {
-                let sx = x + style.shadow_offset_x as f32;
-                let sy = y + style.shadow_offset_y as f32;
-                let shadow_brush = self.get_or_create_brush(target, style.shadow_color)?;
+                let sx = x + effects.shadow_offset_x as f32;
+                let sy = y + effects.shadow_offset_y as f32;
+                let shadow_brush = self.get_or_create_brush(target, effects.shadow_color)?;
                 if outline_total > 0 {
                     self.stroke_fill_outline_at(target, sx, sy, outline_total, &shadow_brush);
                 }
@@ -206,15 +245,15 @@ impl D2DRenderer {
             }
 
             // 2. 외곽선2 (OutlineOut) — 전체 두께로 한 번.
-            if style.outline2_size > 0 && outline_total > 0 {
-                let brush = self.get_or_create_brush(target, style.outline2_color)?;
+            if effects.outline2_size > 0 && outline_total > 0 {
+                let brush = self.get_or_create_brush(target, effects.outline2_color)?;
                 self.stroke_fill_outline_at(target, x, y, outline_total, &brush);
             }
 
             // 3. 외곽선1 (OutlineIn) — outline1_size 두께.
-            if style.outline1_size > 0 {
-                let brush = self.get_or_create_brush(target, style.outline1_color)?;
-                self.stroke_fill_outline_at(target, x, y, style.outline1_size, &brush);
+            if effects.outline1_size > 0 {
+                let brush = self.get_or_create_brush(target, effects.outline1_color)?;
+                self.stroke_fill_outline_at(target, x, y, effects.outline1_size, &brush);
             }
 
             // 4. 본문.
@@ -325,33 +364,32 @@ impl D2DRenderer {
         key: OutlineBitmapKey,
     ) -> Result<(OutlineBitmap, IDWriteTextLayout)> {
         // 비트맵 패딩 계산. shadow 는 한 방향만 빠져나가므로 비대칭 패딩.
-        let outline_total = (style.outline1_size + style.outline2_size).max(0) as f32;
-        let (shadow_dx, shadow_dy) =
-            if style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0) {
-                (style.shadow_offset_x as f32, style.shadow_offset_y as f32)
-            } else {
-                (0.0, 0.0)
-            };
-        let pad_left = outline_total + (-shadow_dx).max(0.0);
-        let pad_top = outline_total + (-shadow_dy).max(0.0);
-        let pad_right = outline_total + shadow_dx.max(0.0);
-        let pad_bot = outline_total + shadow_dy.max(0.0);
-
-        // 실제 텍스트 폭/높이 (layout box 가 아니라 글리프 점유 영역).
-        // widthIncludingTrailingWhitespace 는 마지막 공백까지 포함한 layout
-        // 폭으로, 캐시 hit 시 그리기 위치 일관성에 도움.
+        let effects = EffectiveOutlineStyle::from_style(style);
+        let outline_total = effects.outline_total as f32;
+        let shadow_dx = effects.shadow_offset_x as f32;
+        let shadow_dy = effects.shadow_offset_y as f32;
+        // 정렬은 layout box 전체를 기준으로 glyph를 이동시킨다. 따라서
+        // 중간 bitmap도 전체 layout box를 담고, italic/fallback glyph가
+        // box 밖으로 돌출되는 양수 overhang만큼 각 변을 추가로 넓힌다.
         let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
         let mut tm = DWRITE_TEXT_METRICS::default();
-        // SAFETY: layout 은 위에서 막 확보. tm 은 out 파라미터.
-        unsafe {
+        // SAFETY: layout 은 위에서 막 확보. metrics는 out 파라미터.
+        let overhang = unsafe {
             layout.GetMetrics(&mut tm)?;
-        }
-        let text_w = tm.widthIncludingTrailingWhitespace.max(0.0);
-        let text_h = tm.height.max(0.0);
-
-        // 비트맵 크기 — 최소 1×1 보장 (D2D 가 0 사이즈 거부).
-        let bm_w = (pad_left + text_w + pad_right).ceil().max(1.0);
-        let bm_h = (pad_top + text_h + pad_bot).ceil().max(1.0);
+            layout.GetOverhangMetrics()?
+        };
+        let bounds = compute_outline_bitmap_bounds(
+            tm.layoutWidth,
+            tm.layoutHeight,
+            overhang,
+            outline_total,
+            shadow_dx,
+            shadow_dy,
+        );
+        let bm_w = bounds.width;
+        let bm_h = bounds.height;
+        let pad_left = bounds.layout_origin_x;
+        let pad_top = bounds.layout_origin_y;
 
         // SAFETY: target 은 caller 의 BeginDraw 안의 유효 render target.
         // CreateCompatibleRenderTarget 은 그 target 의 디바이스 위에 새 RT 를
@@ -387,11 +425,11 @@ impl D2DRenderer {
             // miss 시에만 발생.
 
             // 1. 그림자
-            if style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0) {
+            if effects.has_shadow {
                 let sx = origin_x + shadow_dx;
                 let sy = origin_y + shadow_dy;
                 let shadow_brush =
-                    inner_rt.CreateSolidColorBrush(&argb_to_color_f(style.shadow_color), None)?;
+                    inner_rt.CreateSolidColorBrush(&argb_to_color_f(effects.shadow_color), None)?;
 
                 if outline_total > 0.0 {
                     self.draw_outline_only(
@@ -415,9 +453,9 @@ impl D2DRenderer {
             }
 
             // 2. 외곽선2 (OutlineOut)
-            if style.outline2_size > 0 && outline_total > 0.0 {
-                let brush =
-                    inner_rt.CreateSolidColorBrush(&argb_to_color_f(style.outline2_color), None)?;
+            if effects.outline2_size > 0 && outline_total > 0.0 {
+                let brush = inner_rt
+                    .CreateSolidColorBrush(&argb_to_color_f(effects.outline2_color), None)?;
                 self.draw_outline_only(
                     inner_rt,
                     text,
@@ -432,9 +470,9 @@ impl D2DRenderer {
             }
 
             // 3. 외곽선1 (OutlineIn)
-            if style.outline1_size > 0 {
-                let brush =
-                    inner_rt.CreateSolidColorBrush(&argb_to_color_f(style.outline1_color), None)?;
+            if effects.outline1_size > 0 {
+                let brush = inner_rt
+                    .CreateSolidColorBrush(&argb_to_color_f(effects.outline1_color), None)?;
                 self.draw_outline_only(
                     inner_rt,
                     text,
@@ -443,7 +481,7 @@ impl D2DRenderer {
                     max_height,
                     origin_x,
                     origin_y,
-                    style.outline1_size,
+                    effects.outline1_size,
                     &brush,
                 )?;
             }
@@ -583,3 +621,7 @@ impl D2DRenderer {
         Ok(rects)
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/d2d/text.rs"]
+mod tests;

@@ -6,14 +6,14 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT},
     UI::WindowsAndMessaging::{
-        DefWindowProcW, GetClientRect, HTCAPTION, HTTRANSPARENT, MINMAXINFO, PostQuitMessage,
-        SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND,
-        WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_HOTKEY, WM_NCHITTEST,
-        WM_NCRBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SIZE,
+        DefWindowProcW, GetClientRect, HTCAPTION, HTTRANSPARENT, KillTimer, MINMAXINFO,
+        PostQuitMessage, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_CLIPBOARDUPDATE, WM_CLOSE,
+        WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_HOTKEY,
+        WM_NCHITTEST, WM_NCRBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
     },
 };
 
-use super::{APP, App};
+use super::{APP, App, COMPOSITION_RETRY_TIMER};
 use crate::constants::{
     MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
     WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
@@ -163,6 +163,15 @@ impl App {
                         tracing::warn!("paint failed on WM_PAINT: {e}");
                     }
                     let _ = EndPaint(hwnd, &ps);
+                    Some(LRESULT(0))
+                }
+
+                WM_TIMER if wparam.0 == COMPOSITION_RETRY_TIMER => {
+                    let _ = KillTimer(Some(hwnd), COMPOSITION_RETRY_TIMER);
+                    self.composition_retry_scheduled = false;
+                    if let Err(e) = self.paint() {
+                        tracing::warn!("composition retry paint failed: {e}");
+                    }
                     Some(LRESULT(0))
                 }
 

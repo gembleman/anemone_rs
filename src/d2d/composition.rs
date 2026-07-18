@@ -1,7 +1,7 @@
-//! Direct2D + DirectComposition 합성 경로 프로토타입 (경로 B)
+//! Direct2D + DirectComposition 합성 렌더링 스택.
 //!
-//! 현재 렌더 경로 (`d2d` + `window.rs::DoubleBuffer`/`update_layered_window`)
-//! 를 다음 단계에서 GPU 합성 경로로 교체하기 위한 **스케치**.
+//! 앱의 현재 paint 경로가 사용하는 D3D11/DXGI/D2D/DComp 자원과 수명을
+//! 관리한다.
 //!
 //! # 배경
 //!
@@ -10,7 +10,7 @@
 //! 의 3 단 구조. paint 1 회당 시스템 메모리 ↔ GPU 왕복이 발생해 baseline
 //! avg ~2.66 ms (`docs/next_steps.md` 항목 1 측정 참조).
 //!
-//! 신규 경로 (본 모듈이 시연):
+//! 현재 경로:
 //! `D3D11 → DXGI flip swap chain (CreateSwapChainForComposition) →
 //!  ID2D1DeviceContext + ID2D1Bitmap1 → IDCompositionVisual → DWM`.
 //! GPU 안에서 합성이 끝나므로 메모리 왕복이 사라진다.
@@ -31,20 +31,12 @@
 //!
 //! # 본 모듈의 역할
 //!
-//! 이 파일은 컴파일/링크가 통과하는 최소 동작 스켈레톤이다:
 //! - `CompositionRenderer::new(hwnd)` — 전체 스택 부트스트랩
 //! - `begin_draw()` → `&ID2D1DeviceContext` 반환 → 호출자가 D2D 명령 발행
 //! - `present()` — swap chain 제출 + DComp commit (commit 은 트리 변경 시만)
 //! - `resize(w, h)` — `ResizeBuffers` + bitmap 재바인딩
-//!
-//! 본 작업 (경로 교체) 시:
-//! 1. `d2d::D2DRenderer` 의 그리기 메서드들을 `&ID2D1DeviceContext`
-//!    대상으로 일반화 (현재는 `ID2D1DCRenderTarget`).
-//! 2. `app.rs::paint` 에서 `DoubleBuffer` + `update_layered_window` 경로
-//!    제거하고 `CompositionRenderer` 사용.
-//! 3. 윈도우 클래스 등록 시 `WS_EX_NOREDIRECTIONBITMAP` 추가, `WS_EX_LAYERED`
-//!    제거.
-//! 4. `WM_SIZE` 처리에서 `CompositionRenderer::resize` 호출.
+//! - frame-latency wait 결과를 timeout/API failure로 구분
+//! - hardware D3D11 실패 시 WARP fallback
 
 use windows::{
     Win32::{
@@ -61,6 +53,15 @@ use windows::{
     },
     core::*,
 };
+
+/// frame-latency wait 결과. timeout은 정상적인 back-pressure이고,
+/// `Failed`는 wait handle/렌더 스택을 재생성해야 하는 API 오류다.
+#[must_use]
+pub enum WaitOutcome {
+    Ready,
+    Timeout,
+    Failed(Error),
+}
 
 /// D2D + DirectComposition 합성 렌더러
 ///
@@ -141,20 +142,32 @@ impl CompositionRenderer {
         // 부트스트랩이며, out-pointer 는 로컬 변수다. hwnd 는 호출자가
         // 보장한 유효 핸들.
         unsafe {
-            // 1. D3D11 디바이스 생성 (BGRA = D2D interop)
-            let mut d3d_device: Option<ID3D11Device> = None;
-            D3D11CreateDevice(
-                None, // 기본 어댑터
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(), // 소프트웨어 모듈 없음
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                None, // 가능한 가장 높은 feature level 자동 선택
-                D3D11_SDK_VERSION,
-                Some(&mut d3d_device),
-                None, // 실제 feature level 알 필요 없음
-                None, // immediate context 도 안 받음
-            )?;
-            let d3d_device = d3d_device.ok_or_else(|| Error::from_hresult(E_FAIL))?;
+            // 1. D3D11 디바이스 생성 (BGRA = D2D interop). 원격 데스크톱,
+            // 제한된 VM, 일시적인 드라이버 장애에서는 hardware 생성이
+            // 실패할 수 있으므로 WARP를 명시적인 fallback으로 사용한다.
+            let d3d_device = match create_d3d_device(D3D_DRIVER_TYPE_HARDWARE) {
+                Ok(device) => device,
+                Err(hardware_error) => {
+                    tracing::warn!(
+                        "D3D11 hardware device creation failed ({hardware_error}); trying WARP"
+                    );
+                    match create_d3d_device(D3D_DRIVER_TYPE_WARP) {
+                        Ok(device) => {
+                            tracing::warn!("D3D11 WARP renderer is active");
+                            device
+                        }
+                        Err(warp_error) => {
+                            return Err(Error::new(
+                                warp_error.code(),
+                                format!(
+                                    "D3D11 device creation failed: hardware={hardware_error}; \
+                                     WARP={warp_error}"
+                                ),
+                            ));
+                        }
+                    }
+                }
+            };
 
             // 2. DXGI 디바이스/팩토리 확보
             let dxgi_device: IDXGIDevice = d3d_device.cast()?;
@@ -255,14 +268,23 @@ impl CompositionRenderer {
     /// 결과). 명시적으로 wait 를 분리해 두면 EndDraw 가 순수 명령 flush 비용만
     /// 남아 paint 의 phase 별 비용 분포가 정직해진다.
     ///
-    /// `timeout_ms` 는 비정상 상태 (GPU TDR 등) 안전망. 0 ms 가 정상 (이미
-    /// ready) 또는 1 frame (~16 ms) 이내가 일반적이므로 1000 ms 면 충분.
-    /// 반환값은 wait 성공 여부다. `false` 면 timeout/failure 이므로 호출자가
-    /// 이번 paint 를 건너뛰거나 렌더 스택 재생성을 결정한다.
-    pub fn wait_for_back_buffer(&self, timeout_ms: u32) -> bool {
+    /// timeout과 API failure를 구분해 호출자가 skip과 복구를 각각 선택할 수
+    /// 있게 한다. UI 스레드에서 호출하므로 caller는 짧은 timeout을 사용해야
+    /// 한다.
+    pub fn wait_for_back_buffer(&self, timeout_ms: u32) -> WaitOutcome {
         // SAFETY: frame_latency_handle 은 생성자에서 GetFrameLatencyWaitable
         // Object 가 반환한 유효 핸들. drop 시 CloseHandle.
-        unsafe { WaitForSingleObjectEx(self.frame_latency_handle, timeout_ms, false).0 == 0 }
+        let result = unsafe { WaitForSingleObjectEx(self.frame_latency_handle, timeout_ms, false) };
+        match result {
+            WAIT_OBJECT_0 => WaitOutcome::Ready,
+            WAIT_TIMEOUT => WaitOutcome::Timeout,
+            // WAIT_FAILED의 GetLastError를 다른 Win32 호출 전에 즉시 보존한다.
+            WAIT_FAILED => WaitOutcome::Failed(Error::from_thread()),
+            _ => WaitOutcome::Failed(Error::new(
+                E_UNEXPECTED,
+                format!("unexpected frame wait result: 0x{:08X}", result.0),
+            )),
+        }
     }
 
     /// 그리기 시작. 호출자는 반환된 컨텍스트로 D2D 명령을 발행한다.
@@ -285,10 +307,10 @@ impl CompositionRenderer {
     /// - `0` — 즉시 반환 (벤치마크 / 자유 프레임 페이싱 용)
     ///
     /// device-lost (`D2DERR_RECREATE_TARGET`) 시 `Err` 를 반환한다. 호출자는
-    /// 스택을 새로 만들어야 한다 (현재 PoC 에서는 재생성 로직 미포함).
+    /// 스택을 새로 만들어야 한다 (`App::handle_device_lost`가 담당).
     ///
     /// 본 앱은 phase 측정 편의를 위해 `end_draw()` + `present()` 를 분리
-    /// 호출한다 — 이 메서드는 PoC smoke example 호환 용도로 유지.
+    /// 호출한다 — 이 메서드는 smoke example 호환 용도로 유지.
     #[allow(dead_code)]
     pub fn end_draw_and_present(&self, sync_interval: u32) -> Result<()> {
         self.end_draw()?;
@@ -354,6 +376,27 @@ impl CompositionRenderer {
         // SAFETY: dcomp_device 는 생성자에서 만든 유효한 COM 객체.
         unsafe { self.dcomp_device.Commit() }
     }
+}
+
+/// hardware/WARP 공통 D3D11 생성 경계.
+unsafe fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
+    let mut device = None;
+    // SAFETY: 표준 D3D11 부트스트랩 호출. out-pointer는 로컬 Option이고,
+    // software module은 WARP/hardware 모두 None이어야 한다.
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            driver_type,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            None,
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            None,
+        )?;
+    }
+    device.ok_or_else(|| Error::from_hresult(E_FAIL))
 }
 
 impl Drop for CompositionRenderer {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::window::TextRenderStyle;
+use crate::{config::TextAlign, window::TextRenderStyle};
 use windows::Win32::Graphics::{Direct2D::*, DirectWrite::*};
 
 /// 텍스트 layout / outline geometry 캐시 키.
@@ -18,6 +18,7 @@ pub(super) struct TextLayoutKey {
     pub(super) font_face: Arc<str>,
     pub(super) font_size: i32,
     pub(super) font_style: u8,
+    pub(super) text_align: TextAlign,
     pub(super) max_width_bits: u32,
     pub(super) max_height_bits: u32,
 }
@@ -30,6 +31,7 @@ pub(super) struct LayoutKeyRef<'a> {
     pub(super) font_face: &'a str,
     pub(super) font_size: i32,
     pub(super) font_style: u8,
+    pub(super) text_align: TextAlign,
     pub(super) max_width_bits: u32,
     pub(super) max_height_bits: u32,
 }
@@ -46,6 +48,7 @@ impl<'a> LayoutKeyRef<'a> {
             font_face: &style.font_face,
             font_size: style.font_size,
             font_style: style.font_style,
+            text_align: style.text_align,
             max_width_bits: max_width.to_bits(),
             max_height_bits: max_height.to_bits(),
         }
@@ -54,6 +57,7 @@ impl<'a> LayoutKeyRef<'a> {
     pub(super) fn matches(&self, key: &TextLayoutKey) -> bool {
         self.font_size == key.font_size
             && self.font_style == key.font_style
+            && self.text_align == key.text_align
             && self.max_width_bits == key.max_width_bits
             && self.max_height_bits == key.max_height_bits
             && self.text == &*key.text
@@ -66,6 +70,7 @@ impl<'a> LayoutKeyRef<'a> {
             font_face: Arc::from(self.font_face),
             font_size: self.font_size,
             font_style: self.font_style,
+            text_align: self.text_align,
             max_width_bits: self.max_width_bits,
             max_height_bits: self.max_height_bits,
         }
@@ -93,6 +98,7 @@ pub(super) struct OutlineBitmapKey {
     pub(super) font_face: Arc<str>,
     pub(super) font_size: i32,
     pub(super) font_style: u8,
+    pub(super) text_align: TextAlign,
     pub(super) max_width_bits: u32,
     pub(super) max_height_bits: u32,
     pub(super) outline1_size: i32,
@@ -111,6 +117,7 @@ pub(super) struct OutlineBitmapKeyRef<'a> {
     pub(super) font_face: &'a str,
     pub(super) font_size: i32,
     pub(super) font_style: u8,
+    pub(super) text_align: TextAlign,
     pub(super) max_width_bits: u32,
     pub(super) max_height_bits: u32,
     pub(super) outline1_size: i32,
@@ -130,27 +137,30 @@ impl<'a> OutlineBitmapKeyRef<'a> {
         max_width: f32,
         max_height: f32,
     ) -> Self {
+        let effects = EffectiveOutlineStyle::from_style(style);
         Self {
             text,
             font_face: &style.font_face,
             font_size: style.font_size,
             font_style: style.font_style,
+            text_align: style.text_align,
             max_width_bits: max_width.to_bits(),
             max_height_bits: max_height.to_bits(),
-            outline1_size: style.outline1_size,
-            outline1_color: style.outline1_color,
-            outline2_size: style.outline2_size,
-            outline2_color: style.outline2_color,
-            shadow_enabled: style.shadow_enabled,
-            shadow_color: style.shadow_color,
-            shadow_offset_x: style.shadow_offset_x,
-            shadow_offset_y: style.shadow_offset_y,
+            outline1_size: effects.outline1_size,
+            outline1_color: effects.outline1_color,
+            outline2_size: effects.outline2_size,
+            outline2_color: effects.outline2_color,
+            shadow_enabled: effects.has_shadow,
+            shadow_color: effects.shadow_color,
+            shadow_offset_x: effects.shadow_offset_x,
+            shadow_offset_y: effects.shadow_offset_y,
         }
     }
 
     pub(super) fn matches(&self, key: &OutlineBitmapKey) -> bool {
         self.font_size == key.font_size
             && self.font_style == key.font_style
+            && self.text_align == key.text_align
             && self.max_width_bits == key.max_width_bits
             && self.max_height_bits == key.max_height_bits
             && self.outline1_size == key.outline1_size
@@ -171,6 +181,7 @@ impl<'a> OutlineBitmapKeyRef<'a> {
             font_face: Arc::from(self.font_face),
             font_size: self.font_size,
             font_style: self.font_style,
+            text_align: self.text_align,
             max_width_bits: self.max_width_bits,
             max_height_bits: self.max_height_bits,
             outline1_size: self.outline1_size,
@@ -181,6 +192,51 @@ impl<'a> OutlineBitmapKeyRef<'a> {
             shadow_color: self.shadow_color,
             shadow_offset_x: self.shadow_offset_x,
             shadow_offset_y: self.shadow_offset_y,
+        }
+    }
+}
+
+/// 실제 픽셀을 바꾸는 outline/shadow 입력만 남긴 정규형. 캐시 키와 draw
+/// 조건이 이 값을 공유하므로 비활성 효과의 색상 변경은 bitmap miss를
+/// 만들지 않는다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct EffectiveOutlineStyle {
+    pub(super) outline1_size: i32,
+    pub(super) outline1_color: u32,
+    pub(super) outline2_size: i32,
+    pub(super) outline2_color: u32,
+    pub(super) outline_total: i32,
+    pub(super) has_shadow: bool,
+    pub(super) shadow_color: u32,
+    pub(super) shadow_offset_x: i32,
+    pub(super) shadow_offset_y: i32,
+}
+
+impl EffectiveOutlineStyle {
+    pub(super) fn from_style(style: &TextRenderStyle) -> Self {
+        let outline1_size = style.outline1_size.max(0);
+        let outline2_size = style.outline2_size.max(0);
+        let outline_total = outline1_size.saturating_add(outline2_size);
+        let has_shadow =
+            style.shadow_enabled && (style.shadow_offset_x != 0 || style.shadow_offset_y != 0);
+        Self {
+            outline1_size,
+            outline1_color: if outline1_size > 0 {
+                style.outline1_color
+            } else {
+                0
+            },
+            outline2_size,
+            outline2_color: if outline2_size > 0 {
+                style.outline2_color
+            } else {
+                0
+            },
+            outline_total,
+            has_shadow,
+            shadow_color: if has_shadow { style.shadow_color } else { 0 },
+            shadow_offset_x: if has_shadow { style.shadow_offset_x } else { 0 },
+            shadow_offset_y: if has_shadow { style.shadow_offset_y } else { 0 },
         }
     }
 }
@@ -210,7 +266,7 @@ pub(super) struct OutlineBitmap {
 /// 흘러들어 baseline (~1 ms) 보다 느려지는 문제 — 의 안전망.
 ///
 /// 동작: 직전 [`Self::WINDOW`] 회 paint 의 hit/miss 를 ring buffer 로
-/// 보관. miss 가 [`Self::THRESHOLD`] 이상이면 "폭주" 로 판정하고,
+/// 보관. miss 가 runtime `threshold` 이상이면 "폭주" 로 판정하고,
 /// 그 동안은 [`D2DRenderer::draw_text`] 가 비트맵 빌드를 건너뛴 채
 /// outline geometry stroke+fill 을 paint 안에서 직접 수행한다. 폭주
 /// 상황의 paint 1 회 GPU 명령은 9 개로 baseline 과 동일 수준이지만
@@ -219,7 +275,7 @@ pub(super) struct OutlineBitmap {
 ///
 /// 자동 복귀: 폭주 모드 중에도 직전 key (`last_key`) 와 일치하는 paint
 /// 는 "hit" 로 ring 에 기록 — 텍스트가 안정화되면 ring 이 hit 으로
-/// 채워져 [`Self::THRESHOLD`] 아래로 떨어진다. 그 다음 paint 부터
+/// 채워져 runtime `threshold` 아래로 떨어진다. 그 다음 paint 부터
 /// 정상 경로로 복귀해 `ensure_outline_bitmap` 이 새 비트맵을 빌드한다
 /// (이 1 회는 miss 로 기록되지만 곧 hit 으로 안정).
 ///
@@ -290,3 +346,7 @@ impl MissTracker {
         self.filled >= Self::WINDOW && self.ring.count_ones() as u8 >= self.threshold
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/d2d/cache.rs"]
+mod tests;

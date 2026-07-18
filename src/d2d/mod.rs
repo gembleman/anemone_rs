@@ -11,7 +11,7 @@ mod outline_text_renderer;
 mod renderer;
 mod text;
 
-pub use composition::CompositionRenderer;
+pub use composition::{CompositionRenderer, WaitOutcome};
 pub use renderer::D2DRenderer;
 
 /// 텍스트 layout 박스: 그리기 원점 `(x, y)` 과 layout 최대 크기.

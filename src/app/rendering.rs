@@ -4,15 +4,19 @@ use windows::{
     Win32::{
         Foundation::D2DERR_RECREATE_TARGET,
         Graphics::Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET},
+        Graphics::Gdi::InvalidateRect,
+        UI::WindowsAndMessaging::SetTimer,
     },
     core::{Error, Result},
 };
 
-use super::{App, state};
-use crate::d2d::CompositionRenderer;
+use super::{App, COMPOSITION_RETRY_TIMER, state};
+use crate::d2d::{CompositionRenderer, WaitOutcome};
 use crate::window::TextRenderStyle;
 
 impl App {
+    const FRAME_WAIT_TIMEOUT_MS: u32 = 16;
+
     fn text_layout_extent(size: i32, margin: i32) -> f32 {
         size.saturating_sub(margin.saturating_mul(2)).max(1) as f32
     }
@@ -28,6 +32,9 @@ impl App {
         // 합성 렌더러 lazy init — 첫 paint 시 부착.
         // hwnd 가 보이는 시점 (`ShowWindow` 이후) 이어야 클라이언트 사이즈가 양수다.
         if self.composition.is_none() {
+            if self.composition_retry_scheduled {
+                return Ok(());
+            }
             // D2DRenderer 의 factory 를 공유해 합성 경로의 device 를 같은 factory
             // 위에서 만든다 → brush/geometry/text-layout 의 factory 일치 보장.
             let Some(d2d_renderer) = self.d2d_renderer.as_ref() else {
@@ -38,9 +45,19 @@ impl App {
                 Ok(c) => {
                     tracing::info!("DComp composition renderer initialized");
                     self.composition = Some(c);
+                    self.composition_init_failures = 0;
                 }
                 Err(e) => {
-                    tracing::error!("CompositionRenderer init failed: {e}");
+                    let delay_ms = composition_retry_delay_ms(self.composition_init_failures);
+                    self.composition_init_failures =
+                        self.composition_init_failures.saturating_add(1);
+                    // SAFETY: hwnd는 App이 소유한다. callback 없는 window timer는
+                    // WM_TIMER를 같은 UI thread의 window procedure로 보낸다.
+                    let timer = unsafe {
+                        SetTimer(Some(self.hwnd), COMPOSITION_RETRY_TIMER, delay_ms, None)
+                    };
+                    self.composition_retry_scheduled = timer != 0;
+                    tracing::error!("CompositionRenderer init failed: {e}; retry in {delay_ms} ms");
                     return Ok(());
                 }
             }
@@ -63,6 +80,7 @@ impl App {
             font_size: text_style.size,
             font_face: Arc::from(text_style.font_face.as_str()),
             font_style: text_style.font_style,
+            text_align: cfg.text_align,
             color: text_style.color_primary,
             outline1_size: text_style.outline1_size,
             outline1_color: text_style.color_outline1,
@@ -90,11 +108,27 @@ impl App {
         let t = phase_record(PhaseField::Setup, t);
 
         // waitable swap chain: 다음 back buffer 가 사용 가능해질 때까지 명시
-        // 대기. 이 wait 가 없으면 DXGI 가 EndDraw 내부에서 동일 대기를 수행해
-        // ~1 ms 스톨을 만든다. 1000 ms 는 GPU TDR 등 비정상 상태 안전망.
-        if !composition.wait_for_back_buffer(1000) {
-            tracing::warn!("DComp wait_for_back_buffer timed out or failed; skipping paint");
-            return Ok(());
+        // 대기. UI 스레드를 장시간 막지 않도록 한 프레임만 기다린다. timeout은
+        // paint를 다시 예약하고, API failure는 handle을 포함한 스택을 재생성한다.
+        match composition.wait_for_back_buffer(Self::FRAME_WAIT_TIMEOUT_MS) {
+            WaitOutcome::Ready => {}
+            WaitOutcome::Timeout => {
+                tracing::debug!("DComp back buffer wait timed out; retrying next paint");
+                // SAFETY: hwnd는 App이 소유한 유효한 top-level window handle.
+                unsafe {
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+                return Ok(());
+            }
+            WaitOutcome::Failed(e) => {
+                tracing::error!("DComp back buffer wait failed: {e}; recreating stack");
+                self.handle_device_lost();
+                // SAFETY: 새 스택을 다음 WM_PAINT에서 lazy-init하기 위해 예약.
+                unsafe {
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+                return Ok(());
+            }
         }
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::SwapChainWait, t);
@@ -118,6 +152,8 @@ impl App {
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::BeginClear, t);
 
+        let mut frame_error = false;
+
         // 테두리 그리기
         if border_visible
             && let Err(e) = renderer.draw_border(
@@ -129,6 +165,7 @@ impl App {
             )
         {
             tracing::error!("D2D draw_border failed: {e}");
+            frame_error = true;
         }
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Border, t);
@@ -149,6 +186,7 @@ impl App {
                 &render_style,
             ) {
                 tracing::error!("D2D draw_text failed: {e}");
+                frame_error = true;
             }
         }
         #[cfg(feature = "benchmark")]
@@ -171,9 +209,16 @@ impl App {
                 return Ok(());
             }
             tracing::error!("DComp end_draw failed: {e}");
+            // EndDraw가 실패한 frame은 완결되지 않았으므로 Present하지 않는다.
+            return Ok(());
         }
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::EndDraw, t);
+
+        if frame_error {
+            tracing::warn!("D2D frame contained draw errors; skipping present");
+            return Ok(());
+        }
 
         if let Err(e) = composition.present(0) {
             if Self::is_device_lost(&e) {
@@ -206,9 +251,11 @@ impl App {
             } else {
                 0
             };
-            let inflate =
-                (render_style.outline1_size + render_style.outline2_size + shadow_inflate + 1)
-                    as f32;
+            let inflate = render_style
+                .outline1_size
+                .saturating_add(render_style.outline2_size)
+                .saturating_add(shadow_inflate)
+                .saturating_add(1) as f32;
             if let Some(d2d) = self.d2d_renderer.as_mut() {
                 match d2d.compute_text_line_rects(
                     &self.state.current_text,
@@ -285,3 +332,13 @@ impl App {
         self.paint()
     }
 }
+
+fn composition_retry_delay_ms(failures: u32) -> u32 {
+    const INITIAL_MS: u32 = 250;
+    const MAX_SHIFT: u32 = 5;
+    INITIAL_MS.saturating_mul(1u32 << failures.min(MAX_SHIFT))
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/app/rendering.rs"]
+mod tests;

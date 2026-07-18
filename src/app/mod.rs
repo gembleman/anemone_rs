@@ -32,6 +32,7 @@ mod window_proc;
 const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
 const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
 const WINDOW_TITLE: PCWSTR = w!("아네모네");
+pub(super) const COMPOSITION_RETRY_TIMER: usize = 0xD2D0;
 
 pub struct App {
     hwnd: HWND,
@@ -50,6 +51,10 @@ pub struct App {
     /// 의 첫 paint 에서 만든다. client size 가 0 이면 swap chain 생성이
     /// 실패하기 때문.
     composition: Option<CompositionRenderer>,
+    /// D3D/DComp 초기화가 연속 실패할 때 paint마다 전체 스택 생성과 로그를
+    /// 반복하지 않도록 timer 기반 backoff를 적용한다.
+    composition_init_failures: u32,
+    composition_retry_scheduled: bool,
     /// 텍스트가 차지하는 라인 단위 사각형 (클라이언트 좌표).
     ///
     /// 비어 있으면 `WM_NCHITTEST` 가 윈도우 사각 전체를 `HTCAPTION` 으로
