@@ -67,7 +67,7 @@ fn failed_persist_removes_the_temporary_output() {
     std::fs::create_dir(&output).unwrap();
 
     let mut pending = PendingOutput::create(&output).unwrap();
-    let temporary = pending.temp_path.clone();
+    let temporary = pending.temp_path().to_path_buf();
     pending
         .writer()
         .write_all(b"complete but cannot replace")
@@ -304,11 +304,8 @@ fn cancellation_aborts_an_in_flight_file_http_request() {
         .enable_all()
         .build()
         .unwrap();
-    let client = crate::translation::http_common::shared_client();
-    let context = super::TranslationContext {
-        runtime: &runtime,
-        http_client: &client,
-    };
+    let client = reqwest::Client::new();
+    let context = super::TranslationContext::new(&runtime, &client);
     let cancel = cancel_token.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));

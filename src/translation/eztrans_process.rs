@@ -18,7 +18,7 @@ use super::{EzTransTranslator, Language};
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct EzTransProcessConfig {
+pub struct EzTransProcessConfig {
     pub dll_path: String,
     pub dat_path: String,
     pub process_count: usize,
@@ -36,7 +36,7 @@ struct WorkerResponse {
 
 /// 파일 워커가 의존하는 최소 배치 번역 인터페이스. 단위 테스트에서는 DLL 대신
 /// 메모리 mock을 주입한다.
-pub(crate) trait EzTransBatchTranslator: Send + Sync {
+pub trait EzTransBatchTranslator: Send + Sync {
     fn process_count(&self) -> usize;
 
     fn translate_batches(

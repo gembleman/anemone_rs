@@ -29,14 +29,14 @@ struct SleepBlocker;
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// 성공 시에만 최종 경로로 교체되는 임시 출력 파일.
-struct PendingOutput {
+pub struct PendingOutput {
     final_path: PathBuf,
     temp_path: PathBuf,
     writer: Option<BufWriter<File>>,
 }
 
 impl PendingOutput {
-    fn create(final_path: &Path) -> Result<Self, String> {
+    pub fn create(final_path: &Path) -> Result<Self, String> {
         let parent = final_path.parent().unwrap_or(Path::new(""));
         let name = final_path.file_name().unwrap_or_default().to_string_lossy();
 
@@ -74,11 +74,15 @@ impl PendingOutput {
         ))
     }
 
-    fn writer(&mut self) -> &mut BufWriter<File> {
+    pub fn writer(&mut self) -> &mut BufWriter<File> {
         self.writer.as_mut().expect("writer exists until persist")
     }
 
-    fn persist(mut self) -> Result<(), String> {
+    pub fn temp_path(&self) -> &Path {
+        &self.temp_path
+    }
+
+    pub fn persist(mut self) -> Result<(), String> {
         let mut writer = self.writer.take().expect("writer exists until persist");
         writer.flush().map_err(|error| {
             format!(
@@ -142,7 +146,7 @@ impl Drop for SleepBlocker {
 /// 파일 번역 작업을 실행한다.
 ///
 /// 진행 이벤트는 UI 종류와 무관한 호출자 콜백으로 전달한다.
-pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
+pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     // 작업이 끝날 때까지 시스템 절전을 막는다.
     let _sleep_guard = SleepBlocker::new();
 
@@ -264,9 +268,18 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     report(ProgressEvent::Complete);
 }
 
-struct TranslationContext<'a> {
+pub struct TranslationContext<'a> {
     runtime: &'a tokio::runtime::Runtime,
     http_client: &'a reqwest::Client,
+}
+
+impl<'a> TranslationContext<'a> {
+    pub fn new(runtime: &'a tokio::runtime::Runtime, http_client: &'a reqwest::Client) -> Self {
+        Self {
+            runtime,
+            http_client,
+        }
+    }
 }
 
 struct FileRuntime<'a> {
@@ -288,7 +301,7 @@ fn preflight_inputs(
     Ok(counts)
 }
 
-fn validate_and_count_reader<R: Read>(
+pub fn validate_and_count_reader<R: Read>(
     mut reader: R,
     path: &Path,
     cancel_token: &std::sync::atomic::AtomicBool,
@@ -351,7 +364,7 @@ fn validate_and_count_reader<R: Read>(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LineEnding {
+pub enum LineEnding {
     None,
     Lf,
     CrLf,
@@ -374,21 +387,21 @@ impl LineEnding {
     }
 }
 
-struct InputLine {
-    text: String,
-    ending: LineEnding,
+pub struct InputLine {
+    pub text: String,
+    pub ending: LineEnding,
 }
 
 /// 파일 작업 동안만 유지되는 bounded FIFO 번역 캐시. HashMap 조회는 평균 O(1)이고,
 /// 삽입 순서 큐로 메모리 상한을 강제한다. 설정/사전이 다른 다음 작업으로는 넘어가지 않는다.
-struct BoundedTranslationCache {
+pub struct BoundedTranslationCache {
     capacity: usize,
     entries: HashMap<Arc<str>, Arc<str>>,
     insertion_order: VecDeque<Arc<str>>,
 }
 
 impl BoundedTranslationCache {
-    fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
             entries: HashMap::with_capacity(capacity.min(16_384)),
@@ -415,7 +428,7 @@ impl BoundedTranslationCache {
     }
 }
 
-fn read_input_line<R: BufRead>(
+pub fn read_input_line<R: BufRead>(
     reader: &mut R,
     path: &Path,
     first_line: bool,
@@ -577,7 +590,7 @@ fn translate_lines(
         .collect()
 }
 
-fn translate_eztrans_window(
+pub fn translate_eztrans_window(
     lines: &[InputLine],
     job_data: &FileTransJobData,
     translator: &dyn EzTransBatchTranslator,
@@ -635,7 +648,10 @@ fn translate_eztrans_window(
     Ok(results)
 }
 
-fn partition_eztrans_batches(originals: &[Arc<str>], process_count: usize) -> Vec<Vec<Arc<str>>> {
+pub fn partition_eztrans_batches(
+    originals: &[Arc<str>],
+    process_count: usize,
+) -> Vec<Vec<Arc<str>>> {
     if originals.is_empty() {
         return Vec::new();
     }
@@ -690,7 +706,7 @@ fn should_translate_line(line: &str, no_trans_linefeed: bool) -> bool {
 
 /// EzTrans는 다중 줄 입력의 줄바꿈 양옆에 공백 하나를 삽입한다. 원문 경계에
 /// 이미 공백이 있으면 추가하지 않으므로, 원문에 없던 경계 공백만 제거한다.
-pub(crate) fn split_eztrans_batch(translated: &str, originals: &[&str]) -> Option<Vec<String>> {
+pub fn split_eztrans_batch(translated: &str, originals: &[&str]) -> Option<Vec<String>> {
     let mut parts = translated
         .split('\n')
         .map(|part| part.strip_suffix('\r').unwrap_or(part).to_string())
@@ -720,7 +736,7 @@ pub(crate) fn split_eztrans_batch(translated: &str, originals: &[&str]) -> Optio
 /// 라인 번역.
 ///
 /// 한 줄을 동기 번역한다. 빈 줄은 유지하고 실패는 표식으로 바꿔 배치를 계속한다.
-fn translate_line(
+pub fn translate_line(
     line: &str,
     job_data: &FileTransJobData,
     translation: &TranslationContext<'_>,
@@ -770,7 +786,7 @@ async fn wait_for_cancellation(token: &std::sync::atomic::AtomicBool) {
 }
 
 /// 출력 형식에 따라 쓰기
-fn write_output<W: Write>(
+pub fn write_output<W: Write>(
     writer: &mut W,
     original: &str,
     translated: &str,
@@ -831,11 +847,3 @@ fn send_filename(path: &Path, report: &impl Fn(ProgressEvent)) {
 
     report(ProgressEvent::FileName(filename));
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/file_trans/worker.rs"]
-mod tests;
-
-#[cfg(all(test, feature = "benchmark"))]
-#[path = "../../benchmark/file_trans/worker.rs"]
-mod benchmarks;

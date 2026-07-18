@@ -77,3 +77,8 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+[[test]]
+name = "file_trans_benchmark"
+path = "benchmark/file_trans_test.rs"
+required-features = ["benchmark"]

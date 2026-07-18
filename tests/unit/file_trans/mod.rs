@@ -1,11 +1,11 @@
 use super::{
-    CancelHandle, FileTransJobData, FileTransRunner, FileTransTask, ProgressEvent, WriteType,
+    FileTransJobData, FileTransRunner, FileTransTask, ProgressEvent, WriteType,
     default_output_paths, run, validate_job_paths,
 };
 use crate::translation::{EngineCredentials, Language, TranslationEngine};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -49,13 +49,12 @@ fn receive_through_terminal(task: &FileTransTask) -> Vec<ProgressEvent> {
     let mut events = Vec::new();
     loop {
         let event = task
-            .events
-            .recv_timeout(Duration::from_secs(5))
+            .recv_event_timeout(Duration::from_secs(5))
             .expect("file translation terminal event");
         let terminal = matches!(event, ProgressEvent::Complete | ProgressEvent::Error(_));
         events.push(event);
         if terminal {
-            events.extend(task.events.try_iter());
+            events.extend(task.drain_events());
             return events;
         }
     }
@@ -99,15 +98,14 @@ fn makes_distinct_defaults_for_equal_stems() {
 
 #[test]
 fn dropping_task_requests_cancellation_without_joining() {
-    let token = Arc::new(AtomicBool::new(false));
-    let (_sender, receiver) = mpsc::channel();
-    let task = FileTransTask {
-        cancel: CancelHandle(token.clone()),
-        events: receiver,
-        worker: None,
-    };
+    let directory = TestDirectory::new();
+    let input = directory.0.join("empty.txt");
+    let output = directory.0.join("result.txt");
+    std::fs::write(&input, "").unwrap();
+    let task = FileTransRunner::start(job(vec![input], vec![output]));
+    let cancel = task.cancel_handle();
     drop(task);
-    assert!(token.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(cancel.is_cancelled());
 }
 
 #[test]

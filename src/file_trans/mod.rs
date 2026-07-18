@@ -3,7 +3,7 @@
 //! 작업 설정, 경로 검증, 기본 출력 경로 생성과 실제 파일 처리를 제공한다.
 //! 진행 상황은 [`ProgressEvent`] 콜백으로 전달하므로 Win32 UI에 의존하지 않는다.
 
-mod worker;
+pub mod worker;
 
 use std::collections::HashSet;
 use std::fs;
@@ -11,45 +11,50 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::translation::{EngineCredentials, EzTransProcessConfig, Language, TranslationEngine};
 
-pub(crate) use worker::{run, split_eztrans_batch};
+pub use worker::run;
+pub use worker::split_eztrans_batch;
 
 /// 파일 번역 작업을 취소하는 스레드 안전한 핸들.
 #[derive(Clone)]
-pub(crate) struct CancelHandle(Arc<AtomicBool>);
+pub struct CancelHandle(Arc<AtomicBool>);
 
 impl CancelHandle {
-    pub(crate) fn cancel(&self) {
+    pub fn cancel(&self) {
         self.0.store(true, Ordering::SeqCst);
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_cancelled(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
 }
 
 /// 워커 수명과 진행 이벤트 수신기를 소유하는 파일 번역 작업.
-pub(crate) struct FileTransTask {
+pub struct FileTransTask {
     cancel: CancelHandle,
     events: Receiver<ProgressEvent>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl FileTransTask {
-    pub(crate) fn cancel(&self) {
+    pub fn cancel(&self) {
         self.cancel.cancel();
     }
-    pub(crate) fn drain_events(&self) -> Vec<ProgressEvent> {
+    pub fn drain_events(&self) -> Vec<ProgressEvent> {
         self.events.try_iter().collect()
     }
 
-    #[cfg(test)]
-    pub(crate) fn cancel_handle(&self) -> CancelHandle {
+    pub fn recv_event_timeout(&self, timeout: Duration) -> Result<ProgressEvent, RecvTimeoutError> {
+        self.events.recv_timeout(timeout)
+    }
+
+    pub fn cancel_handle(&self) -> CancelHandle {
         self.cancel.clone()
     }
 }
@@ -64,10 +69,10 @@ impl Drop for FileTransTask {
 }
 
 /// UI와 CLI가 공유하는 파일 번역 실행자.
-pub(crate) struct FileTransRunner;
+pub struct FileTransRunner;
 
 impl FileTransRunner {
-    pub(crate) fn start(mut job: FileTransJobData) -> FileTransTask {
+    pub fn start(mut job: FileTransJobData) -> FileTransTask {
         let (sender, events) = mpsc::channel();
         let cancel = CancelHandle(Arc::new(AtomicBool::new(false)));
         job.cancel_token = cancel.0.clone();
@@ -86,7 +91,7 @@ impl FileTransRunner {
 
 /// 출력 형식.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum WriteType {
+pub enum WriteType {
     /// 번역만 기록한다.
     #[default]
     TranslationOnly,
@@ -97,7 +102,7 @@ pub(crate) enum WriteType {
 }
 
 /// UI와 무관한 파일 번역 작업 설정.
-pub(crate) struct FileTransJobData {
+pub struct FileTransJobData {
     pub input_files: Vec<PathBuf>,
     pub output_files: Vec<PathBuf>,
     pub write_type: WriteType,
@@ -112,7 +117,7 @@ pub(crate) struct FileTransJobData {
 
 /// 파일 번역 작업이 UI 또는 CLI 호출자에게 전달하는 진행 이벤트.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ProgressEvent {
+pub enum ProgressEvent {
     TotalFiles(i32),
     TotalLines(i32),
     FileIndex(i32),
@@ -143,7 +148,7 @@ fn normalized_path_key(path: &Path) -> Result<String, String> {
 }
 
 /// 입력과 출력 경로가 서로 겹치거나 출력 경로끼리 중복되는지 검사한다.
-pub(crate) fn validate_job_paths(inputs: &[PathBuf], outputs: &[PathBuf]) -> Result<(), String> {
+pub fn validate_job_paths(inputs: &[PathBuf], outputs: &[PathBuf]) -> Result<(), String> {
     if inputs.len() != outputs.len() {
         return Err("입력 파일과 출력 파일 수가 일치하지 않습니다.".to_string());
     }
@@ -175,7 +180,7 @@ pub(crate) fn validate_job_paths(inputs: &[PathBuf], outputs: &[PathBuf]) -> Res
 }
 
 /// 입력 순서대로 충돌하지 않는 기본 출력 경로를 만든다.
-pub(crate) fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+pub fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let input_keys = inputs
         .iter()
         .map(|path| normalized_path_key(path))
@@ -205,11 +210,3 @@ pub(crate) fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, S
 
     Ok(outputs)
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/file_trans/mod.rs"]
-mod tests;
-
-#[cfg(all(test, feature = "benchmark"))]
-#[path = "../../benchmark/file_trans/mod.rs"]
-mod benchmarks;

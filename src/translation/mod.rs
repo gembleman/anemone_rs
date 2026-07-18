@@ -19,9 +19,8 @@ pub mod worker;
 pub use error::{TranslationError, TranslationResult};
 pub use eztrans::EzTransTranslator;
 pub use eztrans_actor::{prepare_eztrans, translate_with_eztrans};
-pub(crate) use eztrans_process::{
-    EzTransBatchTranslator, EzTransProcessConfig, global_eztrans_process_pool, run_eztrans_worker,
-};
+pub use eztrans_process::{EzTransBatchTranslator, EzTransProcessConfig};
+pub(crate) use eztrans_process::{global_eztrans_process_pool, run_eztrans_worker};
 pub use job::TranslationJobSpec;
 pub use language::{EnumParseError, Language, TranslationEngine, lang_utils};
 pub use llm::LlmProvider;

@@ -46,13 +46,12 @@ fn receive_through_terminal(task: &FileTransTask) -> Vec<ProgressEvent> {
     let mut events = Vec::new();
     loop {
         let event = task
-            .events
-            .recv_timeout(Duration::from_secs(5))
+            .recv_event_timeout(Duration::from_secs(5))
             .expect("file translation terminal event");
         let terminal = matches!(event, ProgressEvent::Complete | ProgressEvent::Error(_));
         events.push(event);
         if terminal {
-            events.extend(task.events.try_iter());
+            events.extend(task.drain_events());
             return events;
         }
     }

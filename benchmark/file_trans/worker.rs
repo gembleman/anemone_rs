@@ -2,6 +2,8 @@ use super::{
     BoundedTranslationCache, read_input_line, translate_eztrans_window, validate_and_count_reader,
 };
 use crate::translation::EzTransBatchTranslator;
+use std::fs::File;
+use std::io::BufReader;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -59,7 +61,7 @@ fn large_fixture_streams_in_bounded_windows_and_translates_each_unique_line_once
         .join("benchmark")
         .join("large_japanese_translation_sample.txt");
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    let reader = crate::util::open_utf8_translation_input(&path).unwrap();
+    let reader = BufReader::new(File::open(&path).unwrap());
     assert_eq!(
         validate_and_count_reader(reader, &path, &cancel).unwrap(),
         200_000
@@ -71,7 +73,7 @@ fn large_fixture_streams_in_bounded_windows_and_translates_each_unique_line_once
     };
     let job = eztrans_job();
     let mut cache = BoundedTranslationCache::new(100_000);
-    let mut reader = crate::util::open_utf8_translation_input(&path).unwrap();
+    let mut reader = BufReader::new(File::open(&path).unwrap());
     let mut first_line = true;
     let mut processed = 0usize;
     loop {
