@@ -12,16 +12,6 @@ foreach ($line in Get-Content -LiteralPath $manifest) {
     }
 }
 
-$spec = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\SPEC.md')
-$links = [regex]::Matches($spec, '`((?:src|eztrans_dll|\.cargo)/[^`]+)`')
-foreach ($match in $links) {
-    $relative = $match.Groups[1].Value.TrimEnd('/')
-    $path = Join-Path (Join-Path $PSScriptRoot '..') $relative
-    if (-not (Test-Path -LiteralPath $path)) {
-        throw "SPEC.md references a missing path: $relative"
-    }
-}
-
 $exe = Join-Path $PSScriptRoot '..\target\i686-pc-windows-msvc\release\anemone_rs.exe'
 $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $exe))
 $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)

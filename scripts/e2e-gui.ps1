@@ -318,19 +318,23 @@ function Wait-WindowClosed {
 $resolvedExe = (Resolve-Path -LiteralPath $ExePath).Path
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ("anemone-gui-e2e-" + [guid]::NewGuid())
 $install = Join-Path $root 'install'
+$localData = Join-Path $root 'local-data'
+$dataDir = Join-Path $localData 'Anemone'
 $installedExe = Join-Path $install 'anemone_rs.exe'
 $process = $null
 $mainWindow = [IntPtr]::Zero
 
 try {
-    # Copy the executable so runtime data is isolated beside the test executable.
-    New-Item -ItemType Directory -Path $install | Out-Null
+    # Copy the executable and isolate installed-mode data from the runner account.
+    New-Item -ItemType Directory -Path $install, $localData | Out-Null
     Copy-Item -LiteralPath $resolvedExe -Destination $installedExe
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $installedExe
     $startInfo.WorkingDirectory = $install
     $startInfo.UseShellExecute = $false
+    $startInfo.Environment['LOCALAPPDATA'] = $localData
+    $startInfo.Environment['APPDATA'] = $localData
     $process = [System.Diagnostics.Process]::Start($startInfo)
     if ($null -eq $process) {
         throw 'GUI 프로세스를 시작하지 못했습니다.'
@@ -370,7 +374,7 @@ try {
         -Title '아네모네 설정' `
         -Description '설정'
 
-    $configPath = Join-Path $install 'config.toml'
+    $configPath = Join-Path $dataDir 'config.toml'
     if (-not (Test-Path -LiteralPath $configPath)) {
         throw "설정 파일이 생성되지 않았습니다: $configPath"
     }
@@ -408,7 +412,7 @@ try {
         throw "GUI 앱이 비정상 종료했습니다. exit code: $($process.ExitCode)"
     }
 
-    $logPath = Join-Path $install 'logs\anemone.log'
+    $logPath = Join-Path $dataDir 'logs\anemone.log'
     if (-not (Test-Path -LiteralPath $logPath)) {
         throw "로그 파일이 생성되지 않았습니다: $logPath"
     }

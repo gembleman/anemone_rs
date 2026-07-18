@@ -32,19 +32,24 @@ try {
     $env:LOCALAPPDATA = $localData
     $env:APPDATA = $localData
     $env:ANEMONE_SMOKE_EXIT = '1'
-    $process = Start-Process -FilePath $installedExe -PassThru -Wait
+    $process = Start-Process -FilePath $installedExe -WindowStyle Hidden -PassThru -Wait
     if ($process.ExitCode -ne 0) { throw "GUI smoke test exited with $($process.ExitCode)" }
 
     $dataDir = Join-Path $localData 'Anemone'
-    if (Test-Path -LiteralPath $dataDir) {
-        throw 'GUI incorrectly fell back to the user data directory'
+    if (-not (Test-Path -LiteralPath $dataDir)) {
+        throw 'GUI did not create the installed-mode user data directory'
+    }
+    foreach ($path in 'config.toml', 'logs\anemone.log') {
+        if (-not (Test-Path -LiteralPath (Join-Path $dataDir $path))) {
+            throw "GUI did not create installed-mode runtime data: $path"
+        }
     }
     foreach ($path in 'config.toml', 'llm_usage.json', 'logs\anemone.log') {
         if (Test-Path -LiteralPath (Join-Path $install $path)) {
             throw "GUI unexpectedly wrote runtime data in a read-only executable directory: $path"
         }
     }
-    Write-Host 'Read-only installation did not redirect runtime data away from the executable.'
+    Write-Host 'Read-only installation used LOCALAPPDATA and left the executable directory clean.'
 }
 finally {
     $env:LOCALAPPDATA = $oldLocalAppData
