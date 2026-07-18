@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use crate::{config::TextAlign, window::TextRenderStyle};
-use windows::Win32::Graphics::{Direct2D::*, DirectWrite::*};
+use windows::Win32::{
+    Foundation::RECT,
+    Graphics::{Direct2D::*, DirectWrite::*},
+};
 
 /// Layout 형태를 결정하는 값만 담은 캐시 키. 부동소수점은 bit 단위로 비교한다.
 #[derive(Clone, Eq, PartialEq, Hash)]
@@ -158,6 +161,7 @@ impl<'a> OutlineBitmapKeyRef<'a> {
             && self.font_face == &*key.font_face
     }
 
+    #[cfg(test)]
     pub(super) fn to_owned(&self) -> OutlineBitmapKey {
         OutlineBitmapKey {
             text: Arc::from(self.text),
@@ -177,6 +181,95 @@ impl<'a> OutlineBitmapKeyRef<'a> {
             shadow_offset_y: self.shadow_offset_y,
         }
     }
+
+    /// 이미 생성된 layout key의 문자열 소유권을 공유해 중복 할당을 피한다.
+    pub(super) fn to_owned_reusing_layout(&self, layout_key: &TextLayoutKey) -> OutlineBitmapKey {
+        debug_assert!(
+            LayoutKeyRef {
+                text: self.text,
+                font_face: self.font_face,
+                font_size: self.font_size,
+                font_style: self.font_style,
+                text_align: self.text_align,
+                max_width_bits: self.max_width_bits,
+                max_height_bits: self.max_height_bits,
+            }
+            .matches(layout_key)
+        );
+        OutlineBitmapKey {
+            text: Arc::clone(&layout_key.text),
+            font_face: Arc::clone(&layout_key.font_face),
+            font_size: self.font_size,
+            font_style: self.font_style,
+            text_align: self.text_align,
+            max_width_bits: self.max_width_bits,
+            max_height_bits: self.max_height_bits,
+            outline1_size: self.outline1_size,
+            outline1_color: self.outline1_color,
+            outline2_size: self.outline2_size,
+            outline2_color: self.outline2_color,
+            shadow_enabled: self.shadow_enabled,
+            shadow_color: self.shadow_color,
+            shadow_offset_x: self.shadow_offset_x,
+            shadow_offset_y: self.shadow_offset_y,
+        }
+    }
+}
+
+/// 줄별 hit-test 결과의 layout 및 위치 입력.
+pub(super) struct HitTestKey {
+    pub(super) layout: TextLayoutKey,
+    origin_x_bits: u32,
+    origin_y_bits: u32,
+    inflate_bits: u32,
+}
+
+pub(super) struct HitTestKeyRef<'a> {
+    layout: LayoutKeyRef<'a>,
+    origin_x_bits: u32,
+    origin_y_bits: u32,
+    inflate_bits: u32,
+}
+
+impl<'a> HitTestKeyRef<'a> {
+    pub(super) fn from_style(
+        text: &'a str,
+        style: &'a TextRenderStyle,
+        origin_x: f32,
+        origin_y: f32,
+        max_width: f32,
+        max_height: f32,
+        inflate: f32,
+    ) -> Self {
+        Self {
+            layout: LayoutKeyRef::from_style(text, style, max_width, max_height),
+            origin_x_bits: origin_x.to_bits(),
+            origin_y_bits: origin_y.to_bits(),
+            inflate_bits: inflate.to_bits(),
+        }
+    }
+
+    pub(super) fn matches(&self, key: &HitTestKey) -> bool {
+        self.layout.matches(&key.layout)
+            && self.origin_x_bits == key.origin_x_bits
+            && self.origin_y_bits == key.origin_y_bits
+            && self.inflate_bits == key.inflate_bits
+    }
+
+    pub(super) fn to_owned_reusing_layout(&self, layout: &TextLayoutKey) -> HitTestKey {
+        debug_assert!(self.layout.matches(layout));
+        HitTestKey {
+            layout: layout.clone(),
+            origin_x_bits: self.origin_x_bits,
+            origin_y_bits: self.origin_y_bits,
+            inflate_bits: self.inflate_bits,
+        }
+    }
+}
+
+pub(super) struct HitTestCache {
+    pub(super) key: HitTestKey,
+    pub(super) rects: Vec<RECT>,
 }
 
 /// 실제 픽셀에 영향을 주는 outline/shadow 값만 남긴 정규형.

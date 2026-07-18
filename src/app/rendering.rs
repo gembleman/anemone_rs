@@ -73,9 +73,12 @@ impl App {
 
         // 텍스트 스타일 정보 가져오기
         let text_style = &cfg.translation_style;
+        if self.render_font_face.as_ref() != text_style.font_face {
+            self.render_font_face = Arc::from(text_style.font_face.as_str());
+        }
         let render_style = TextRenderStyle {
             font_size: text_style.size,
-            font_face: Arc::from(text_style.font_face.as_str()),
+            font_face: Arc::clone(&self.render_font_face),
             font_style: text_style.font_style,
             text_align: cfg.text_align,
             color: text_style.color_primary,
@@ -246,7 +249,10 @@ impl App {
                     },
                     inflate,
                 ) {
-                    Ok(rects) => self.hit_region = rects,
+                    Ok(rects) => {
+                        self.hit_region.clear();
+                        self.hit_region.extend_from_slice(rects);
+                    }
                     Err(e) => tracing::warn!("compute_text_line_rects failed: {e}"),
                 }
             }

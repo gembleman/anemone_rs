@@ -178,10 +178,7 @@ pub fn phase_end() -> Option<PhaseRecord> {
 pub fn phase_now() -> Option<Instant> {
     PHASE_RECORDER.with(|cell| {
         let borrow = cell.borrow();
-        match borrow.as_ref() {
-            Some(_) => Some(Instant::now()),
-            None => None,
-        }
+        borrow.as_ref().map(|_| Instant::now())
     })
 }
 

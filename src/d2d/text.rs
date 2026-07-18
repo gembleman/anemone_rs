@@ -13,7 +13,10 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
     TextBox,
-    cache::{EffectiveOutlineStyle, OutlineBitmap, OutlineBitmapKey, OutlineBitmapKeyRef},
+    cache::{
+        EffectiveOutlineStyle, HitTestCache, HitTestKeyRef, OutlineBitmap, OutlineBitmapKey,
+        OutlineBitmapKeyRef,
+    },
     color::argb_to_color_f,
     renderer::D2DRenderer,
 };
@@ -106,12 +109,16 @@ impl D2DRenderer {
                 .last_key
                 .as_ref()
                 .is_some_and(|k| key_ref.matches(k));
-            // 같은 key면 할당 없이 last_key를 유지한다.
-            if !hit {
-                self.miss_tracker.last_key = Some(key_ref.to_owned());
-            }
             self.miss_tracker.record(!hit);
-            return self.draw_text_direct(target, text, bbox, style);
+            let result = self.draw_text_direct(target, text, bbox, style);
+            // direct 경로가 만든 layout key의 문자열 소유권을 공유한다.
+            if !hit
+                && result.is_ok()
+                && let Some(layout) = self.text_cache.as_ref()
+            {
+                self.miss_tracker.last_key = Some(key_ref.to_owned_reusing_layout(&layout.key));
+            }
+            return result;
         }
 
         // 정상 경로는 실제 bitmap key로 hit를 판정하고 layout도 함께 얻는다.
@@ -125,7 +132,10 @@ impl D2DRenderer {
             .as_ref()
             .is_none_or(|k| !key_ref.matches(k));
         if need_update_last {
-            self.miss_tracker.last_key = Some(key_ref.to_owned());
+            self.miss_tracker.last_key = self
+                .outline_bitmap
+                .as_ref()
+                .map(|bitmap| bitmap.key.clone());
         }
 
         // SAFETY: target is a valid render target between BeginDraw/EndDraw.
@@ -283,9 +293,15 @@ impl D2DRenderer {
             return Ok((true, layout));
         }
         // miss — 비트맵 빌드. 키는 이 시점에만 alloc.
-        let owned_key = key_ref.to_owned();
-        let (bm, layout) =
-            self.build_outline_bitmap(target, text, style, max_width, max_height, owned_key)?;
+        let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
+        let owned_key = key_ref.to_owned_reusing_layout(
+            &self
+                .text_cache
+                .as_ref()
+                .expect("layout cache populated by get_or_create_layout")
+                .key,
+        );
+        let bm = self.build_outline_bitmap(target, style, owned_key, &layout)?;
         self.outline_bitmap = Some(bm);
         Ok((false, layout))
     }
@@ -294,19 +310,19 @@ impl D2DRenderer {
     fn build_outline_bitmap(
         &mut self,
         target: &ID2D1RenderTarget,
-        text: &str,
         style: &TextRenderStyle,
-        max_width: f32,
-        max_height: f32,
         key: OutlineBitmapKey,
-    ) -> Result<(OutlineBitmap, IDWriteTextLayout)> {
+        layout: &IDWriteTextLayout,
+    ) -> Result<OutlineBitmap> {
+        let text = key.text.as_ref();
+        let max_width = f32::from_bits(key.max_width_bits);
+        let max_height = f32::from_bits(key.max_height_bits);
         // 비트맵 패딩 계산. shadow 는 한 방향만 빠져나가므로 비대칭 패딩.
         let effects = EffectiveOutlineStyle::from_style(style);
         let outline_total = effects.outline_total as f32;
         let shadow_dx = effects.shadow_offset_x as f32;
         let shadow_dy = effects.shadow_offset_y as f32;
         // Layout box와 italic/fallback glyph의 양수 overhang까지 담는다.
-        let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
         let mut tm = DWRITE_TEXT_METRICS::default();
         // SAFETY: layout 은 위에서 막 확보. metrics는 out 파라미터.
         let overhang = unsafe {
@@ -375,7 +391,7 @@ impl D2DRenderer {
                 }
                 inner_rt.DrawTextLayout(
                     Vector2::new(sx, sy),
-                    &layout,
+                    layout,
                     &shadow_brush,
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                 );
@@ -420,17 +436,14 @@ impl D2DRenderer {
             // bm_rt 에서 비트맵 추출. 부모 인터페이스 메서드 호출.
             let bitmap: ID2D1Bitmap = bm_rt.GetBitmap()?;
 
-            Ok((
-                OutlineBitmap {
-                    key,
-                    bitmap,
-                    width: bm_w,
-                    height: bm_h,
-                    pad_left,
-                    pad_top,
-                },
-                layout,
-            ))
+            Ok(OutlineBitmap {
+                key,
+                bitmap,
+                width: bm_w,
+                height: bm_h,
+                pad_left,
+                pad_top,
+            })
         }
     }
 
@@ -474,9 +487,10 @@ impl D2DRenderer {
         style: &TextRenderStyle,
         bbox: TextBox,
         inflate: f32,
-    ) -> Result<Vec<RECT>> {
+    ) -> Result<&[RECT]> {
         if text.is_empty() {
-            return Ok(Vec::new());
+            self.hit_test_cache = None;
+            return Ok(&[]);
         }
 
         let TextBox {
@@ -485,10 +499,26 @@ impl D2DRenderer {
             max_width,
             max_height,
         } = bbox;
+        let key_ref = HitTestKeyRef::from_style(
+            text, style, origin_x, origin_y, max_width, max_height, inflate,
+        );
+        if self
+            .hit_test_cache
+            .as_ref()
+            .is_some_and(|cache| key_ref.matches(&cache.key))
+        {
+            return Ok(&self
+                .hit_test_cache
+                .as_ref()
+                .expect("hit-test cache checked above")
+                .rects);
+        }
+
         let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
         let text_len: u32 = text.encode_utf16().count() as u32;
         if text_len == 0 {
-            return Ok(Vec::new());
+            self.hit_test_cache = None;
+            return Ok(&[]);
         }
 
         // SAFETY: 첫 호출로 크기를 얻고 정확한 buffer를 할당해 다시 호출한다.
@@ -498,7 +528,10 @@ impl D2DRenderer {
             let probe = layout.HitTestTextRange(0, text_len, 0.0, 0.0, None, &mut needed);
             if needed == 0 {
                 return match probe {
-                    Ok(()) => Ok(Vec::new()),
+                    Ok(()) => {
+                        self.hit_test_cache = None;
+                        Ok(&[])
+                    }
                     Err(e) => Err(e),
                 };
             }
@@ -511,7 +544,7 @@ impl D2DRenderer {
         };
 
         let inflate_i = inflate.ceil() as i32;
-        let rects = metrics
+        let rects: Vec<RECT> = metrics
             .into_iter()
             .map(|m| {
                 let left = (origin_x + m.left).floor() as i32 - inflate_i;
@@ -526,7 +559,19 @@ impl D2DRenderer {
                 }
             })
             .collect();
-        Ok(rects)
+        let key = key_ref.to_owned_reusing_layout(
+            &self
+                .text_cache
+                .as_ref()
+                .expect("layout cache populated by get_or_create_layout")
+                .key,
+        );
+        self.hit_test_cache = Some(HitTestCache { key, rects });
+        Ok(&self
+            .hit_test_cache
+            .as_ref()
+            .expect("hit-test cache stored above")
+            .rects)
     }
 }
 
