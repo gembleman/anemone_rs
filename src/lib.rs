@@ -14,6 +14,7 @@ mod logging;
 mod magnetic;
 mod menu;
 mod runtime;
+mod secret_store;
 mod services;
 mod settings_model;
 pub mod translation;
@@ -60,6 +61,11 @@ fn init_com_sta() {
 pub fn run() {
     // 가장 먼저 DLL 검색 경로를 잠근다 (다른 의존성 초기화 전에).
     harden_dll_search_path();
+
+    if let Err(error) = runtime::initialize() {
+        eprintln!("Anemone 데이터 경로 초기화 실패: {error}");
+        std::process::exit(1);
+    }
 
     // CLI는 GUI, tracing, COM, D2D 초기화 없이 처리한다.
     match cli::run() {

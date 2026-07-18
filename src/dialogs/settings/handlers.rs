@@ -737,14 +737,10 @@ impl SettingsDialog {
     }
 
     pub(super) fn persist_pending_changes(&self) -> bool {
-        if self.pending_disk_save.replace(false) {
-            if let Some(actions) = &self.actions {
-                actions.commit_settings(self.draft.borrow().clone());
-            } else if let Err(error) = self.draft.borrow().save() {
-                self.pending_disk_save.set(true);
-                tracing::error!("설정 저장 실패: {error}");
-                return false;
-            }
+        if self.pending_disk_save.replace(false)
+            && let Some(actions) = &self.actions
+        {
+            actions.commit_settings(self.draft.borrow().clone());
         }
         true
     }

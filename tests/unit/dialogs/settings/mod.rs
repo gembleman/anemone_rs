@@ -21,44 +21,12 @@ fn persists_trackbar_only_when_tracking_ends() {
 fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     use super::{SettingsDialog, ctrl_id};
     use crate::config::Config;
-    use crate::translation::PreparedJob;
-    use std::path::PathBuf;
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         CB_GETCURSEL, CB_SETCURSEL, DestroyWindow, GWL_STYLE, GetDesktopWindow, GetDlgItem,
         GetWindowLongPtrW, IsWindow, SendMessageW, SetWindowTextW, WM_COMMAND, WS_THICKFRAME,
     };
     use windows::core::w;
-
-    struct ConfigFileGuard {
-        path: PathBuf,
-        original: Option<Vec<u8>>,
-    }
-
-    impl ConfigFileGuard {
-        fn new() -> Self {
-            let path = Config::default_config_path().clone();
-            assert_eq!(
-                path.parent(),
-                std::env::current_exe().unwrap().parent(),
-                "smoke config must stay beside the test executable"
-            );
-            let original = std::fs::read(&path).ok();
-            Self { path, original }
-        }
-    }
-
-    impl Drop for ConfigFileGuard {
-        fn drop(&mut self) {
-            if let Some(original) = &self.original {
-                std::fs::write(&self.path, original).unwrap();
-            } else if let Err(error) = std::fs::remove_file(&self.path)
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                panic!("failed to remove smoke config: {error}");
-            }
-        }
-    }
 
     struct DialogGuard(Option<HWND>);
 
@@ -119,7 +87,6 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         }
     }
 
-    let _config_file = ConfigFileGuard::new();
     let mut initial = Config::default();
     initial.translation.engine = "deepl".into();
     initial.translation.source_lang = "en".into();
@@ -140,13 +107,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
 
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_SOURCE_LANG), 0);
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_TARGET_LANG), 0);
-    let edited = Config::load_from_file(Config::default_config_path()).unwrap();
-    assert_eq!(edited.translation.source_lang, "ja");
-    assert_eq!(edited.translation.target_lang, "ko");
-    assert!(PreparedJob::from_config(&edited.translation).is_ok());
-
-    let max_tokens = edited.translation.llm.max_tokens;
-    let persisted_before_invalid = std::fs::read(Config::default_config_path()).unwrap();
+    let max_tokens = config.translation.llm.max_tokens;
     unsafe {
         SetWindowTextW(control(hwnd, ctrl_id::LLM_MAX_TOKENS_EDIT), w!("invalid")).unwrap();
     }
@@ -155,22 +116,5 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_MAX_TOKENS_EDIT)),
         max_tokens.to_string()
     );
-    assert_eq!(
-        std::fs::read(Config::default_config_path()).unwrap(),
-        persisted_before_invalid,
-        "invalid input must not trigger another save"
-    );
-
     dialog.close();
-    let persisted = Config::load_from_file(Config::default_config_path()).unwrap();
-    assert_eq!(persisted.translation.engine, "eztrans");
-    assert_eq!(persisted.translation.source_lang, "ja");
-    assert_eq!(persisted.translation.target_lang, "ko");
-
-    let reopened = SettingsDialog::show(parent, persisted, None).unwrap();
-    let mut reopened_dialog = DialogGuard(Some(reopened));
-    assert_eq!(combo_index(reopened, ctrl_id::TRANS_ENGINE), 0);
-    assert_eq!(combo_index(reopened, ctrl_id::TRANS_SOURCE_LANG), 0);
-    assert_eq!(combo_index(reopened, ctrl_id::TRANS_TARGET_LANG), 0);
-    reopened_dialog.close();
 }
