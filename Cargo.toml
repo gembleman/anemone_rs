@@ -28,6 +28,7 @@ features = [
     "Win32_System_Performance",
     "Win32_System_SystemInformation",
     "Win32_System_Power",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_Com",
     "Win32_Storage_FileSystem",
     "Win32_Graphics_Direct2D",
@@ -47,7 +48,7 @@ serde_json = "1.0"
 toml = "1.1"
 windows-numerics = "0.3"
 windows-core = "0.62"
-eztrans-rs = { path = "../eztrans-rs" }
+eztrans-rs = { git = "https://github.com/gembleman/eztrans-rs.git", rev = "bf67b8935bed7ff7701319c782eb8645f7ae415d" }
 isolang = { version = "2.4" }
 
 # Error handling & logging
@@ -64,6 +65,8 @@ reqwest = { version = "0.13", features = [
     "native-tls",
     "form",
 ], default-features = false }
+rpassword = "7.4"
+httpdate = "1.0"
 
 [build-dependencies]
 winresource = "0.1"

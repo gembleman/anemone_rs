@@ -450,7 +450,12 @@ fn translate_line(
     match result {
         Ok(translated) => translated,
         Err(e) => {
-            tracing::warn!("라인 번역 실패: {} (원문: {:.60})", e, line);
+            tracing::warn!(
+                category = e.log_category(),
+                status_code = ?e.log_status_code(),
+                input_bytes = line.len(),
+                "file translation line failed"
+            );
             format!("[번역 실패: {}]", e)
         }
     }

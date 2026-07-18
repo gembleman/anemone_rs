@@ -17,20 +17,20 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::translation::TranslationEngine;
 
-const AFTER_HELP: &str = "인자 없이 실행하면 GUI 모드로 시작합니다.\n\
-\n\
-ENGINE: eztrans | google | deepl | papago | llm\n\
-LANG:   ISO 639-1 (예: ja, ko, en, zh)\n\
-\n\
-CONFIG KEYS (대표):\n\
-    translation.engine, translation.source_lang, translation.target_lang\n\
-    translation.eztrans_dll_path, translation.eztrans_dat_path\n\
-    translation.deepl_api_key, translation.papago_client_id\n\
-    translation.papago_client_secret\n\
-    translation.llm.provider, translation.llm.model, translation.llm.api_key\n\
-    translation.llm.base_url, translation.llm.temperature, translation.llm.max_tokens\n\
-    clipboard_watch, click_through, magnetic_mode, background_visible\n\
-    border_visible, window_topmost, window_visible";
+const AFTER_HELP: &str = r#"인자 없이 실행하면 GUI 모드로 시작합니다.
+
+ENGINE: eztrans | google | deepl | papago | llm
+LANG:   ISO 639-1 (예: ja, ko, en, zh)
+
+CONFIG KEYS (대표):
+    translation.engine, translation.source_lang, translation.target_lang
+    translation.eztrans_dll_path, translation.eztrans_dat_path
+    translation.llm.provider, translation.llm.model
+    translation.llm.base_url, translation.llm.temperature, translation.llm.max_tokens
+    clipboard_watch, click_through, magnetic_mode, background_visible
+    border_visible, window_topmost, window_visible
+
+비밀값은 `config set-secret <key>`로만 입력합니다."#;
 
 #[derive(Parser)]
 #[command(

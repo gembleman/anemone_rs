@@ -1,7 +1,6 @@
-use super::{App, CLIPBOARD_TRANSLATION_TIMER, state};
+use super::{App, state};
 use crate::dialogs::{LogEntry, add_to_backlog};
 use crate::translation::{TranslationEngine, request_translation, take_response};
-use windows::Win32::UI::WindowsAndMessaging::SetTimer;
 
 fn debounce_delay_ms(engine: TranslationEngine, configured_ms: u32) -> u32 {
     if engine == TranslationEngine::Llm {
@@ -9,6 +8,21 @@ fn debounce_delay_ms(engine: TranslationEngine, configured_ms: u32) -> u32 {
     } else {
         0
     }
+}
+
+fn log_clipboard_metadata(text: &str) {
+    tracing::debug!(
+        clipboard_chars = text.chars().count(),
+        "clipboard text detected"
+    );
+}
+
+fn log_translation_failure(error: &crate::translation::TranslationError) {
+    tracing::error!(
+        category = error.log_category(),
+        status_code = ?error.log_status_code(),
+        "translation failed"
+    );
 }
 
 impl App {
@@ -27,8 +41,7 @@ impl App {
                 }
             }
 
-            // 클립보드 텍스트 처리
-            tracing::debug!("Clipboard: {}", text);
+            log_clipboard_metadata(&text);
 
             let delay_ms = {
                 let config = self.config.borrow();
@@ -41,24 +54,56 @@ impl App {
                 };
                 debounce_delay_ms(engine, config.translation.llm.debounce_ms)
             };
-            if delay_ms == 0 {
-                self.pending_clipboard_translation = None;
-                self.request_translation_async(&text);
-            } else {
-                self.pending_clipboard_translation = Some(text);
-                // 같은 ID의 timer를 다시 설정하면 카운트다운이 재시작되어 최신
-                // 클립보드 값 하나만 큐에 들어간다.
-                unsafe {
-                    SetTimer(Some(self.hwnd), CLIPBOARD_TRANSLATION_TIMER, delay_ms, None);
-                }
-            }
+            self.schedule_clipboard_translation(text, delay_ms);
         }
     }
 
-    pub(super) fn flush_debounced_translation(&mut self) {
-        if let Some(text) = self.pending_clipboard_translation.take() {
+    fn schedule_clipboard_translation(&mut self, text: String, debounce_ms: u32) {
+        use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
+
+        self.state.clipboard_debounce.submit(text);
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
+        }
+        if debounce_ms == 0 {
+            self.handle_clipboard_debounce_timer();
+            return;
+        }
+
+        let timer = unsafe {
+            SetTimer(
+                Some(self.hwnd),
+                super::CLIPBOARD_DEBOUNCE_TIMER,
+                debounce_ms,
+                None,
+            )
+        };
+        if timer == 0 {
+            tracing::warn!(
+                "clipboard debounce timer could not be created; dispatching immediately"
+            );
+            self.handle_clipboard_debounce_timer();
+        }
+    }
+
+    pub(super) fn handle_clipboard_debounce_timer(&mut self) {
+        use windows::Win32::UI::WindowsAndMessaging::KillTimer;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
+        }
+        if let Some(text) = self.state.clipboard_debounce.take() {
             self.request_translation_async(&text);
         }
+    }
+
+    pub(super) fn cancel_clipboard_translation(&mut self) {
+        use windows::Win32::UI::WindowsAndMessaging::KillTimer;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
+        }
+        self.state.clipboard_debounce.clear();
+        self.state.pending_translation = None;
+        crate::translation::cancel_translation(self.hwnd);
     }
 
     /// 비동기 번역 요청
@@ -135,7 +180,7 @@ impl App {
                 Some(translated)
             }
             Err(err) => {
-                tracing::error!("Translation error: {}", err);
+                log_translation_failure(&err);
                 self.state.current_text = completion.original.clone();
                 None
             }

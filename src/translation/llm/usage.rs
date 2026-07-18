@@ -1,6 +1,7 @@
 //! LLM 일일 사용량 카운터
 //!
-//! `<exe_dir>/llm_usage.json` 에 날짜별 호출 수와 누적 입력/출력 바이트를 기록한다.
+//! 사용자 데이터 디렉터리의 `llm_usage.json`에 날짜별 호출 수와 누적
+//! 입력/출력 바이트를 기록한다.
 //! 모든 LLM 호출의 성공 응답 시점에서 [`record`] 를 부른다. 일일 임계 초과 시
 //! 프로세스 수명 동안 한 번만 경고 로그를 남긴다.
 //!
@@ -38,14 +39,7 @@ struct UsageFile {
 
 fn usage_path() -> &'static PathBuf {
     static USAGE_PATH: OnceLock<PathBuf> = OnceLock::new();
-    USAGE_PATH.get_or_init(|| {
-        if let Ok(exe_path) = std::env::current_exe()
-            && let Some(exe_dir) = exe_path.parent()
-        {
-            return exe_dir.join("llm_usage.json");
-        }
-        PathBuf::from("llm_usage.json")
-    })
+    USAGE_PATH.get_or_init(|| crate::runtime::data_file("llm_usage.json"))
 }
 
 fn lock() -> &'static Mutex<UsageFile> {
@@ -83,14 +77,17 @@ fn prune(file: &mut UsageFile) {
 
 fn save_locked(file: &UsageFile) {
     let path = usage_path();
-    match serde_json::to_string_pretty(file) {
-        Ok(s) => {
-            if let Err(e) = std::fs::write(path, s) {
-                tracing::warn!("llm_usage 저장 실패: {e}");
-            }
-        }
-        Err(e) => tracing::warn!("llm_usage 직렬화 실패: {e}"),
+    if let Err(error) = save_to_path(file, path) {
+        tracing::warn!("llm_usage 저장 실패: {error}");
     }
+}
+
+fn save_to_path(file: &UsageFile, path: &std::path::Path) -> Result<(), String> {
+    let serialized =
+        serde_json::to_string_pretty(file).map_err(|error| format!("직렬화 실패: {error}"))?;
+    let _: UsageFile =
+        serde_json::from_str(&serialized).map_err(|error| format!("저장 전 검증 실패: {error}"))?;
+    crate::fs_util::atomic_write(path, serialized.as_bytes()).map_err(|error| error.to_string())
 }
 
 /// 한 번의 LLM 호출 성공을 기록. 임계 초과 시 한 번만 경고.
@@ -125,5 +122,40 @@ pub fn record(input_bytes: usize, output_bytes: usize) {
                 today_calls,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_file_is_replaced_atomically_with_valid_json() {
+        let root = std::env::temp_dir().join(format!(
+            "anemone-usage-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("llm_usage.json");
+        let mut file = UsageFile::default();
+        file.days.insert(
+            "2026-07-18".to_string(),
+            DayStats {
+                calls: 3,
+                input_bytes: 20,
+                output_bytes: 40,
+            },
+        );
+
+        save_to_path(&file, &path).unwrap();
+
+        let loaded: UsageFile =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded.days["2026-07-18"].calls, 3);
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

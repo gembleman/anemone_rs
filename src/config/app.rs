@@ -171,6 +171,15 @@ impl Config {
             style.outline2_size = style.outline2_size.clamp(0, 20);
             style.font_style &= 0b11;
         }
+
+        let llm = &mut self.translation.llm;
+        llm.max_tokens = llm.max_tokens.clamp(1, 32_000);
+        llm.debounce_ms = llm.debounce_ms.clamp(0, 10_000);
+        llm.temperature = if llm.temperature.is_finite() {
+            llm.temperature.clamp(0.0, 2.0)
+        } else {
+            0.3
+        };
     }
 
     pub fn toggle_window_visible(&mut self) {
@@ -237,8 +246,19 @@ impl Config {
 
     /// 설정 파일에 저장 (TOML 형식)
     pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-        let content = toml::to_string_pretty(self)?;
-        std::fs::write(path, content)?;
+        let mut normalized = self.clone();
+        normalized.normalize();
+        let content = toml::to_string_pretty(&normalized)?;
+        let _: Config = Self::from_toml_str(&content)?;
+
+        // 교체 전에 마지막으로 파싱 가능한 정상본을 별도로 보존한다. 손상된
+        // 파일은 정상 백업을 덮어쓰지 않는다.
+        if path.is_file() && Self::load_from_file(path).is_ok() {
+            let backup_path = path.with_extension("toml.last-good");
+            let previous = std::fs::read(path)?;
+            crate::fs_util::atomic_write(&backup_path, &previous)?;
+        }
+        crate::fs_util::atomic_write(path, content.as_bytes())?;
         Ok(())
     }
 
@@ -246,25 +266,20 @@ impl Config {
     pub fn default_config_path() -> &'static PathBuf {
         use std::sync::OnceLock;
         static CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
-        CONFIG_PATH.get_or_init(|| {
-            if let Ok(exe_path) = std::env::current_exe()
-                && let Some(exe_dir) = exe_path.parent()
-            {
-                return exe_dir.join("config.toml");
-            }
-            PathBuf::from("config.toml")
-        })
+        CONFIG_PATH.get_or_init(|| crate::runtime::data_file("config.toml"))
     }
 
     /// 기본 경로에서 설정 로드 (없거나 파싱 에러 시 기본값 사용)
     pub fn load_or_default() -> Self {
-        let path = Self::default_config_path();
+        Self::load_or_default_from(Self::default_config_path())
+    }
 
+    fn load_or_default_from(path: &std::path::Path) -> Self {
         // 파일이 존재하는지 확인
         if !path.exists() {
             tracing::info!("설정 파일 없음, 기본 설정 생성: {}", path.display());
             let config = Self::default();
-            if let Err(e) = config.save() {
+            if let Err(e) = config.save_to_file(path) {
                 tracing::error!("기본 설정 파일 생성 실패: {}", e);
             }
             return config;
@@ -276,24 +291,24 @@ impl Config {
                 tracing::info!("설정 로드됨: {}", path.display());
                 config
             }
-            Err(e) => {
-                tracing::error!("설정 파일 파싱 에러: {}", e);
+            Err(_) => {
+                // TOML 파서 메시지에는 해당 줄 원문(API 키 포함 가능)이 들어갈 수
+                // 있으므로 프로덕션 로그에는 세부 본문을 싣지 않는다.
+                tracing::error!("설정 파일을 파싱할 수 없습니다");
                 tracing::warn!("기본 설정으로 시작합니다.");
 
-                // 손상된 설정 파일 백업
-                let backup_path = path.with_extension("toml.bak");
-                if let Err(backup_err) = std::fs::copy(path, &backup_path) {
-                    tracing::error!("설정 파일 백업 실패: {}", backup_err);
-                } else {
-                    tracing::info!("기존 설정 파일 백업됨: {}", backup_path.display());
+                // 손상된 원문은 덮어쓰지 않고 고유 이름으로 격리한다. 사용자는
+                // 이 파일이나 `.last-good`에서 직접 복구할 수 있다.
+                match quarantine_corrupt_file(path) {
+                    Ok(quarantine) => tracing::warn!(
+                        "손상된 설정을 격리했습니다. 복구 파일: {}",
+                        quarantine.display()
+                    ),
+                    Err(error) => {
+                        tracing::error!("손상된 설정 격리 실패(원본은 덮어쓰지 않음): {error}")
+                    }
                 }
-
-                // 기본 설정으로 덮어쓰기
-                let config = Self::default();
-                if let Err(save_err) = config.save() {
-                    tracing::error!("기본 설정 파일 생성 실패: {}", save_err);
-                }
-                config
+                Self::default()
             }
         }
     }
@@ -305,6 +320,34 @@ impl Config {
         tracing::debug!("설정 저장됨: {}", path.display());
         Ok(())
     }
+}
+
+fn quarantine_corrupt_file(path: &std::path::Path) -> std::io::Result<PathBuf> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let stem = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.toml");
+    for suffix in 0..1000u16 {
+        let postfix = if suffix == 0 {
+            timestamp.to_string()
+        } else {
+            format!("{timestamp}-{suffix}")
+        };
+        let quarantine = path.with_file_name(format!("{stem}.corrupt-{postfix}"));
+        if !quarantine.exists() {
+            std::fs::rename(path, &quarantine)?;
+            return Ok(quarantine);
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "설정 격리 파일 이름을 할당할 수 없습니다",
+    ))
 }
 
 #[cfg(test)]

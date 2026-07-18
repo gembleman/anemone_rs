@@ -5,6 +5,8 @@
 //!
 //! 구조:
 //! - 프로세스 전역에 워커 스레드/tokio 런타임이 하나만 존재한다.
+//! - 런타임의 명령 루프는 hwnd별 task를 관리한다. 같은 hwnd의 새 요청은 이전
+//!   future를 abort하고 서로 다른 hwnd는 동시에 실행한다.
 //! - 호출자(메인 윈도우, 번역 다이얼로그 등)는 `translate(hwnd, …)` 헬퍼
 //!   (또는 `dispatch().request(hwnd, …)`) 로 자신의 hwnd 를 함께 전달한다.
 //! - 워커는 응답 도착 시 hwnd 별 원자 슬롯(`latest_snapshot`)으로 stale 을 거른 뒤
@@ -203,6 +205,7 @@ impl DispatchState {
         self.pending.remove(idx).map(|e| e.response)
     }
 
+    #[cfg(not(test))]
     fn drop_response(&mut self, req_id: u64) {
         self.pending.retain(|entry| entry.req_id != req_id);
     }
@@ -282,6 +285,11 @@ pub fn unregister_hwnd(hwnd: HWND) {
     dispatch().unregister_hwnd(hwnd);
 }
 
+/// 창은 유지하되 현재 요청과 아직 수거하지 않은 응답만 취소한다.
+pub fn cancel(hwnd: HWND) {
+    dispatch().cancel(hwnd);
+}
+
 /// 프로세스 종료 직전 호출. 워커 스레드를 정상 종료시켜 detached 백그라운드
 /// 스레드가 남지 않도록 한다.
 ///
@@ -313,16 +321,11 @@ impl TranslationDispatch {
 
     /// 채널 sender 를 drop 해 워커 스레드를 종료시키고 join.
     ///
-    /// 워커는 `rt.block_on(async { while let Ok(job) = rx.recv() })` 로 블록되어
-    /// 있어, 모든 sender 가 drop 되면 `Err` 를 받고 루프를 빠져나와 tokio 런타임
-    /// (및 그 아래 워커 스레드 풀) 까지 자연 종료된다.
-    ///
-    /// join 은 짧은 timeout 이 없는 단순 join 이지만, 워커는 즉시 빠져나오므로
-    /// 실무상 즉시 끝난다. 만에 하나 join 이 오래 걸리면 프로세스 종료를 막을
-    /// 위험이 있으므로 호출자는 충분히 짧은 시간을 기대해야 한다.
+    /// 모든 sender가 drop되면 async 명령 루프가 모든 in-flight task를 abort하고
+    /// join한 뒤 종료한다. 외부 join은 2초를 상한으로 하며, abort할 수 없는
+    /// EzTrans spawn_blocking도 runtime shutdown timeout으로 제한한다.
     fn shutdown(&self) {
-        // 1. sender drop → 워커의 rx.recv() 가 Err 를 반환해 루프 탈출 → tokio
-        //    runtime drop → 워커 스레드 자연 종료.
+        // 1. sender drop → 명령 루프가 채널 종료를 받고 모든 task abort/drain.
         {
             let mut s = self.sender.lock().expect("dispatch sender poisoned");
             *s = None;
@@ -412,6 +415,10 @@ impl TranslationDispatch {
     pub fn unregister_hwnd(&self, hwnd: HWND) {
         let hwnd_raw = hwnd.0 as usize;
         self.shared.unregister(hwnd_raw);
+    }
+
+    pub fn cancel(&self, hwnd: HWND) {
+        self.shared.unregister(hwnd.0 as usize);
     }
 
     /// 워커 스레드 진입점
@@ -538,8 +545,11 @@ impl TranslationDispatch {
             )
         };
         if let Err(error) = posted {
-            let mut state = shared.state.lock().expect("dispatch state poisoned");
-            state.drop_response(req_id);
+            #[cfg(not(test))]
+            {
+                let mut state = shared.state.lock().expect("dispatch state poisoned");
+                state.drop_response(req_id);
+            }
             tracing::warn!("번역 완료 메시지 게시 실패 (#{}): {}", req_id, error);
         }
         drop(routes);
@@ -588,7 +598,12 @@ impl TranslationDispatch {
                 Ok(s) => return Ok(s),
                 Err(e) => {
                     if Self::deepl_should_fallback(&e) && offset + 1 < keys.len() {
-                        tracing::warn!("DeepL 키 #{} 실패(폴백): {}", idx, e);
+                        tracing::warn!(
+                            key_index = idx,
+                            category = e.log_category(),
+                            status_code = ?e.log_status_code(),
+                            "DeepL key failed; trying fallback"
+                        );
                         last_err = Some(e);
                         continue;
                     }
@@ -603,7 +618,9 @@ impl TranslationDispatch {
     /// 한도 초과/인증 실패는 다음 키로 폴백, 그 외(파싱/네트워크 등)는 즉시 반환
     fn deepl_should_fallback(err: &TranslationError) -> bool {
         match err {
-            TranslationError::Api { code, .. } => matches!(code, 429 | 456 | 403),
+            TranslationError::Api { code, .. } | TranslationError::RateLimited { code, .. } => {
+                matches!(code, 429 | 456 | 403)
+            }
             _ => false,
         }
     }
@@ -631,12 +648,16 @@ impl TranslationDispatch {
 
         for attempt in 0..=Self::MAX_RETRIES {
             if attempt > 0 {
-                let delay = Self::retry_delay(last_err.as_ref(), attempt);
+                let server_delay = Self::retry_delay(last_err.as_ref(), attempt);
+                let jitter = Duration::from_millis(
+                    (req.id.wrapping_mul(37).wrapping_add(attempt as u64 * 101)) % 251,
+                );
+                let delay = server_delay.saturating_add(jitter);
                 tracing::warn!(
-                    "번역 재시도 ({}/{}), {:?} 후...",
                     attempt,
-                    Self::MAX_RETRIES,
-                    delay
+                    max_retries = Self::MAX_RETRIES,
+                    delay_ms = delay.as_millis(),
+                    "translation retry scheduled"
                 );
                 tokio::time::sleep(delay).await;
             }
@@ -645,7 +666,11 @@ impl TranslationDispatch {
                 Ok(result) => return Ok(result),
                 Err(e) => {
                     if e.is_retryable() && attempt < Self::MAX_RETRIES {
-                        tracing::warn!("재시도 가능한 에러: {}", e);
+                        tracing::warn!(
+                            category = e.log_category(),
+                            status_code = ?e.log_status_code(),
+                            "retryable translation failure"
+                        );
                         last_err = Some(e);
                         continue;
                     }

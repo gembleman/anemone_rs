@@ -58,6 +58,7 @@ impl App {
                     self.clipboard.start();
                 } else {
                     self.clipboard.stop();
+                    self.cancel_clipboard_translation();
                 }
             }
             state::AppCommand::BackgroundToggle => {
@@ -234,6 +235,7 @@ impl App {
             self.clipboard.start();
         } else if !watch && self.clipboard.is_watching() {
             self.clipboard.stop();
+            self.cancel_clipboard_translation();
         }
     }
 

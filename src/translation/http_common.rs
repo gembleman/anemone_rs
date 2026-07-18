@@ -60,6 +60,13 @@ pub async fn send_and_read_body(response: reqwest::Response) -> Result<String, T
         .map_err(|e| TranslationError::Network(e.to_string()))?;
 
     if !status.is_success() {
+        if status.as_u16() == 429 {
+            return Err(TranslationError::RateLimited {
+                code: status.as_u16(),
+                message: body,
+                retry_after,
+            });
+        }
         return Err(TranslationError::Api {
             code: status.as_u16(),
             message: body,
@@ -74,8 +81,20 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     headers
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
+        .and_then(parse_retry_after_value)
+}
+
+fn parse_retry_after_value(value: &str) -> Option<Duration> {
+    const MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
+    let duration = if let Ok(seconds) = value.trim().parse::<u64>() {
+        Duration::from_secs(seconds)
+    } else {
+        httpdate::parse_http_date(value)
+            .ok()?
+            .duration_since(std::time::SystemTime::now())
+            .unwrap_or_default()
+    };
+    Some(duration.min(MAX_RETRY_AFTER))
 }
 
 /// 빈 텍스트 검증

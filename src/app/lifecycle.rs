@@ -10,16 +10,13 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW,
-            HICON, IDC_ARROW, IsWindow, LoadCursorW, LoadIconW, MSG, RegisterClassExW,
-            TranslateMessage, WNDCLASSEXW, WNDPROC, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-            WS_EX_TOPMOST, WS_POPUP,
+            HICON, IDC_ARROW, IsWindow, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
+            RegisterClassExW, TranslateMessage, WNDCLASSEXW, WNDPROC, WS_EX_NOREDIRECTIONBITMAP,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{Error, HRESULT, PCWSTR, Result},
 };
-
-#[cfg(feature = "benchmark")]
-use windows::Win32::UI::WindowsAndMessaging::PostQuitMessage;
 
 use super::{APP, App, CLASS_NAME, DialogWindows, PARENT_CLASS_NAME, WINDOW_TITLE, state};
 use crate::clipboard::ClipboardWatcher;
@@ -159,6 +156,7 @@ impl App {
                     ),
                     current_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
                     pending_translation: None,
+                    clipboard_debounce: state::ClipboardDebounce::default(),
                 },
                 config,
                 tray: TrayIcon::new(),
@@ -173,7 +171,6 @@ impl App {
                 composition: None,
                 composition_init_failures: 0,
                 composition_retry_scheduled: false,
-                pending_clipboard_translation: None,
                 hit_region: Vec::new(),
             }));
 
@@ -245,6 +242,13 @@ impl App {
             }
             Self::drain_deferred_messages(&app);
             let _ = UpdateWindow(hwnd);
+
+            // 릴리스 smoke test가 전체 GUI 초기화와 데이터 파일 생성을 검증한 뒤
+            // 사용자 상호작용 없이 정상 종료할 수 있게 한다.
+            if std::env::var_os("ANEMONE_SMOKE_EXIT").as_deref() == Some(std::ffi::OsStr::new("1"))
+            {
+                PostQuitMessage(0);
+            }
 
             // 메시지 루프
             let mut msg: MSG = zeroed();
