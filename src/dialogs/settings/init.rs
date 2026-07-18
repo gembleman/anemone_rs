@@ -120,7 +120,7 @@ impl SettingsDialog {
 
         self.adjust_dialog_size_for_tab(TAB_APPEARANCE);
         let engine = self
-            .config
+            .draft
             .borrow()
             .translation
             .get_engine()
@@ -190,7 +190,7 @@ impl SettingsDialog {
     }
 
     fn initialize_values(&self) -> Result<()> {
-        let config = self.config.borrow();
+        let config = self.draft.borrow();
 
         self.initialize_trackbar(
             ctrl_id::BACKGROUND_TRACKBAR,

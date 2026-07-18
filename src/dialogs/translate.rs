@@ -73,7 +73,7 @@ const CUSTOM_ENGINE_INDEX: usize = TranslationEngine::Custom as usize;
 /// 번역 대화상자
 pub struct TranslateDialog {
     hwnd: HWND,
-    config: Rc<RefCell<Config>>,
+    config: Config,
     translation_service: Rc<GuiTranslationHost>,
     applied_dpi: u32,
     source_edit: HWND,
@@ -99,13 +99,13 @@ pub struct TranslateDialog {
 define_dialog_instance!(TRANSLATE_INSTANCE: TranslateDialog);
 
 struct PendingTranslate {
-    config: Rc<RefCell<Config>>,
+    config: Config,
     translation_service: Rc<GuiTranslationHost>,
 }
 
 thread_local! {
-    static TRANSLATE_PENDING: RefCell<Option<PendingTranslate>> = const { RefCell::new(None) };
-    static TRANSLATE_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+    static TRANSLATE_PENDING: std::cell::RefCell<Option<PendingTranslate>> = const { std::cell::RefCell::new(None) };
+    static TRANSLATE_INIT_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
 /// `resources/translate.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
@@ -235,11 +235,7 @@ unsafe extern "system" fn translate_dialog_proc(
 }
 
 impl TranslateDialog {
-    fn new(
-        hwnd: HWND,
-        config: Rc<RefCell<Config>>,
-        translation_service: Rc<GuiTranslationHost>,
-    ) -> Self {
+    fn new(hwnd: HWND, config: Config, translation_service: Rc<GuiTranslationHost>) -> Self {
         Self {
             hwnd,
             config,
@@ -267,7 +263,7 @@ impl TranslateDialog {
     /// `resources/translate.rc`의 모델리스 DIALOGEX 리소스를 연다.
     pub fn show(
         parent: HWND,
-        config: Rc<RefCell<Config>>,
+        config: Config,
         translation_service: Rc<GuiTranslationHost>,
     ) -> Result<HWND> {
         let existing = TRANSLATE_INSTANCE
@@ -382,7 +378,7 @@ impl TranslateDialog {
             self.add_combobox_item(self.engine_combo, engine.display_name());
         }
         {
-            let config = self.config.borrow();
+            let config = &self.config;
             if config.translation.custom_apis.is_empty() {
                 self.add_combobox_item(self.engine_combo, &config.translation.custom.name);
             } else {
@@ -404,7 +400,7 @@ impl TranslateDialog {
         }
 
         let (engine, engine_index, source_index, target_index, provider_index, model, api_key) = {
-            let config = self.config.borrow();
+            let config = &self.config;
             let engine = config
                 .translation
                 .get_engine()
@@ -640,30 +636,26 @@ impl TranslateDialog {
         }
     }
 
-    fn apply_llm_provider(&self) {
+    fn apply_llm_provider(&mut self) {
         // SAFETY: 콤보 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
         let sel =
             unsafe { SendMessageW(self.llm_provider_combo, CB_GETCURSEL, None, None).0 as u8 };
         let Some(provider) = LlmProvider::from_u8(sel) else {
             return;
         };
-        self.config
-            .borrow_mut()
-            .translation
-            .llm
-            .set_provider(provider);
+        self.config.translation.llm.set_provider(provider);
     }
 
-    fn apply_llm_model(&self) {
+    fn apply_llm_model(&mut self) {
         // SAFETY: edit 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
         let text = get_window_text(self.llm_model_edit);
-        self.config.borrow_mut().translation.llm.model = text;
+        self.config.translation.llm.model = text;
     }
 
-    fn apply_llm_api_key(&self) {
+    fn apply_llm_api_key(&mut self) {
         // SAFETY: edit 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
         let text = get_window_text(self.llm_api_key_edit);
-        self.config.borrow_mut().translation.llm.api_key = text;
+        self.config.translation.llm.api_key = text;
     }
 
     fn add_combobox_item(&self, combo: HWND, text: &str) {
@@ -725,7 +717,7 @@ impl TranslateDialog {
             return;
         };
         let delay_ms = if engine == TranslationEngine::Llm {
-            self.config.borrow().translation.llm.debounce_ms
+            self.config.translation.llm.debounce_ms
         } else {
             0
         };
@@ -743,7 +735,7 @@ impl TranslateDialog {
     }
 
     /// 현재 선택된 엔진/언어를 매니저에 적용
-    fn apply_current_settings(&self) {
+    fn apply_current_settings(&mut self) {
         // SAFETY: combo handles are valid controls from the resource template. SendMessageW with
         // CB_GETCURSEL returns the current selection index.
         unsafe {
@@ -768,7 +760,7 @@ impl TranslateDialog {
                 return;
             };
 
-            let mut config = self.config.borrow_mut();
+            let config = &mut self.config;
             if engine == TranslationEngine::Custom {
                 let custom_index = engine_idx - CUSTOM_ENGINE_INDEX;
                 let custom_name = if config.translation.custom_apis.is_empty() {
@@ -806,7 +798,7 @@ impl TranslateDialog {
         let text = self.manual_options.prepare_input(&source);
 
         let spec = {
-            let config = self.config.borrow();
+            let config = &self.config;
             PreparedJob::from_config(&config.translation)
         };
         let spec = match spec {

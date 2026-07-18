@@ -7,17 +7,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use windows::{
-    Win32::{Foundation::*, System::LibraryLoader::GetModuleHandleW, UI::WindowsAndMessaging::*},
+    Win32::{Foundation::*, UI::WindowsAndMessaging::*},
     core::*,
 };
 
 use super::helpers::{
-    center_dialog_on_monitor, get_window_text, listbox_add_item, listbox_get_sel, listbox_reset,
-    register_resource_dialog, set_window_text, show_dialog_window, unregister_resource_dialog,
+    get_window_text, listbox_add_item, listbox_get_sel, listbox_reset, set_window_text,
 };
-use super::models::GlossaryDraft;
-use crate::config::Config;
-use crate::define_dialog_instance;
+use super::host::{DialogHost, DialogResult, HostedDialog};
+use super::models::{GlossaryDraft, SettingsDraft};
 
 mod ctrl_id {
     pub const DIALOG: u16 = 102;
@@ -34,186 +32,27 @@ mod ctrl_id {
 pub struct GlossaryDialog {
     hwnd: HWND,
     owner: HWND,
-    config: Rc<RefCell<Config>>,
+    settings: Rc<RefCell<SettingsDraft>>,
     applied_dpi: u32,
     /// 임시 편집 버퍼 (적용 전까지 Config에 반영하지 않음)
     draft: GlossaryDraft,
 }
 
-define_dialog_instance!(GLOSSARY_INSTANCE: GlossaryDialog);
-
-struct PendingGlossary {
+pub(crate) struct GlossaryInit {
     owner: HWND,
-    config: Rc<RefCell<Config>>,
-}
-
-thread_local! {
-    static GLOSSARY_PENDING: RefCell<Option<PendingGlossary>> = const { RefCell::new(None) };
-    static GLOSSARY_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
-}
-
-/// `resources/glossary.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
-unsafe extern "system" fn glossary_dialog_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> isize {
-    unsafe {
-        if msg == WM_INITDIALOG {
-            let pending = GLOSSARY_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(PendingGlossary { owner, config }) = pending else {
-                GLOSSARY_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some("글로서리 초기화 인자가 없습니다".to_string());
-                });
-                return 0;
-            };
-
-            let draft = GlossaryDraft::from_config(&config.borrow());
-            let dialog = Rc::new(RefCell::new(GlossaryDialog {
-                hwnd,
-                owner,
-                config,
-                applied_dpi: crate::dpi::dpi_for_window(hwnd),
-                draft,
-            }));
-            GLOSSARY_INSTANCE.with(|slot| {
-                *slot.borrow_mut() = Some(dialog.clone());
-            });
-
-            if let Err(error) = dialog.borrow().initialize_controls() {
-                GLOSSARY_INSTANCE.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                GLOSSARY_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some(error.to_string());
-                });
-                return 0;
-            }
-            register_resource_dialog(hwnd);
-            return 1;
-        }
-
-        let instance = GLOSSARY_INSTANCE.with(|slot| {
-            let Ok(guard) = slot.try_borrow() else {
-                return None;
-            };
-            guard.clone()
-        });
-        let Some(dialog) = instance else {
-            return 0;
-        };
-
-        let mut can_flush = false;
-        let result = match msg {
-            WM_DPICHANGED => {
-                if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_dpi_changed(wparam, lparam);
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
-                }
-                1
-            }
-            WM_COMMAND => {
-                let id = (wparam.0 & 0xFFFF) as u16;
-                let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-                if id == IDCANCEL.0 as u16 {
-                    let _ = DestroyWindow(hwnd);
-                } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_command(id, notify_code);
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
-                }
-                1
-            }
-            WM_CLOSE => {
-                let _ = DestroyWindow(hwnd);
-                1
-            }
-            WM_DESTROY => {
-                unregister_resource_dialog(hwnd);
-                GLOSSARY_INSTANCE.with(|slot| {
-                    if let Ok(mut guard) = slot.try_borrow_mut() {
-                        *guard = None;
-                    }
-                });
-                1
-            }
-            _ => 0,
-        };
-        if can_flush {
-            super::helpers::flush_deferred_dialog_messages(hwnd);
-        }
-        result
-    }
+    settings: Rc<RefCell<SettingsDraft>>,
 }
 
 impl GlossaryDialog {
     /// `resources/glossary.rc`의 모델리스 DIALOGEX 리소스를 연다.
-    pub fn show(parent: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> {
-        let existing = GLOSSARY_INSTANCE
-            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
-        if let Some(hwnd) = existing
-            && unsafe { IsWindow(Some(hwnd)).as_bool() }
-        {
-            unsafe {
-                let _ = SetForegroundWindow(hwnd);
-            }
-            return Ok(hwnd);
-        }
-
-        // SAFETY: None은 현재 프로세스 모듈을 뜻한다.
-        let instance = unsafe { GetModuleHandleW(None)? };
-        GLOSSARY_INIT_ERROR.with(|slot| {
-            slot.borrow_mut().take();
-        });
-        GLOSSARY_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingGlossary {
+    pub(crate) fn show(parent: HWND, settings: Rc<RefCell<SettingsDraft>>) -> Result<HWND> {
+        DialogHost::<Self>::show(
+            parent,
+            GlossaryInit {
                 owner: parent,
-                config,
-            });
-        });
-
-        // SAFETY: 리소스 ID는 빌드 시 실행 파일에 포함되고, 콜백은 DLGPROC ABI를
-        // 따른다. 초기화 인자는 UI 스레드의 pending 슬롯에서 한 번만 꺼낸다.
-        let result = unsafe {
-            CreateDialogParamW(
-                Some(instance.into()),
-                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
-                Some(parent),
-                Some(glossary_dialog_proc),
-                LPARAM(0),
-            )
-        };
-
-        let hwnd = match result {
-            Ok(hwnd) => hwnd,
-            Err(error) => {
-                GLOSSARY_PENDING.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                GLOSSARY_INIT_ERROR.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                return Err(error);
-            }
-        };
-
-        if let Some(message) = GLOSSARY_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
-            // SAFETY: CreateDialogParamW가 반환한 유효한 모델리스 다이얼로그.
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-            return Err(Error::new(E_FAIL, message));
-        }
-
-        unsafe {
-            center_dialog_on_monitor(hwnd, parent);
-            show_dialog_window(hwnd);
-        }
-        Ok(hwnd)
+                settings,
+            },
+        )
     }
 
     fn initialize_controls(&self) -> Result<()> {
@@ -263,20 +102,8 @@ impl GlossaryDialog {
     fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
         use ctrl_id::*;
         match cmd {
-            BTN_CLOSE => unsafe {
-                let _ = DestroyWindow(self.hwnd);
-            },
             BTN_APPLY => {
-                self.draft.clone().commit(&mut self.config.borrow_mut());
-                if let Err(e) = self.config.borrow().save() {
-                    tracing::error!("글로서리 저장 실패: {}", e);
-                    super::helpers::show_error_message(
-                        self.hwnd,
-                        "사전 저장 오류",
-                        &format!("사전을 디스크에 저장하지 못했습니다.\n\n{e}"),
-                    );
-                    return;
-                }
+                self.draft.clone().commit(&mut self.settings.borrow_mut());
                 let _ = unsafe {
                     PostMessageW(Some(self.owner), WM_GLOSSARY_APPLIED, WPARAM(0), LPARAM(0))
                 };
@@ -388,6 +215,45 @@ impl GlossaryDialog {
             }
             get_window_text(ctrl)
         }
+    }
+}
+
+impl HostedDialog for GlossaryDialog {
+    type Init = GlossaryInit;
+    const RESOURCE_ID: u16 = ctrl_id::DIALOG;
+
+    fn create(hwnd: HWND, init: Self::Init) -> Result<Self> {
+        let draft = GlossaryDraft::from_config(&init.settings.borrow());
+        let dialog = Self {
+            hwnd,
+            owner: init.owner,
+            settings: init.settings,
+            applied_dpi: crate::dpi::dpi_for_window(hwnd),
+            draft,
+        };
+        dialog.initialize_controls()?;
+        Ok(dialog)
+    }
+
+    fn handle_message(&mut self, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> DialogResult {
+        if msg != WM_COMMAND {
+            return DialogResult::Unhandled;
+        }
+        let id = (wparam.0 & 0xFFFF) as u16;
+        if id == IDCANCEL.0 as u16 || id == ctrl_id::BTN_CLOSE {
+            return DialogResult::Close(LRESULT(1));
+        }
+        let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+        self.handle_command(id, notify_code);
+        DialogResult::Handled(LRESULT(1))
+    }
+
+    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
+        GlossaryDialog::handle_dpi_changed(self, wparam, lparam);
+    }
+
+    fn can_defer(msg: u32) -> bool {
+        msg == WM_COMMAND
     }
 }
 

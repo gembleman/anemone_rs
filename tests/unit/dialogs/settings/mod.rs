@@ -22,9 +22,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     use super::{SettingsDialog, ctrl_id};
     use crate::config::Config;
     use crate::translation::PreparedJob;
-    use std::cell::RefCell;
     use std::path::PathBuf;
-    use std::rc::Rc;
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         CB_GETCURSEL, CB_SETCURSEL, DestroyWindow, GWL_STYLE, GetDesktopWindow, GetDlgItem,
@@ -126,7 +124,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     initial.translation.engine = "deepl".into();
     initial.translation.source_lang = "en".into();
     initial.translation.target_lang = "fr".into();
-    let config = Rc::new(RefCell::new(initial));
+    let config = initial;
     let parent = unsafe { GetDesktopWindow() };
     let hwnd = SettingsDialog::show(parent, config.clone(), None).unwrap();
     let mut dialog = DialogGuard(Some(hwnd));
@@ -142,11 +140,12 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
 
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_SOURCE_LANG), 0);
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_TARGET_LANG), 0);
-    assert_eq!(config.borrow().translation.source_lang, "ja");
-    assert_eq!(config.borrow().translation.target_lang, "ko");
-    assert!(PreparedJob::from_config(&config.borrow().translation).is_ok());
+    let edited = Config::load_from_file(Config::default_config_path()).unwrap();
+    assert_eq!(edited.translation.source_lang, "ja");
+    assert_eq!(edited.translation.target_lang, "ko");
+    assert!(PreparedJob::from_config(&edited.translation).is_ok());
 
-    let max_tokens = config.borrow().translation.llm.max_tokens;
+    let max_tokens = edited.translation.llm.max_tokens;
     let persisted_before_invalid = std::fs::read(Config::default_config_path()).unwrap();
     unsafe {
         SetWindowTextW(control(hwnd, ctrl_id::LLM_MAX_TOKENS_EDIT), w!("invalid")).unwrap();
@@ -168,7 +167,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     assert_eq!(persisted.translation.source_lang, "ja");
     assert_eq!(persisted.translation.target_lang, "ko");
 
-    let reopened = SettingsDialog::show(parent, config, None).unwrap();
+    let reopened = SettingsDialog::show(parent, persisted, None).unwrap();
     let mut reopened_dialog = DialogGuard(Some(reopened));
     assert_eq!(combo_index(reopened, ctrl_id::TRANS_ENGINE), 0);
     assert_eq!(combo_index(reopened, ctrl_id::TRANS_SOURCE_LANG), 0);

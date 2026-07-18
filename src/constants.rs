@@ -37,6 +37,9 @@ pub const WM_APP_SET_MAGNETIC: u32 = WM_APP + 2;
 pub const WM_DEFERRED_RESIZE: u32 = WM_APP + 3;
 pub const WM_DEFERRED_PAINT: u32 = WM_APP + 4;
 
+/// 다이얼로그가 UI thread의 AppAction queue에 새 작업을 넣었음을 알린다.
+pub const WM_APP_ACTION: u32 = WM_APP + 5;
+
 // ── 파일 번역 진행률 메시지 ─────────────────────────────
 
 // ── 응답 저장소 ─────────────────────────────────────────

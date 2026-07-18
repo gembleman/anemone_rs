@@ -384,7 +384,7 @@ pub fn listbox_get_sel(hwnd: HWND) -> i32 {
 ///
 /// 사용:
 /// ```ignore
-/// define_dialog_instance!(GLOSSARY_INSTANCE: GlossaryDialog);
+/// define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
 /// ```
 #[macro_export]
 macro_rules! define_dialog_instance {

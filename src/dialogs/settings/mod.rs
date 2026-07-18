@@ -20,14 +20,13 @@ use super::helpers::{
     center_dialog_on_monitor, register_resource_dialog, show_dialog_window,
     unregister_resource_dialog,
 };
+use super::models::SettingsDraft;
+use crate::app::action::AppActionSender;
 use crate::config::{Config, TextAlign};
 use crate::constants::TBM_GETPOS_VAL;
 use crate::define_dialog_instance;
 use crate::translation::{TranslationEngine, lang_utils};
 use crate::util::to_wide;
-
-/// 설정 변경 콜백 타입
-pub type SettingsChangeCallback = Box<dyn Fn(&Config)>;
 
 /// 탭 인덱스
 const TAB_APPEARANCE: usize = 0;
@@ -69,9 +68,8 @@ fn should_persist_trackbar(code: u32) -> bool {
 /// 설정 대화상자
 pub struct SettingsDialog {
     hwnd: HWND,
-    config: Rc<RefCell<Config>>,
-    main_hwnd: HWND,
-    on_change: Option<SettingsChangeCallback>,
+    draft: Rc<RefCell<SettingsDraft>>,
+    actions: Option<AppActionSender>,
     /// 각 탭에 속한 컨트롤 HWND 목록 (탭 전환 시 표시/숨김)
     tab_controls: [Vec<HWND>; 3],
     current_tab: usize,
@@ -86,9 +84,8 @@ pub struct SettingsDialog {
 define_dialog_instance!(SETTINGS_INSTANCE: SettingsDialog);
 
 struct PendingSettings {
-    parent: HWND,
-    config: Rc<RefCell<Config>>,
-    on_change: Option<SettingsChangeCallback>,
+    draft: Rc<RefCell<SettingsDraft>>,
+    actions: Option<AppActionSender>,
 }
 
 thread_local! {
@@ -106,12 +103,7 @@ unsafe extern "system" fn settings_dialog_proc(
     unsafe {
         if msg == WM_INITDIALOG {
             let pending = SETTINGS_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(PendingSettings {
-                parent,
-                config,
-                on_change,
-            }) = pending
-            else {
+            let Some(PendingSettings { draft, actions }) = pending else {
                 SETTINGS_INIT_ERROR.with(|slot| {
                     *slot.borrow_mut() = Some("설정창 초기화 인자가 없습니다".to_string());
                 });
@@ -120,9 +112,8 @@ unsafe extern "system" fn settings_dialog_proc(
 
             let dialog = Rc::new(RefCell::new(SettingsDialog {
                 hwnd,
-                config,
-                main_hwnd: parent,
-                on_change,
+                draft,
+                actions,
                 tab_controls: [Vec::new(), Vec::new(), Vec::new()],
                 current_tab: TAB_APPEARANCE,
                 applied_dpi: crate::dpi::dpi_for_window(hwnd),
@@ -174,7 +165,7 @@ unsafe extern "system" fn settings_dialog_proc(
 
         if msg == crate::dialogs::glossary::WM_GLOSSARY_APPLIED {
             if let Ok(dialog) = dialog.try_borrow() {
-                dialog.refresh_glossary_count();
+                dialog.glossary_applied();
                 drop(dialog);
                 super::helpers::flush_deferred_dialog_messages(hwnd);
             } else {
@@ -246,11 +237,7 @@ impl SettingsDialog {
     const MIN_HEIGHT: i32 = 180;
 
     /// `resources/settings.rc`의 모델리스 DIALOGEX 리소스를 연다.
-    pub fn show(
-        parent: HWND,
-        config: Rc<RefCell<Config>>,
-        on_change: Option<SettingsChangeCallback>,
-    ) -> Result<HWND> {
+    pub fn show(parent: HWND, config: Config, actions: Option<AppActionSender>) -> Result<HWND> {
         if let Some(hwnd) = Self::current_hwnd() {
             unsafe {
                 let _ = SetForegroundWindow(hwnd);
@@ -264,9 +251,8 @@ impl SettingsDialog {
         });
         SETTINGS_PENDING.with(|slot| {
             *slot.borrow_mut() = Some(PendingSettings {
-                parent,
-                config,
-                on_change,
+                draft: Rc::new(RefCell::new(SettingsDraft::new(config))),
+                actions,
             });
         });
 
@@ -322,6 +308,14 @@ impl SettingsDialog {
 
     /// 주 창이 설정 요청을 처리한 뒤 실제 magnetic 상태를 반영한다.
     pub(crate) fn set_magnetic_checked(dialog_hwnd: HWND, enabled: bool) {
+        SETTINGS_INSTANCE.with(|slot| {
+            if let Some(dialog) = slot.borrow().as_ref()
+                && let Ok(dialog) = dialog.try_borrow()
+                && dialog.hwnd == dialog_hwnd
+            {
+                dialog.draft.borrow_mut().magnetic_mode = enabled;
+            }
+        });
         unsafe {
             let _ = CheckDlgButton(
                 dialog_hwnd,
@@ -332,6 +326,14 @@ impl SettingsDialog {
     }
 
     pub(crate) fn set_clipboard_checked(dialog_hwnd: HWND, enabled: bool) {
+        SETTINGS_INSTANCE.with(|slot| {
+            if let Some(dialog) = slot.borrow().as_ref()
+                && let Ok(dialog) = dialog.try_borrow()
+                && dialog.hwnd == dialog_hwnd
+            {
+                dialog.draft.borrow_mut().clipboard_watch = enabled;
+            }
+        });
         unsafe {
             let _ = CheckDlgButton(
                 dialog_hwnd,
@@ -344,7 +346,7 @@ impl SettingsDialog {
     /// ctrl_id로부터 미리보기 색상(ARGB)을 찾는다
     fn color_for_button(&self, id: u16) -> Option<u32> {
         use crate::config::{ColorType, TextType};
-        let cfg = self.config.borrow();
+        let cfg = self.draft.borrow();
         let argb = match id {
             ctrl_id::BACKGROUND_COLOR => cfg.background_color,
             ctrl_id::BORDER_COLOR => cfg.border_color,
@@ -803,7 +805,7 @@ impl SettingsDialog {
                     Some(LPARAM(w.as_ptr() as isize)),
                 );
             }
-            let src_sel = match self.config.borrow().translation.source_lang_index(engine) {
+            let src_sel = match self.draft.borrow().translation.source_lang_index(engine) {
                 Ok(index) => index,
                 Err(error) => {
                     tracing::error!("번역 언어 설정 오류: {error}");
@@ -832,7 +834,7 @@ impl SettingsDialog {
                     Some(LPARAM(w.as_ptr() as isize)),
                 );
             }
-            let configured_target = self.config.borrow().translation.get_target_language().ok();
+            let configured_target = self.draft.borrow().translation.get_target_language().ok();
             let tgt_sel = configured_target
                 .and_then(|target| targets.iter().position(|&language| language == target))
                 .unwrap_or(0);

@@ -1,7 +1,10 @@
 use super::{
-    AppCommand, ClientSize, ClipboardDebounce, MagneticAction, PendingTranslation,
-    correlate_translation, magnetic_action,
+    AppAction, AppCommand, AppModel, AppState, ClientSize, ClipboardDebounce, Effect,
+    MagneticAction, PendingTranslation, correlate_translation, magnetic_action,
 };
+use crate::backlog::{BacklogFilter, BacklogStore, LogEntry};
+use crate::config::Config;
+use crate::dialogs::models::SettingsDraft;
 use crate::menu;
 
 #[test]
@@ -93,4 +96,54 @@ fn drawable_size_rejects_zero_and_keeps_small_valid_clients() {
         ClientSize::drawable(640, 480),
         Some(ClientSize::new(640, 480))
     );
+}
+
+fn app_model() -> AppModel {
+    AppModel {
+        config: Config::default(),
+        backlog: BacklogStore::new(),
+        runtime: AppState {
+            client_size: ClientSize::new(400, 200),
+            original_text: String::new(),
+            translated_text: String::new(),
+            pending_translation: None,
+            clipboard_debounce: ClipboardDebounce::default(),
+        },
+    }
+}
+
+#[test]
+fn command_reducer_mutates_model_and_returns_platform_effects() {
+    let mut model = app_model();
+    let previous = model.config.click_through;
+
+    let effects = model.update(AppAction::Command(AppCommand::ClickThrough));
+
+    assert_eq!(model.config.click_through, !previous);
+    assert_eq!(effects, vec![Effect::SetClickThrough(!previous)]);
+}
+
+#[test]
+fn settings_draft_distinguishes_preview_from_commit_effects() {
+    let mut model = app_model();
+    let mut preview = model.config.clone();
+    preview.window_topmost = !preview.window_topmost;
+
+    let effects = model.update(AppAction::PreviewSettings(SettingsDraft::new(
+        preview.clone(),
+    )));
+    assert_eq!(model.config.window_topmost, preview.window_topmost);
+    assert!(!effects.contains(&Effect::SaveConfig));
+
+    let effects = model.update(AppAction::CommitSettings(SettingsDraft::new(preview)));
+    assert!(effects.contains(&Effect::SaveConfig));
+}
+
+#[test]
+fn clear_backlog_action_mutates_the_app_owned_store() {
+    let mut model = app_model();
+    model.backlog.push(LogEntry::new("line".into()));
+
+    assert!(model.update(AppAction::ClearBacklog).is_empty());
+    assert!(model.backlog.render(BacklogFilter::All, true).is_empty());
 }

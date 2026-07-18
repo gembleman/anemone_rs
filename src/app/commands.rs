@@ -2,11 +2,9 @@ use std::mem::zeroed;
 
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, POINT, WPARAM},
+        Foundation::{HWND, LPARAM, POINT},
         Graphics::Gdi::ClientToScreen,
-        UI::WindowsAndMessaging::{
-            GetCursorPos, PostMessageW, WM_CLOSE, WM_LBUTTONUP, WM_RBUTTONUP,
-        },
+        UI::WindowsAndMessaging::{GetCursorPos, WM_LBUTTONUP, WM_RBUTTONUP},
     },
     core::Result,
 };
@@ -19,7 +17,7 @@ use crate::window;
 
 impl App {
     fn show_context_menu(&mut self, x: i32, y: i32) -> Result<()> {
-        self.menu.build(&self.config.borrow())?;
+        self.menu.build(&self.model.config)?;
         if let Some(command) = self.menu.show(self.hwnd, x, y)? {
             self.handle_menu_command(command)?;
         }
@@ -31,95 +29,8 @@ impl App {
             return Ok(());
         };
 
-        match command {
-            state::AppCommand::WindowShow => {
-                let mut cfg = self.config.borrow_mut();
-                cfg.toggle_window_visible();
-                let visible = cfg.window_visible;
-                drop(cfg);
-                window::set_window_visible(self.hwnd, visible);
-            }
-            state::AppCommand::ClickThrough => {
-                let mut cfg = self.config.borrow_mut();
-                cfg.toggle_click_through();
-                let click_through = cfg.click_through;
-                drop(cfg);
-                window::set_click_through(self.hwnd, click_through);
-            }
-            state::AppCommand::ClipboardWatch => {
-                let enable = !self.config.borrow().clipboard_watch;
-                let result = if enable {
-                    self.clipboard.start()
-                } else {
-                    self.clipboard.stop()
-                };
-                match result {
-                    Ok(()) => {
-                        self.config.borrow_mut().clipboard_watch = enable;
-                        if !enable {
-                            self.cancel_clipboard_translation();
-                        }
-                    }
-                    Err(error) => {
-                        tracing::error!("Failed to change clipboard listener state: {error}");
-                        crate::dialogs::helpers::show_error_message(
-                            self.hwnd,
-                            "클립보드 감시 오류",
-                            &format!("클립보드 감시 상태를 변경하지 못했습니다.\n\n{error}"),
-                        );
-                    }
-                }
-            }
-            state::AppCommand::BackgroundToggle => {
-                self.config.borrow_mut().toggle_background_visible();
-                self.paint()?;
-            }
-            state::AppCommand::BorderToggle => {
-                self.config.borrow_mut().toggle_border_visible();
-                self.paint()?;
-            }
-            state::AppCommand::MagneticMode => {
-                let enabled = !self.config.borrow().magnetic_mode;
-                self.apply_magnetic_request(enabled);
-            }
-            state::AppCommand::Settings => {
-                self.open_settings_dialog();
-            }
-            state::AppCommand::Translate => {
-                self.open_translate_dialog();
-            }
-            state::AppCommand::Backlog => {
-                self.open_backlog_dialog();
-            }
-            state::AppCommand::FileTrans => {
-                self.open_file_trans_dialog();
-            }
-            state::AppCommand::TextSizeUp => {
-                let mut cfg = self.config.borrow_mut();
-                let new_size = (cfg.translation_style.size + 1).min(100);
-                cfg.translation_style.size = new_size;
-                cfg.name_style.size = new_size;
-                cfg.original_style.size = new_size;
-                drop(cfg);
-                self.paint()?;
-            }
-            state::AppCommand::TextSizeDown => {
-                let mut cfg = self.config.borrow_mut();
-                let new_size = (cfg.translation_style.size - 1).max(6);
-                cfg.translation_style.size = new_size;
-                cfg.name_style.size = new_size;
-                cfg.original_style.size = new_size;
-                drop(cfg);
-                self.paint()?;
-            }
-            // DestroyWindow의 동기 재진입은 RefCell borrow와 충돌한다. WM_CLOSE를
-            // queue에 넣어 borrow가 풀린 다음 정상 종료 흐름을 시작한다.
-            state::AppCommand::Exit => unsafe {
-                if let Err(e) = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) {
-                    tracing::error!("PostMessageW(WM_CLOSE) failed: {e}");
-                }
-            },
-        }
+        let effects = self.model.update(state::AppAction::Command(command));
+        self.run_effects(effects);
         Ok(())
     }
 
@@ -138,16 +49,19 @@ impl App {
     }
 
     /// 설정 대화상자 열기
-    fn open_settings_dialog(&mut self) {
+    pub(super) fn open_settings_dialog(&mut self) {
         let main_hwnd = self.hwnd;
-        let config = self.config.clone();
-        Self::open_dialog_generic("settings", || SettingsDialog::show(main_hwnd, config, None));
+        let config = self.model.config.clone();
+        let actions = self.action_sender();
+        Self::open_dialog_generic("settings", || {
+            SettingsDialog::show(main_hwnd, config, Some(actions))
+        });
     }
 
     /// 번역 대화상자 열기
-    fn open_translate_dialog(&mut self) {
+    pub(super) fn open_translate_dialog(&mut self) {
         let main_hwnd = self.hwnd;
-        let config = self.config.clone();
+        let config = self.model.config.clone();
         let translation = self.services.translation_ui.clone();
         Self::open_dialog_generic("translate", || {
             TranslateDialog::show(main_hwnd, config, translation)
@@ -155,16 +69,17 @@ impl App {
     }
 
     /// 백로그 대화상자 열기
-    fn open_backlog_dialog(&mut self) {
+    pub(super) fn open_backlog_dialog(&mut self) {
         let main_hwnd = self.hwnd;
-        let store = self.backlog_store.clone();
-        Self::open_dialog_generic("backlog", || BacklogDialog::show(main_hwnd, store));
+        let store = self.model.backlog.clone();
+        let actions = self.action_sender();
+        Self::open_dialog_generic("backlog", || BacklogDialog::show(main_hwnd, store, actions));
     }
 
     /// 파일 번역 대화상자 열기
-    fn open_file_trans_dialog(&mut self) {
+    pub(super) fn open_file_trans_dialog(&mut self) {
         let main_hwnd = self.hwnd;
-        let config = self.config.clone();
+        let config = self.model.config.clone();
         let supervisor = self.services.file_translation.clone();
         Self::open_dialog_generic("file_trans", || {
             FileTransDialog::show(main_hwnd, config, supervisor)
@@ -173,23 +88,27 @@ impl App {
 
     /// Config 기반 magnetic, click-through, topmost, visibility, clipboard 정책을 적용한다.
     pub(super) fn sync_window_state(&mut self) {
-        let cfg = self.config.borrow();
+        let cfg = &self.model.config;
         let click_through = cfg.click_through;
         let topmost = cfg.window_topmost;
         let visible = cfg.window_visible;
         let watch = cfg.clipboard_watch;
         let magnetic_enabled = cfg.magnetic_mode;
-        drop(cfg);
-
         // Magnetic 연결 실패 시 저장값과 checkbox를 모두 비활성화한다.
         let active_before = self.magnetic.is_some();
         if let Err(error) = self.set_magnetic_enabled(magnetic_enabled) {
             tracing::error!("Failed to synchronize magnetic mode: {error}");
         }
+        if let Some(magnetic) = self.magnetic.as_mut() {
+            magnetic.update_policy(
+                self.model.config.magnetic_minimize,
+                self.model.config.window_visible,
+            );
+        }
         let magnetic_changed = active_before != self.magnetic.is_some()
-            || magnetic_enabled != self.config.borrow().magnetic_mode;
+            || magnetic_enabled != self.model.config.magnetic_mode;
         self.sync_magnetic_checkbox();
-        if magnetic_changed && let Err(error) = self.config.borrow().save() {
+        if magnetic_changed && let Err(error) = self.model.config.save() {
             tracing::error!("Failed to persist magnetic mode synchronization: {error}");
         }
 
@@ -199,7 +118,7 @@ impl App {
 
         if watch && !self.clipboard.is_watching() {
             if let Err(error) = self.clipboard.start() {
-                self.config.borrow_mut().clipboard_watch = false;
+                self.model.config.clipboard_watch = false;
                 tracing::error!("Failed to start clipboard listener: {error}");
                 crate::dialogs::helpers::show_error_message(
                     self.hwnd,
@@ -211,7 +130,7 @@ impl App {
             match self.clipboard.stop() {
                 Ok(()) => self.cancel_clipboard_translation(),
                 Err(error) => {
-                    self.config.borrow_mut().clipboard_watch = true;
+                    self.model.config.clipboard_watch = true;
                     tracing::error!("Failed to stop clipboard listener: {error}");
                     crate::dialogs::helpers::show_error_message(
                         self.hwnd,
@@ -222,7 +141,35 @@ impl App {
             }
         }
         if let Some(hwnd) = SettingsDialog::current_hwnd() {
-            SettingsDialog::set_clipboard_checked(hwnd, self.config.borrow().clipboard_watch);
+            SettingsDialog::set_clipboard_checked(hwnd, self.model.config.clipboard_watch);
+        }
+    }
+
+    pub(super) fn apply_clipboard_watch(&mut self, enabled: bool) {
+        let result = if enabled {
+            self.clipboard.start()
+        } else {
+            self.clipboard.stop()
+        };
+        match result {
+            Ok(()) => {
+                self.model.config.clipboard_watch = enabled;
+                if !enabled {
+                    self.cancel_clipboard_translation();
+                }
+            }
+            Err(error) => {
+                self.model.config.clipboard_watch = !enabled;
+                tracing::error!("Failed to change clipboard listener state: {error}");
+                crate::dialogs::helpers::show_error_message(
+                    self.hwnd,
+                    "클립보드 감시 오류",
+                    &format!("클립보드 감시 상태를 변경하지 못했습니다.\n\n{error}"),
+                );
+            }
+        }
+        if let Some(hwnd) = SettingsDialog::current_hwnd() {
+            SettingsDialog::set_clipboard_checked(hwnd, self.model.config.clipboard_watch);
         }
     }
 
@@ -230,22 +177,26 @@ impl App {
     pub(super) fn set_magnetic_enabled(&mut self, enabled: bool) -> Result<()> {
         match state::magnetic_action(enabled, self.magnetic.is_some()) {
             state::MagneticAction::Noop => {
-                self.config.borrow_mut().magnetic_mode = enabled;
+                self.model.config.magnetic_mode = enabled;
             }
             state::MagneticAction::Start => {
-                let mut magnetic = MagneticManager::new(self.hwnd, self.config.clone());
+                let mut magnetic = MagneticManager::new(
+                    self.hwnd,
+                    self.model.config.magnetic_minimize,
+                    self.model.config.window_visible,
+                );
                 if let Err(error) = magnetic.start() {
-                    self.config.borrow_mut().magnetic_mode = false;
+                    self.model.config.magnetic_mode = false;
                     return Err(error);
                 }
                 self.magnetic = Some(magnetic);
-                self.config.borrow_mut().magnetic_mode = true;
+                self.model.config.magnetic_mode = true;
             }
             state::MagneticAction::Stop => {
                 if let Some(mut magnetic) = self.magnetic.take() {
                     magnetic.stop();
                 }
-                self.config.borrow_mut().magnetic_mode = false;
+                self.model.config.magnetic_mode = false;
             }
         }
         Ok(())
@@ -256,14 +207,14 @@ impl App {
             tracing::error!("Failed to apply magnetic mode request: {error}");
         }
         self.sync_magnetic_checkbox();
-        if let Err(error) = self.config.borrow().save() {
+        if let Err(error) = self.model.config.save() {
             tracing::error!("Failed to persist magnetic mode: {error}");
         }
     }
 
     fn sync_magnetic_checkbox(&self) {
         if let Some(hwnd) = SettingsDialog::current_hwnd() {
-            SettingsDialog::set_magnetic_checked(hwnd, self.config.borrow().magnetic_mode);
+            SettingsDialog::set_magnetic_checked(hwnd, self.model.config.magnetic_mode);
         }
     }
 
@@ -282,7 +233,7 @@ impl App {
         unsafe {
             match lparam.0 as u32 {
                 WM_LBUTTONUP => {
-                    self.config.borrow_mut().window_visible = true;
+                    self.model.config.window_visible = true;
                     window::set_window_visible(self.hwnd, true);
                 }
                 WM_RBUTTONUP => {

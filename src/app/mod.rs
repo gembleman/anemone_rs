@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use windows::{
@@ -7,9 +8,7 @@ use windows::{
 };
 
 use crate::clipboard::ClipboardWatcher;
-use crate::config::Config;
 use crate::d2d::{CompositionRenderer, D2DRenderer};
-use crate::dialogs::BacklogStore;
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::ContextMenu;
@@ -23,6 +22,7 @@ mod bench;
 #[path = "../../benchmark/app.rs"]
 mod bench_app;
 
+pub(crate) mod action;
 mod commands;
 mod lifecycle;
 mod rendering;
@@ -39,15 +39,14 @@ pub(super) const CLIPBOARD_READ_RETRY_TIMER: usize = 0xD2D2;
 
 pub struct App {
     hwnd: HWND,
-    state: state::AppState,
-    config: Rc<RefCell<Config>>,
+    model: state::AppModel,
+    action_queue: Rc<RefCell<VecDeque<state::AppAction>>>,
     services: AppServices,
     tray: TrayIcon,
     menu: ContextMenu,
     hotkey: Option<HotkeyManager>,
     clipboard: ClipboardWatcher,
     taskbar_created_msg: u32,
-    backlog_store: Rc<RefCell<BacklogStore>>,
     magnetic: Option<MagneticManager>,
     d2d_renderer: Option<D2DRenderer>,
     /// 창이 표시된 뒤 첫 paint에서 만드는 DComp renderer.

@@ -17,8 +17,8 @@ use super::{
     APP, App, CLIPBOARD_DEBOUNCE_TIMER, CLIPBOARD_READ_RETRY_TIMER, COMPOSITION_RETRY_TIMER,
 };
 use crate::constants::{
-    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
-    WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
+    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_ACTION, WM_APP_REFRESH, WM_APP_SET_MAGNETIC,
+    WM_DEFERRED_PAINT, WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
 use crate::window;
 
@@ -59,6 +59,7 @@ fn reentry_policy(msg: u32, taskbar_created_msg: u32) -> ReentryPolicy {
         _ if matches!(
             msg,
             WM_APP_REFRESH
+                | WM_APP_ACTION
                 | WM_APP_SET_MAGNETIC
                 | WM_DEFERRED_RESIZE
                 | WM_DEFERRED_PAINT
@@ -189,6 +190,11 @@ impl App {
                     if let Err(e) = self.paint() {
                         tracing::warn!("paint failed on refresh: {e}");
                     }
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_APP_ACTION => {
+                    self.process_actions();
                     Some(LRESULT(0))
                 }
 
@@ -358,7 +364,7 @@ impl App {
                     if let Ok(app_ref) = app.try_borrow() {
                         // 클릭 통과는 resize/drag 판정보다 항상 우선한다. 확장 스타일과
                         // 명시적 hit-test를 함께 적용해 다른 프로세스의 아래 창도 후보가 된다.
-                        if app_ref.config.borrow().click_through {
+                        if app_ref.model.config.click_through {
                             return LRESULT(HTTRANSPARENT as isize);
                         }
                         if !app_ref.full_hit_region

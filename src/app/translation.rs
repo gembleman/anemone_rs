@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::{App, state};
 use crate::clipboard::ClipboardUpdate;
-use crate::dialogs::{LogEntry, add_to_backlog};
+use crate::dialogs::LogEntry;
 use crate::translation::TranslationEngine;
 
 fn debounce_delay_ms(engine: TranslationEngine, configured_ms: u32) -> u32 {
@@ -30,7 +30,7 @@ fn log_translation_failure(error: &crate::translation::TranslationError) {
 
 impl App {
     pub(super) fn handle_clipboard_change(&mut self) {
-        if !self.config.borrow().clipboard_watch || !self.clipboard.is_watching() {
+        if !self.model.config.clipboard_watch || !self.clipboard.is_watching() {
             return;
         }
         match self.clipboard.on_clipboard_update() {
@@ -53,7 +53,7 @@ impl App {
                 tracing::warn!("clipboard read failed after retries: {error}");
             }
             ClipboardUpdate::Text(text) => {
-                let max_len = self.config.borrow().clipboard_max_length as usize;
+                let max_len = self.model.config.clipboard_max_length as usize;
                 if max_len > 0 {
                     let text_len = text.chars().count();
                     if text_len > max_len {
@@ -69,7 +69,7 @@ impl App {
                 log_clipboard_metadata(&text);
 
                 let delay_ms = {
-                    let config = self.config.borrow();
+                    let config = &self.model.config;
                     let engine = match config.translation.get_engine() {
                         Ok(engine) => engine,
                         Err(error) => {
@@ -87,7 +87,7 @@ impl App {
     fn schedule_clipboard_translation(&mut self, text: String, debounce_ms: u32) {
         use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
-        self.state.clipboard_debounce.submit(text);
+        self.model.runtime.clipboard_debounce.submit(text);
         unsafe {
             let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
             let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_READ_RETRY_TIMER);
@@ -119,7 +119,7 @@ impl App {
             let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
             let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_READ_RETRY_TIMER);
         }
-        if let Some(text) = self.state.clipboard_debounce.take() {
+        if let Some(text) = self.model.runtime.clipboard_debounce.take() {
             self.request_translation_async(&text);
         }
     }
@@ -130,8 +130,8 @@ impl App {
             let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
             let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_READ_RETRY_TIMER);
         }
-        self.state.clipboard_debounce.clear();
-        self.state.pending_translation = None;
+        self.model.runtime.clipboard_debounce.clear();
+        self.model.runtime.pending_translation = None;
         self.services.translation_ui.cancel(self.hwnd);
     }
 
@@ -139,7 +139,7 @@ impl App {
     fn request_translation_async(&mut self, text: &str) {
         use crate::translation::PreparedJob;
 
-        let config = self.config.borrow();
+        let config = &self.model.config;
         let job = match PreparedJob::from_config(&config.translation) {
             Ok(spec) => spec,
             Err(error) => {
@@ -152,8 +152,6 @@ impl App {
             return;
         }
 
-        drop(config);
-
         let original: Arc<str> = Arc::from(text);
 
         // 디스패치에 번역 요청 (워커는 프로세스 전역)
@@ -164,17 +162,17 @@ impl App {
 
         match request {
             Ok(req_id) => {
-                self.state.pending_translation =
+                self.model.runtime.pending_translation =
                     Some(state::PendingTranslation::new(req_id, original));
-                self.state.original_text = text.to_string();
-                self.state.translated_text = "[번역 중...]".to_string();
+                self.model.runtime.original_text = text.to_string();
+                self.model.runtime.translated_text = "[번역 중...]".to_string();
             }
             Err(error) => {
                 tracing::error!("Translation request failed: {error}");
-                self.state.pending_translation = None;
-                self.state.original_text = text.to_string();
-                self.state.translated_text.clear();
-                add_to_backlog(&self.backlog_store, LogEntry::new(text.to_string()));
+                self.model.runtime.pending_translation = None;
+                self.model.runtime.original_text = text.to_string();
+                self.model.runtime.translated_text.clear();
+                self.push_backlog(LogEntry::new(text.to_string()));
             }
         }
 
@@ -190,7 +188,7 @@ impl App {
         };
 
         let Some(completion) = state::correlate_translation(
-            &mut self.state.pending_translation,
+            &mut self.model.runtime.pending_translation,
             req_id,
             response.result,
         ) else {
@@ -201,14 +199,14 @@ impl App {
         let original = completion.original;
         let translation = match completion.result {
             Ok(translated) => {
-                self.state.original_text = original.to_string();
-                self.state.translated_text = translated.clone();
+                self.model.runtime.original_text = original.to_string();
+                self.model.runtime.translated_text = translated.clone();
                 Some(translated)
             }
             Err(err) => {
                 log_translation_failure(&err);
-                self.state.original_text = original.to_string();
-                self.state.translated_text.clear();
+                self.model.runtime.original_text = original.to_string();
+                self.model.runtime.translated_text.clear();
                 None
             }
         };
@@ -217,11 +215,16 @@ impl App {
         if let Some(trans) = translation {
             entry = entry.with_translation(trans);
         }
-        add_to_backlog(&self.backlog_store, entry);
+        self.push_backlog(entry);
 
         if let Err(e) = self.paint() {
             tracing::warn!("paint failed after translation complete: {e}");
         }
+    }
+
+    fn push_backlog(&mut self, entry: LogEntry) {
+        let evicted = self.model.backlog.push(entry.clone());
+        crate::dialogs::backlog::append_entry(entry, evicted);
     }
 }
 

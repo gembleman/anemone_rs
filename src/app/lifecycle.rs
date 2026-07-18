@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::mem::zeroed;
 use std::ptr::null_mut;
 use std::rc::Rc;
@@ -48,7 +49,7 @@ impl Drop for AppCleanupGuard {
                 && let Ok(app) = app.try_borrow()
             {
                 app.services.translation_ui.unregister(app.hwnd);
-                if let Err(error) = app.config.borrow().save() {
+                if let Err(error) = app.model.config.save() {
                     tracing::error!("설정 저장 실패: {error}");
                 }
                 app.services.shutdown();
@@ -141,29 +142,33 @@ impl App {
             tracing::info!("Direct2D renderer initialized");
 
             // 설정 로드 (파일이 없으면 기본값)
-            let config = Rc::new(RefCell::new(Config::load_or_default()));
+            let config = Config::load_or_default();
             let services = AppServices::new();
+            let action_queue = Rc::new(RefCell::new(VecDeque::new()));
 
             let app = Rc::new(RefCell::new(App {
                 hwnd,
-                state: state::AppState {
-                    client_size: state::ClientSize::new(
-                        INITIAL_WINDOW_WIDTH,
-                        INITIAL_WINDOW_HEIGHT,
-                    ),
-                    original_text: String::new(),
-                    translated_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
-                    pending_translation: None,
-                    clipboard_debounce: state::ClipboardDebounce::default(),
+                model: state::AppModel {
+                    config,
+                    backlog: BacklogStore::new(),
+                    runtime: state::AppState {
+                        client_size: state::ClientSize::new(
+                            INITIAL_WINDOW_WIDTH,
+                            INITIAL_WINDOW_HEIGHT,
+                        ),
+                        original_text: String::new(),
+                        translated_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
+                        pending_translation: None,
+                        clipboard_debounce: state::ClipboardDebounce::default(),
+                    },
                 },
-                config,
+                action_queue: action_queue.clone(),
                 services,
                 tray: TrayIcon::new(),
                 menu: ContextMenu::new()?,
                 hotkey: None,
                 clipboard: ClipboardWatcher::new(hwnd),
                 taskbar_created_msg,
-                backlog_store: Rc::new(RefCell::new(BacklogStore::new())),
                 magnetic: None,
                 d2d_renderer: Some(d2d_renderer),
                 composition: None,
@@ -193,7 +198,7 @@ impl App {
                 app_ref.hotkey = Some(hotkey);
 
                 // 클립보드 감시 여부 확인 (borrow_mut 블록 안에서)
-                app_ref.config.borrow().clipboard_watch
+                app_ref.model.config.clipboard_watch
             };
             Self::drain_deferred_messages(&app);
 
@@ -201,7 +206,7 @@ impl App {
             if should_start_clipboard {
                 let mut app_ref = app.borrow_mut();
                 if let Err(error) = app_ref.clipboard.start() {
-                    app_ref.config.borrow_mut().clipboard_watch = false;
+                    app_ref.model.config.clipboard_watch = false;
                     tracing::error!("Failed to start clipboard listener: {error}");
                 }
             }

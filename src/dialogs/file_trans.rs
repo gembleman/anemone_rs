@@ -52,7 +52,7 @@ mod ctrl_id {
 /// 파일 번역 대화상자
 pub struct FileTransDialog {
     hwnd: HWND,
-    config: Rc<RefCell<Config>>,
+    config: Config,
     supervisor: Rc<FileTranslationSupervisor>,
     applied_dpi: u32,
     load_edit: HWND,
@@ -69,13 +69,13 @@ pub struct FileTransDialog {
 define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
 
 struct PendingFileTrans {
-    config: Rc<RefCell<Config>>,
+    config: Config,
     supervisor: Rc<FileTranslationSupervisor>,
 }
 
 thread_local! {
-    static FILE_TRANS_PENDING: RefCell<Option<PendingFileTrans>> = const { RefCell::new(None) };
-    static FILE_TRANS_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+    static FILE_TRANS_PENDING: std::cell::RefCell<Option<PendingFileTrans>> = const { std::cell::RefCell::new(None) };
+    static FILE_TRANS_INIT_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
 /// `resources/file_trans.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
@@ -170,11 +170,7 @@ unsafe extern "system" fn file_trans_dialog_proc(
 }
 
 impl FileTransDialog {
-    fn new(
-        hwnd: HWND,
-        config: Rc<RefCell<Config>>,
-        supervisor: Rc<FileTranslationSupervisor>,
-    ) -> Self {
+    fn new(hwnd: HWND, config: Config, supervisor: Rc<FileTranslationSupervisor>) -> Self {
         Self {
             hwnd,
             config,
@@ -195,7 +191,7 @@ impl FileTransDialog {
     /// `resources/file_trans.rc`의 모델리스 DIALOGEX 리소스를 연다.
     pub fn show(
         parent: HWND,
-        config: Rc<RefCell<Config>>,
+        config: Config,
         supervisor: Rc<FileTranslationSupervisor>,
     ) -> Result<HWND> {
         let existing = FILE_TRANS_INSTANCE
@@ -332,7 +328,7 @@ impl FileTransDialog {
     fn update_engine_label(&self) {
         use crate::translation::lang_utils::to_korean_name;
         let (engine_name, source, target) = {
-            let config = self.config.borrow();
+            let config = &self.config;
             let engine = match config.translation.get_engine() {
                 Ok(engine) => engine,
                 Err(error) => {
@@ -517,7 +513,7 @@ impl FileTransDialog {
         }
 
         let spec = {
-            let config = self.config.borrow();
+            let config = &self.config;
             PreparedJob::from_config(&config.translation)
         };
         let spec = match spec {

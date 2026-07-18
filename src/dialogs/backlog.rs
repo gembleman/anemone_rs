@@ -4,7 +4,6 @@
 //! 원문/번역 필터링 및 파일 저장 지원.
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 
 use windows::{
     Win32::{
@@ -26,6 +25,7 @@ use super::helpers::{
     center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
     show_dialog_window, unregister_resource_dialog,
 };
+use crate::app::action::AppActionSender;
 use crate::define_dialog_instance;
 use crate::util::to_wide;
 
@@ -59,7 +59,8 @@ pub struct BacklogDialog {
     applied_dpi: u32,
     filter: BacklogFilter,
     add_linefeed: bool,
-    store: Rc<RefCell<BacklogStore>>,
+    store: BacklogStore,
+    actions: AppActionSender,
     /// RichEdit 본문에 적용 중인 폰트 패밀리
     font_face: Option<String>,
     /// 본문 포인트 크기 (pt). yHeight 는 twip 단위라 *20.
@@ -70,7 +71,7 @@ pub struct BacklogDialog {
 
 thread_local! {
     static RICHEDIT_LOADED: RefCell<bool> = const { RefCell::new(false) };
-    static BACKLOG_PENDING: RefCell<Option<Rc<RefCell<BacklogStore>>>> = const { RefCell::new(None) };
+    static BACKLOG_PENDING: RefCell<Option<(BacklogStore, AppActionSender)>> = const { RefCell::new(None) };
     static BACKLOG_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
     static BACKLOG_VIEW_DIRTY: Cell<bool> = const { Cell::new(false) };
 }
@@ -85,15 +86,15 @@ unsafe extern "system" fn backlog_dialog_proc(
 ) -> isize {
     unsafe {
         if msg == WM_INITDIALOG {
-            let store = BACKLOG_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(store) = store else {
+            let pending = BACKLOG_PENDING.with(|slot| slot.borrow_mut().take());
+            let Some((store, actions)) = pending else {
                 BACKLOG_INIT_ERROR.with(|slot| {
                     *slot.borrow_mut() = Some("백로그 창 초기화 인자가 없습니다".into());
                 });
                 return 0;
             };
 
-            let dialog = Rc::new(RefCell::new(BacklogDialog::new(hwnd, store)));
+            let dialog = std::rc::Rc::new(RefCell::new(BacklogDialog::new(hwnd, store, actions)));
             BACKLOG_INSTANCE.with(|slot| *slot.borrow_mut() = Some(dialog.clone()));
             if let Err(error) = dialog.borrow_mut().initialize_controls() {
                 BACKLOG_INSTANCE.with(|slot| {
@@ -176,7 +177,7 @@ unsafe extern "system" fn backlog_dialog_proc(
 }
 
 impl BacklogDialog {
-    fn new(hwnd: HWND, store: Rc<RefCell<BacklogStore>>) -> Self {
+    fn new(hwnd: HWND, store: BacklogStore, actions: AppActionSender) -> Self {
         Self {
             hwnd,
             richedit: HWND::default(),
@@ -186,13 +187,14 @@ impl BacklogDialog {
             filter: BacklogFilter::All,
             add_linefeed: true,
             store,
+            actions,
             font_face: None,
             font_point_size: 10,
             font_italic: false,
         }
     }
 
-    pub fn show(parent: HWND, store: Rc<RefCell<BacklogStore>>) -> Result<HWND> {
+    pub fn show(parent: HWND, store: BacklogStore, actions: AppActionSender) -> Result<HWND> {
         let existing =
             BACKLOG_INSTANCE.with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
         if let Some(hwnd) = existing
@@ -218,7 +220,7 @@ impl BacklogDialog {
         BACKLOG_INIT_ERROR.with(|slot| {
             slot.borrow_mut().take();
         });
-        BACKLOG_PENDING.with(|slot| *slot.borrow_mut() = Some(store));
+        BACKLOG_PENDING.with(|slot| *slot.borrow_mut() = Some((store, actions)));
         let result = unsafe {
             CreateDialogParamW(
                 Some(instance.into()),
@@ -424,7 +426,8 @@ impl BacklogDialog {
 
     /// RichEdit 내용 지우기
     fn clear_richedit(&mut self) {
-        self.store.borrow_mut().clear();
+        self.store.clear();
+        self.actions.clear_backlog();
         // SAFETY: self.richedit is a valid RichEdit control handle.
         unsafe {
             let _ = SetWindowTextW(self.richedit, w!(""));
@@ -437,7 +440,7 @@ impl BacklogDialog {
         unsafe {
             let _ = SetWindowTextW(self.richedit, w!(""));
         }
-        let segments = self.store.borrow().render(self.filter, self.add_linefeed);
+        let segments = self.store.render(self.filter, self.add_linefeed);
         self.append_styled_texts_to_richedit(segments);
     }
 
@@ -496,7 +499,7 @@ impl BacklogDialog {
             }
         };
 
-        if let Err(error) = self.store.borrow().export_utf8(&path) {
+        if let Err(error) = self.store.export_utf8(&path) {
             tracing::error!("backlog save failed: {error}");
             super::helpers::show_error_message(
                 self.hwnd,
@@ -560,19 +563,22 @@ impl BacklogDialog {
     }
 }
 
-/// 저장소에 항목을 추가하고, 백로그 창이 열려 있으면 즉시 화면에도 반영한다.
-pub fn add_to_backlog(store: &Rc<RefCell<BacklogStore>>, entry: LogEntry) {
+/// AppModel이 소유한 저장소와 별개인 열린 view snapshot에 새 항목을 반영한다.
+pub(crate) fn append_entry(entry: LogEntry, model_evicted: bool) {
     let entry_for_render = entry.clone();
-    let evicted = store.borrow_mut().push(entry);
     BACKLOG_INSTANCE.with(|cell| {
         let Ok(guard) = cell.try_borrow() else {
             BACKLOG_VIEW_DIRTY.with(|dirty| dirty.set(true));
             return;
         };
         if let Some(ref dialog) = *guard {
-            match dialog.try_borrow() {
-                Ok(d) => {
-                    if evicted || BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false)) {
+            match dialog.try_borrow_mut() {
+                Ok(mut d) => {
+                    let view_evicted = d.store.push(entry);
+                    if model_evicted
+                        || view_evicted
+                        || BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false))
+                    {
                         d.refresh_richedit();
                     } else {
                         d.append_styled_texts_to_richedit(BacklogStore::render_entry(

@@ -1,5 +1,9 @@
-use crate::menu;
 use std::sync::Arc;
+
+use crate::backlog::BacklogStore;
+use crate::config::Config;
+use crate::dialogs::models::SettingsDraft;
+use crate::menu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ClientSize {
@@ -117,6 +121,113 @@ pub(super) struct AppState {
     pub translated_text: String,
     pub pending_translation: Option<PendingTranslation>,
     pub clipboard_debounce: ClipboardDebounce,
+}
+
+/// Win32 handle과 service를 제외한 애플리케이션의 단일 상태 소유자.
+pub(super) struct AppModel {
+    pub config: Config,
+    pub backlog: BacklogStore,
+    pub runtime: AppState,
+}
+
+#[derive(Clone)]
+pub(super) enum AppAction {
+    Command(AppCommand),
+    PreviewSettings(SettingsDraft),
+    CommitSettings(SettingsDraft),
+    ClearBacklog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Effect {
+    Repaint,
+    SyncWindowState,
+    SaveConfig,
+    SetWindowVisible(bool),
+    SetClickThrough(bool),
+    SetClipboardWatch(bool),
+    SetMagnetic(bool),
+    OpenDialog(DialogKind),
+    Close,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DialogKind {
+    Settings,
+    Translate,
+    Backlog,
+    FileTranslation,
+}
+
+impl AppModel {
+    /// 상태만 변경하고 Win32/I/O 작업은 effect로 반환한다.
+    pub(super) fn update(&mut self, action: AppAction) -> Vec<Effect> {
+        match action {
+            AppAction::Command(command) => self.update_command(command),
+            AppAction::PreviewSettings(draft) => {
+                self.config = draft.into_config();
+                vec![Effect::SyncWindowState, Effect::Repaint]
+            }
+            AppAction::CommitSettings(draft) => {
+                self.config = draft.into_config();
+                vec![Effect::SyncWindowState, Effect::Repaint, Effect::SaveConfig]
+            }
+            AppAction::ClearBacklog => {
+                self.backlog.clear();
+                Vec::new()
+            }
+        }
+    }
+
+    fn update_command(&mut self, command: AppCommand) -> Vec<Effect> {
+        match command {
+            AppCommand::WindowShow => {
+                self.config.toggle_window_visible();
+                vec![Effect::SetWindowVisible(self.config.window_visible)]
+            }
+            AppCommand::ClickThrough => {
+                self.config.toggle_click_through();
+                vec![Effect::SetClickThrough(self.config.click_through)]
+            }
+            AppCommand::ClipboardWatch => {
+                self.config.clipboard_watch = !self.config.clipboard_watch;
+                vec![Effect::SetClipboardWatch(self.config.clipboard_watch)]
+            }
+            AppCommand::BackgroundToggle => {
+                self.config.toggle_background_visible();
+                vec![Effect::Repaint]
+            }
+            AppCommand::BorderToggle => {
+                self.config.toggle_border_visible();
+                vec![Effect::Repaint]
+            }
+            AppCommand::MagneticMode => {
+                self.config.magnetic_mode = !self.config.magnetic_mode;
+                vec![Effect::SetMagnetic(self.config.magnetic_mode)]
+            }
+            AppCommand::Settings => vec![Effect::OpenDialog(DialogKind::Settings)],
+            AppCommand::Translate => vec![Effect::OpenDialog(DialogKind::Translate)],
+            AppCommand::Backlog => vec![Effect::OpenDialog(DialogKind::Backlog)],
+            AppCommand::FileTrans => vec![Effect::OpenDialog(DialogKind::FileTranslation)],
+            AppCommand::TextSizeUp => {
+                let new_size = (self.config.translation_style.size + 1).min(100);
+                self.set_all_text_sizes(new_size);
+                vec![Effect::Repaint]
+            }
+            AppCommand::TextSizeDown => {
+                let new_size = (self.config.translation_style.size - 1).max(6);
+                self.set_all_text_sizes(new_size);
+                vec![Effect::Repaint]
+            }
+            AppCommand::Exit => vec![Effect::Close],
+        }
+    }
+
+    fn set_all_text_sizes(&mut self, size: i32) {
+        self.config.translation_style.size = size;
+        self.config.name_style.size = size;
+        self.config.original_style.size = size;
+    }
 }
 
 #[derive(Debug, Default)]

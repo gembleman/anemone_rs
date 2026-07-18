@@ -153,7 +153,7 @@ impl App {
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::LazyInit, t);
 
-        let cfg = self.config.borrow();
+        let cfg = &self.model.config;
 
         // 설정 값 복사
         let background_visible = cfg.background_visible;
@@ -162,12 +162,13 @@ impl App {
         let border_width = cfg.border_width;
         let border_color = cfg.border_color;
 
-        let mut render_blocks =
-            build_render_blocks(&cfg, &self.state.original_text, &self.state.translated_text);
+        let mut render_blocks = build_render_blocks(
+            cfg,
+            &self.model.runtime.original_text,
+            &self.model.runtime.translated_text,
+        );
         let margin_x = cfg.text_margin_x;
         let margin_y = cfg.text_margin_y;
-
-        drop(cfg);
 
         let composition = match self.composition.as_ref() {
             Some(c) => c,
@@ -177,7 +178,7 @@ impl App {
             Some(r) => r,
             None => return Ok(()),
         };
-        let max_width = Self::text_layout_extent(self.state.client_size.width, margin_x);
+        let max_width = Self::text_layout_extent(self.model.runtime.client_size.width, margin_x);
         if let Some(first) = render_blocks.first() {
             let mut top = first.top;
             for block in &mut render_blocks {
@@ -240,8 +241,8 @@ impl App {
         if border_visible
             && let Err(e) = renderer.draw_border(
                 ctx,
-                self.state.client_size.width,
-                self.state.client_size.height,
+                self.model.runtime.client_size.width,
+                self.model.runtime.client_size.height,
                 border_width,
                 border_color,
             )
@@ -254,9 +255,10 @@ impl App {
 
         // 텍스트 그리기
         for block in &render_blocks {
-            let max_height = (self.state.client_size.height as f32 - block.top - margin_y as f32)
-                .max(1.0)
-                .min(block.height.max(1.0));
+            let max_height =
+                (self.model.runtime.client_size.height as f32 - block.top - margin_y as f32)
+                    .max(1.0)
+                    .min(block.height.max(1.0));
             if let Err(e) = renderer.draw_text(
                 ctx,
                 &block.text,
@@ -316,7 +318,7 @@ impl App {
         {
             for block in &render_blocks {
                 let max_height =
-                    (self.state.client_size.height as f32 - block.top - margin_y as f32)
+                    (self.model.runtime.client_size.height as f32 - block.top - margin_y as f32)
                         .max(1.0)
                         .min(block.height.max(1.0));
                 let shadow_inflate = if block.style.shadow_enabled {
@@ -378,7 +380,7 @@ impl App {
             return Ok(());
         };
 
-        self.state.client_size = size;
+        self.model.runtime.client_size = size;
 
         // 첫 paint 전이면 lazy init이 현재 크기로 만들고, 이후에는 swap chain을 조정한다.
         let resize_failed = if let Some(composition) = self.composition.as_mut() {

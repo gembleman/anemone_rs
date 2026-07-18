@@ -8,7 +8,6 @@ use windows::{
 use super::ctrl_id;
 use super::{SettingsDialog, mask_secret};
 use crate::config::{ColorType, TextAlign, TextType};
-use crate::constants::{WM_APP_REFRESH, WM_APP_SET_MAGNETIC};
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
 use crate::settings_model::{
@@ -20,6 +19,7 @@ use crate::translation::settings::{
 };
 use crate::util::to_wide;
 
+#[cfg(test)]
 fn persist_if_pending<E>(
     pending: &std::cell::Cell<bool>,
     save: impl FnOnce() -> std::result::Result<(), E>,
@@ -37,12 +37,12 @@ fn persist_if_pending<E>(
 /// +/- 버튼 처리 매크로: config에서 값을 읽고, 범위 내에서 증감 후, UI 업데이트
 macro_rules! handle_size_button {
     ($self:expr, $get_field:expr, $set_color_type:expr, $delta:expr, $ui_update:expr) => {{
-        let requested = $get_field(&$self.config.borrow()) + $delta;
+        let requested = $get_field(&$self.draft.borrow()) + $delta;
         $self.apply_settings_change(SettingsChange::Numeric {
             setting: NumericSetting::TextSize($set_color_type),
             value: requested,
         });
-        let new_size = $get_field(&$self.config.borrow());
+        let new_size = $get_field(&$self.draft.borrow());
         $ui_update($self, new_size);
     }};
 }
@@ -80,7 +80,7 @@ impl SettingsDialog {
 
             // 배경 색상
             BACKGROUND_COLOR => {
-                let initial = self.config.borrow().background_color;
+                let initial = self.draft.borrow().background_color;
                 if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
                     self.apply_settings_change(SettingsChange::BackgroundColor(result.argb));
                     self.invalidate_color_button(BACKGROUND_COLOR);
@@ -149,7 +149,7 @@ impl SettingsDialog {
                 toggle_field!(self, BoolSetting::BorderVisible);
             }
             BORDER_COLOR => {
-                let initial = self.config.borrow().border_color;
+                let initial = self.draft.borrow().border_color;
                 if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
                     self.apply_settings_change(SettingsChange::BorderColor(result.argb));
                     self.invalidate_color_button(BORDER_COLOR);
@@ -176,21 +176,7 @@ impl SettingsDialog {
             // 윈도우 옵션 체크박스
             TOPMOST => toggle_field!(self, BoolSetting::WindowTopmost),
             USE_MAGNETIC => {
-                // 주 App이 runtime 적용 결과에 맞춰 config와 checkbox를 함께 확정한다.
-                let enabled =
-                    unsafe { IsDlgButtonChecked(self.hwnd, USE_MAGNETIC as i32) == BST_CHECKED.0 };
-                let posted = unsafe {
-                    PostMessageW(
-                        Some(self.main_hwnd),
-                        WM_APP_SET_MAGNETIC,
-                        WPARAM(usize::from(enabled)),
-                        LPARAM(0),
-                    )
-                };
-                if let Err(error) = posted {
-                    tracing::error!("Failed to request magnetic mode update: {error}");
-                    Self::set_magnetic_checked(self.hwnd, self.config.borrow().magnetic_mode);
-                }
+                toggle_field!(self, BoolSetting::MagneticMode);
             }
             MAGNETIC_MINIMIZE => toggle_field!(self, BoolSetting::MagneticMinimize),
             CLIPBOARD_WATCH => {
@@ -341,12 +327,12 @@ impl SettingsDialog {
 
     /// 글로서리 편집기 다이얼로그 열기
     fn open_glossary_editor(&mut self) {
-        let config = self.config.clone();
-        let _ = crate::dialogs::glossary::GlossaryDialog::show(self.hwnd, config);
+        let draft = self.draft.clone();
+        let _ = crate::dialogs::glossary::GlossaryDialog::show(self.hwnd, draft);
     }
 
     pub(super) fn refresh_glossary_count(&self) {
-        let count = self.config.borrow().translation.llm.glossary.len();
+        let count = self.draft.borrow().translation.llm.glossary.len();
         self.set_control_text(
             ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
             &format!("사전 항목: {}", count),
@@ -355,7 +341,7 @@ impl SettingsDialog {
 
     /// 색상 버튼 처리
     fn handle_color_button(&mut self, ctrl_id: u16, text_type: TextType, color_type: ColorType) {
-        let initial = self.config.borrow().get_text_color(text_type, color_type);
+        let initial = self.draft.borrow().get_text_color(text_type, color_type);
         if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
             self.apply_settings_change(SettingsChange::TextColor {
                 text_type,
@@ -369,7 +355,7 @@ impl SettingsDialog {
     /// 폰트 버튼 처리
     fn handle_font_button(&mut self, text_type: TextType) {
         let (face, style_bits, size) = {
-            let cfg = self.config.borrow();
+            let cfg = self.draft.borrow();
             let style = cfg.get_text_style(text_type);
             (style.font_face.clone(), style.font_style, style.size)
         };
@@ -409,7 +395,7 @@ impl SettingsDialog {
                 let _ = self.apply_translation_change_deferred(
                     TranslationSettingChange::LlmTemperatureSlider(value),
                 );
-                let temp = self.config.borrow().translation.llm.temperature;
+                let temp = self.draft.borrow().translation.llm.temperature;
                 self.set_control_text(LLM_TEMPERATURE_LABEL, &format!("{:.2}", temp));
                 return;
             }
@@ -417,7 +403,7 @@ impl SettingsDialog {
         };
         self.apply_settings_change_deferred(SettingsChange::Numeric { setting, value });
         if id == TEXTSIZE_TRACKBAR {
-            let size = self.config.borrow().translation_style.size;
+            let size = self.draft.borrow().translation_style.size;
             self.set_control_text(TEXTSIZE_TEXT, &format!("크기: {size}"));
         }
     }
@@ -441,7 +427,7 @@ impl SettingsDialog {
                     let custom_start = TranslationEngine::Custom as usize;
                     let engine = if sel >= custom_start {
                         let custom_name = {
-                            let config = self.config.borrow();
+                            let config = self.draft.borrow();
                             if config.translation.custom_apis.is_empty() {
                                 (sel == custom_start)
                                     .then(|| config.translation.custom.name.clone())
@@ -484,7 +470,7 @@ impl SettingsDialog {
                     }
                 }
                 TRANS_SOURCE_LANG => {
-                    let Ok(engine) = self.config.borrow().translation.get_engine() else {
+                    let Ok(engine) = self.draft.borrow().translation.get_engine() else {
                         return;
                     };
                     if let Some(&language) = engine.supported_source_languages().get(sel)
@@ -498,10 +484,10 @@ impl SettingsDialog {
                     }
                 }
                 TRANS_TARGET_LANG => {
-                    let Ok(engine) = self.config.borrow().translation.get_engine() else {
+                    let Ok(engine) = self.draft.borrow().translation.get_engine() else {
                         return;
                     };
-                    let Ok(source) = self.config.borrow().translation.get_source_language() else {
+                    let Ok(source) = self.draft.borrow().translation.get_source_language() else {
                         return;
                     };
                     let targets = engine.supported_targets_for(source);
@@ -531,7 +517,7 @@ impl SettingsDialog {
 
     fn refresh_custom_api_controls(&self) {
         let custom = {
-            let config = self.config.borrow();
+            let config = self.draft.borrow();
             match config.translation.active_custom_api() {
                 Ok(custom) => custom.clone(),
                 Err(error) => {
@@ -554,20 +540,20 @@ impl SettingsDialog {
 
     /// EzTrans 초기화 동기화 (다른 엔진은 워커가 매번 자격증명을 받아 stateless)
     fn sync_translation_manager(&self) {
-        let config = self.config.borrow();
+        let config = self.draft.borrow();
         if let Err(e) = TranslationSettingsEditor::sync_runtime(&config.translation) {
             tracing::warn!("EzTrans init failed in sync: {e}");
         }
     }
 
     fn apply_settings_change(&self, change: SettingsChange) -> SettingsChangeResult {
-        let result = SettingsEditor::apply(&mut self.config.borrow_mut(), change);
+        let result = SettingsEditor::apply(&mut self.draft.borrow_mut(), change);
         self.finish_settings_change(result, true);
         result
     }
 
     fn apply_settings_change_deferred(&self, change: SettingsChange) -> SettingsChangeResult {
-        let result = SettingsEditor::apply(&mut self.config.borrow_mut(), change);
+        let result = SettingsEditor::apply(&mut self.draft.borrow_mut(), change);
         self.finish_settings_change(result, false);
         result
     }
@@ -589,7 +575,7 @@ impl SettingsDialog {
         change: TranslationSettingChange,
     ) -> std::result::Result<SettingsApplyResult, TranslationSettingsError> {
         let result =
-            TranslationSettingsEditor::apply(&mut self.config.borrow_mut().translation, change)?;
+            TranslationSettingsEditor::apply(&mut self.draft.borrow_mut().translation, change)?;
         self.finish_translation_change(result, true);
         Ok(result)
     }
@@ -599,7 +585,7 @@ impl SettingsDialog {
         change: TranslationSettingChange,
     ) -> std::result::Result<SettingsApplyResult, TranslationSettingsError> {
         let result =
-            TranslationSettingsEditor::apply(&mut self.config.borrow_mut().translation, change)?;
+            TranslationSettingsEditor::apply(&mut self.draft.borrow_mut().translation, change)?;
         self.finish_translation_change(result, false);
         Ok(result)
     }
@@ -684,11 +670,11 @@ impl SettingsDialog {
             tracing::warn!("번역 설정 입력을 적용할 수 없습니다: {error}");
             match ctrl_id {
                 LLM_MAX_TOKENS_EDIT => {
-                    let value = self.config.borrow().translation.llm.max_tokens;
+                    let value = self.draft.borrow().translation.llm.max_tokens;
                     self.set_control_text(ctrl_id, &value.to_string());
                 }
                 LLM_DEBOUNCE_EDIT => {
-                    let value = self.config.borrow().translation.llm.debounce_ms;
+                    let value = self.draft.borrow().translation.llm.debounce_ms;
                     self.set_control_text(ctrl_id, &value.to_string());
                 }
                 _ => {}
@@ -738,27 +724,27 @@ impl SettingsDialog {
     }
 
     fn notify_preview(&self) {
-        if let Some(ref cb) = self.on_change {
-            cb(&self.config.borrow());
-        }
-
-        // SAFETY: self.main_hwnd is a valid window handle passed during dialog creation.
-        unsafe {
-            let _ = PostMessageW(Some(self.main_hwnd), WM_APP_REFRESH, WPARAM(0), LPARAM(0));
+        if let Some(actions) = &self.actions {
+            actions.preview_settings(self.draft.borrow().clone());
         }
     }
 
+    pub(super) fn glossary_applied(&self) {
+        self.refresh_glossary_count();
+        self.pending_disk_save.set(true);
+        self.notify_preview();
+        self.persist_pending_changes();
+    }
+
     pub(super) fn persist_pending_changes(&self) -> bool {
-        if let Err(error) =
-            persist_if_pending(&self.pending_disk_save, || self.config.borrow().save())
-        {
-            tracing::error!("설정 저장 실패: {error}");
-            crate::dialogs::helpers::show_error_message(
-                self.hwnd,
-                "설정 저장 오류",
-                &format!("설정을 디스크에 저장하지 못했습니다. 창을 닫지 않았습니다.\n\n{error}"),
-            );
-            return false;
+        if self.pending_disk_save.replace(false) {
+            if let Some(actions) = &self.actions {
+                actions.commit_settings(self.draft.borrow().clone());
+            } else if let Err(error) = self.draft.borrow().save() {
+                self.pending_disk_save.set(true);
+                tracing::error!("설정 저장 실패: {error}");
+                return false;
+            }
         }
         true
     }

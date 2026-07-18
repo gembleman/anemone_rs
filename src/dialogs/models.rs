@@ -1,6 +1,36 @@
 //! 다이얼로그가 소비하는 Win32 비의존 편집 모델.
 
+use std::ops::{Deref, DerefMut};
+
 use crate::config::{Config, LlmGlossaryEntry};
+
+/// 설정 창이 독립적으로 편집하고 AppAction으로 되돌려 보내는 설정 초안.
+#[derive(Clone, Debug)]
+pub(crate) struct SettingsDraft(Config);
+
+impl SettingsDraft {
+    pub(crate) fn new(config: Config) -> Self {
+        Self(config)
+    }
+
+    pub(crate) fn into_config(self) -> Config {
+        self.0
+    }
+}
+
+impl Deref for SettingsDraft {
+    type Target = Config;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for SettingsDraft {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DraftChange {

@@ -53,7 +53,7 @@ impl App {
         // 선택적으로 outline/shadow를 꺼 본문 비용을 분리한다.
         let no_outline = bench::bench_disable_outline();
         let saved_style = if no_outline {
-            let mut cfg = self.config.borrow_mut();
+            let cfg = &mut self.model.config;
             let original = cfg.translation_style.clone();
             cfg.translation_style.outline1_size = 0;
             cfg.translation_style.outline2_size = 0;
@@ -66,7 +66,7 @@ impl App {
         // 선택적으로 매회 캐시 key를 바꿔 miss 비용을 측정한다.
         let force_cache_miss = bench::bench_force_cache_miss();
         let saved_text = if force_cache_miss {
-            Some(self.state.translated_text.clone())
+            Some(self.model.runtime.translated_text.clone())
         } else {
             None
         };
@@ -75,10 +75,10 @@ impl App {
             if let Err(e) = self.paint() {
                 tracing::warn!("bench detailed warmup paint failed: {e}");
                 if let Some(s) = saved_style {
-                    self.config.borrow_mut().translation_style = s;
+                    self.model.config.translation_style = s;
                 }
                 if let Some(t) = saved_text {
-                    self.state.translated_text = t;
+                    self.model.runtime.translated_text = t;
                 }
                 if was_watching {
                     let _ = self.clipboard.start();
@@ -91,7 +91,7 @@ impl App {
         for i in 0..iters {
             // 접미사만 바꿔 layout 변화는 줄이고 cache miss를 만든다.
             if let Some(orig) = saved_text.as_ref() {
-                self.state.translated_text = format!("{}#{}", orig, i);
+                self.model.runtime.translated_text = format!("{}#{}", orig, i);
             }
             bench::phase_begin();
             let started = std::time::Instant::now();
@@ -99,10 +99,10 @@ impl App {
                 tracing::warn!("bench detailed paint failed: {e}");
                 bench::phase_end(); // 슬롯 비워서 다음 측정 안전
                 if let Some(s) = saved_style {
-                    self.config.borrow_mut().translation_style = s;
+                    self.model.config.translation_style = s;
                 }
                 if let Some(t) = saved_text {
-                    self.state.translated_text = t;
+                    self.model.runtime.translated_text = t;
                 }
                 if was_watching {
                     let _ = self.clipboard.start();
@@ -116,10 +116,10 @@ impl App {
         phased.report();
 
         if let Some(s) = saved_style {
-            self.config.borrow_mut().translation_style = s;
+            self.model.config.translation_style = s;
         }
         if let Some(t) = saved_text {
-            self.state.translated_text = t;
+            self.model.runtime.translated_text = t;
         }
         if was_watching {
             let _ = self.clipboard.start();

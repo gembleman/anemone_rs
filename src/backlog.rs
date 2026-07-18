@@ -56,7 +56,7 @@ impl LogEntry {
 }
 
 /// 창 수명과 독립적으로 애플리케이션 실행 중 번역 이력을 보관한다.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct BacklogStore {
     entries: VecDeque<LogEntry>,
     text_bytes: usize,

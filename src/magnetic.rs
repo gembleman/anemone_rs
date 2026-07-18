@@ -3,7 +3,6 @@
 
 use std::cell::RefCell;
 use std::ptr;
-use std::rc::Rc;
 
 use windows::{
     Win32::{
@@ -13,8 +12,6 @@ use windows::{
     core::*,
 };
 
-use crate::config::Config;
-
 /// 자석 상태 (thread_local 보관)
 struct MagneticState {
     main_hwnd: HWND,
@@ -22,7 +19,8 @@ struct MagneticState {
     is_minimized: bool,
     offset_x: i32,
     offset_y: i32,
-    config: Rc<RefCell<Config>>,
+    minimize_with_target: bool,
+    window_visible: bool,
 }
 
 thread_local! {
@@ -33,17 +31,31 @@ thread_local! {
 pub struct MagneticManager {
     main_hwnd: HWND,
     event_hook: HWINEVENTHOOK,
-    config: Rc<RefCell<Config>>,
+    minimize_with_target: bool,
+    window_visible: bool,
 }
 
 impl MagneticManager {
     /// 자석 모드 관리자 생성
-    pub fn new(main_hwnd: HWND, config: Rc<RefCell<Config>>) -> Self {
+    pub fn new(main_hwnd: HWND, minimize_with_target: bool, window_visible: bool) -> Self {
         Self {
             main_hwnd,
             event_hook: HWINEVENTHOOK::default(),
-            config,
+            minimize_with_target,
+            window_visible,
         }
+    }
+
+    /// AppModel의 최신 정책 snapshot을 callback 상태에 반영한다.
+    pub fn update_policy(&mut self, minimize_with_target: bool, window_visible: bool) {
+        self.minimize_with_target = minimize_with_target;
+        self.window_visible = window_visible;
+        MAGNETIC_INSTANCE.with(|cell| {
+            if let Some(state) = cell.borrow_mut().as_mut() {
+                state.minimize_with_target = minimize_with_target;
+                state.window_visible = window_visible;
+            }
+        });
     }
 
     /// 자석 모드 시작
@@ -67,7 +79,8 @@ impl MagneticManager {
                 is_minimized: false,
                 offset_x,
                 offset_y,
-                config: self.config.clone(),
+                minimize_with_target: self.minimize_with_target,
+                window_visible: self.window_visible,
             });
         });
 
@@ -108,7 +121,7 @@ impl MagneticManager {
         MAGNETIC_INSTANCE.with(|cell| *cell.borrow_mut() = None);
 
         // SAFETY: self.main_hwnd is a valid window handle provided during construction.
-        if self.config.borrow().window_visible {
+        if self.window_visible {
             unsafe {
                 let _ = ShowWindow(self.main_hwnd, SW_SHOW);
             }
@@ -179,7 +192,7 @@ impl MagneticManager {
                 }
 
                 EVENT_SYSTEM_MINIMIZESTART
-                    if hwnd == state.target_hwnd && state.config.borrow().magnetic_minimize =>
+                    if hwnd == state.target_hwnd && state.minimize_with_target =>
                 {
                     state.is_minimized = true;
                     // SAFETY: Called within unsafe extern "system" fn
@@ -191,7 +204,7 @@ impl MagneticManager {
                 EVENT_SYSTEM_MINIMIZEEND if hwnd == state.target_hwnd && state.is_minimized => {
                     state.is_minimized = false;
                     // SAFETY: Called within unsafe extern "system" fn
-                    if state.config.borrow().window_visible {
+                    if state.window_visible {
                         unsafe {
                             let _ = ShowWindow(state.main_hwnd, SW_SHOWNOACTIVATE);
                         }
