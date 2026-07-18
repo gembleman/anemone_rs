@@ -15,6 +15,7 @@ mod file_trans;
 mod hotkey;
 mod magnetic;
 mod menu;
+mod settings_model;
 mod translation;
 mod tray;
 mod util;

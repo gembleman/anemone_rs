@@ -11,33 +11,46 @@ use crate::config::{ColorType, TextAlign, TextType};
 use crate::constants::{WM_APP_REFRESH, WM_APP_SET_MAGNETIC};
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
-use crate::translation::settings::{TranslationSettingChange, TranslationSettingsEditor};
+use crate::settings_model::{
+    BoolSetting, NumericSetting, SettingsChange, SettingsChangeResult, SettingsEditor,
+};
+use crate::translation::settings::{
+    SettingsApplyResult, TranslationSettingChange, TranslationSettingsEditor,
+    TranslationSettingsError,
+};
 use crate::util::to_wide;
+
+fn persist_if_pending<E>(
+    pending: &std::cell::Cell<bool>,
+    save: impl FnOnce() -> std::result::Result<(), E>,
+) -> std::result::Result<bool, E> {
+    if !pending.replace(false) {
+        return Ok(false);
+    }
+    if let Err(error) = save() {
+        pending.set(true);
+        return Err(error);
+    }
+    Ok(true)
+}
 
 /// +/- 버튼 처리 매크로: config에서 값을 읽고, 범위 내에서 증감 후, UI 업데이트
 macro_rules! handle_size_button {
-    ($self:expr, $get_field:expr, $set_color_type:expr, $delta:expr, $min:expr, $max:expr, $ui_update:expr) => {{
-        let new_size = {
-            let mut cfg = $self.config.borrow_mut();
-            let current = $get_field(&cfg);
-            let next = (current + $delta).clamp($min, $max);
-            if next != current {
-                cfg.set_all_text_size($set_color_type, next);
-            }
-            next
-        };
+    ($self:expr, $get_field:expr, $set_color_type:expr, $delta:expr, $ui_update:expr) => {{
+        let requested = $get_field(&$self.config.borrow()) + $delta;
+        $self.apply_settings_change(SettingsChange::Numeric {
+            setting: NumericSetting::TextSize($set_color_type),
+            value: requested,
+        });
+        let new_size = $get_field(&$self.config.borrow());
         $ui_update($self, new_size);
-        $self.notify_change();
     }};
 }
 
-/// 체크박스 토글 매크로: config 필드를 반전시키고 notify_change 호출
+/// 체크박스 토글 매크로: 컨트롤 ID와 독립적인 설정 명령으로 변환한다.
 macro_rules! toggle_field {
-    ($self:expr, $field:ident) => {{
-        let mut cfg = $self.config.borrow_mut();
-        cfg.$field = !cfg.$field;
-        drop(cfg);
-        $self.notify_change();
+    ($self:expr, $setting:expr) => {{
+        $self.apply_settings_change(SettingsChange::Toggle($setting));
     }};
 }
 
@@ -68,16 +81,14 @@ impl SettingsDialog {
             BACKGROUND_COLOR => {
                 let initial = self.config.borrow().background_color;
                 if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
-                    self.config.borrow_mut().background_color = result.argb;
+                    self.apply_settings_change(SettingsChange::BackgroundColor(result.argb));
                     self.invalidate_color_button(BACKGROUND_COLOR);
-                    self.notify_change();
                 }
             }
 
             // 배경 표시 토글
             BACKGROUND_SWITCH => {
-                self.config.borrow_mut().toggle_background_visible();
-                self.notify_change();
+                toggle_field!(self, BoolSetting::BackgroundVisible);
             }
 
             // NAME/ORG/TRANS 색상 버튼
@@ -93,8 +104,7 @@ impl SettingsDialog {
             }
             NAME_FONT => self.handle_font_button(TextType::Name),
             NAME_SHADOW => {
-                self.config.borrow_mut().toggle_shadow(TextType::Name);
-                self.notify_change();
+                toggle_field!(self, BoolSetting::TextShadow(TextType::Name));
             }
 
             ORG_COLOR => {
@@ -111,8 +121,7 @@ impl SettingsDialog {
             }
             ORG_FONT => self.handle_font_button(TextType::Original),
             ORG_SHADOW => {
-                self.config.borrow_mut().toggle_shadow(TextType::Original);
-                self.notify_change();
+                toggle_field!(self, BoolSetting::TextShadow(TextType::Original));
             }
 
             TRANS_COLOR => {
@@ -131,56 +140,45 @@ impl SettingsDialog {
             ),
             TRANS_FONT => self.handle_font_button(TextType::Translation),
             TRANS_SHADOW => {
-                self.config
-                    .borrow_mut()
-                    .toggle_shadow(TextType::Translation);
-                self.notify_change();
+                toggle_field!(self, BoolSetting::TextShadow(TextType::Translation));
             }
 
             // 테두리 설정
             BORDER_MODE => {
-                self.config.borrow_mut().toggle_border_visible();
-                self.notify_change();
+                toggle_field!(self, BoolSetting::BorderVisible);
             }
             BORDER_COLOR => {
                 let initial = self.config.borrow().border_color;
                 if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
-                    self.config.borrow_mut().border_color = result.argb;
+                    self.apply_settings_change(SettingsChange::BorderColor(result.argb));
                     self.invalidate_color_button(BORDER_COLOR);
-                    self.notify_change();
                 }
             }
 
             // 표시 옵션 체크박스
-            PRINT_ORGTEXT => toggle_field!(self, show_original),
-            PRINT_TRANSTEXT => toggle_field!(self, show_translation),
-            PRINT_ORGNAME => toggle_field!(self, show_name),
-            SEPERATE_NAME => toggle_field!(self, separate_name),
+            PRINT_ORGTEXT => toggle_field!(self, BoolSetting::ShowOriginal),
+            PRINT_TRANSTEXT => toggle_field!(self, BoolSetting::ShowTranslation),
+            PRINT_ORGNAME => toggle_field!(self, BoolSetting::ShowName),
+            SEPERATE_NAME => toggle_field!(self, BoolSetting::SeparateName),
             REPEAT_TEXT => {
-                let mut cfg = self.config.borrow_mut();
-                cfg.repeat_text_mode = (cfg.repeat_text_mode + 1) % 5;
-                let new_mode = cfg.repeat_text_mode;
-                drop(cfg);
+                self.apply_settings_change(SettingsChange::CycleRepeatTextMode);
+                let new_mode = self.config.borrow().repeat_text_mode;
                 self.set_control_text(REPEAT_TEXT, &super::repeat_mode_label(new_mode));
-                self.notify_change();
             }
 
             // 텍스트 정렬
             TEXTALIGN_LEFT => {
-                self.config.borrow_mut().text_align = TextAlign::Left;
-                self.notify_change();
+                self.apply_settings_change(SettingsChange::TextAlignment(TextAlign::Left));
             }
             TEXTALIGN_MID => {
-                self.config.borrow_mut().text_align = TextAlign::Center;
-                self.notify_change();
+                self.apply_settings_change(SettingsChange::TextAlignment(TextAlign::Center));
             }
             TEXTALIGN_RIGHT => {
-                self.config.borrow_mut().text_align = TextAlign::Right;
-                self.notify_change();
+                self.apply_settings_change(SettingsChange::TextAlignment(TextAlign::Right));
             }
 
             // 윈도우 옵션 체크박스
-            TOPMOST => toggle_field!(self, window_topmost),
+            TOPMOST => toggle_field!(self, BoolSetting::WindowTopmost),
             USE_MAGNETIC => {
                 // The main App owns the live MagneticManager. Ask it to update the runtime
                 // first; it commits or rolls back config and this checkbox together.
@@ -199,15 +197,13 @@ impl SettingsDialog {
                     Self::set_magnetic_checked(self.hwnd, self.config.borrow().magnetic_mode);
                 }
             }
-            MAGNETIC_MINIMIZE => toggle_field!(self, magnetic_minimize),
-            HIDEWIN => toggle_field!(self, temp_window_hide),
+            MAGNETIC_MINIMIZE => toggle_field!(self, BoolSetting::MagneticMinimize),
+            HIDEWIN => toggle_field!(self, BoolSetting::TempWindowHide),
             CLIPBOARD_WATCH => {
-                self.config.borrow_mut().toggle_clipboard_watch();
-                self.notify_change();
+                toggle_field!(self, BoolSetting::ClipboardWatch);
             }
             WNDCLICK_THROUGH => {
-                self.config.borrow_mut().toggle_click_through();
-                self.notify_change();
+                toggle_field!(self, BoolSetting::ClickThrough);
             }
 
             // 텍스트 크기 +/-
@@ -216,8 +212,6 @@ impl SettingsDialog {
                 |cfg: &crate::config::Config| cfg.translation_style.size,
                 ColorType::Primary,
                 -1,
-                6,
-                100,
                 |s: &Self, v| s.update_textsize_ui(v)
             ),
             TEXTSIZE_PLUS => handle_size_button!(
@@ -225,8 +219,6 @@ impl SettingsDialog {
                 |cfg: &crate::config::Config| cfg.translation_style.size,
                 ColorType::Primary,
                 1,
-                6,
-                100,
                 |s: &Self, v| s.update_textsize_ui(v)
             ),
 
@@ -236,8 +228,6 @@ impl SettingsDialog {
                 |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
                 ColorType::Outline1,
                 -1,
-                0,
-                20,
                 |s: &Self, v| s.update_trackbar_pos(OUTLINE1_TRACKBAR, v)
             ),
             OUTLINE1_PLUS => handle_size_button!(
@@ -245,8 +235,6 @@ impl SettingsDialog {
                 |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
                 ColorType::Outline1,
                 1,
-                0,
-                20,
                 |s: &Self, v| s.update_trackbar_pos(OUTLINE1_TRACKBAR, v)
             ),
 
@@ -256,8 +244,6 @@ impl SettingsDialog {
                 |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
                 ColorType::Outline2,
                 -1,
-                0,
-                20,
                 |s: &Self, v| s.update_trackbar_pos(OUTLINE2_TRACKBAR, v)
             ),
             OUTLINE2_PLUS => handle_size_button!(
@@ -265,19 +251,16 @@ impl SettingsDialog {
                 |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
                 ColorType::Outline2,
                 1,
-                0,
-                20,
                 |s: &Self, v| s.update_trackbar_pos(OUTLINE2_TRACKBAR, v)
             ),
 
             // EzTrans DLL 찾아보기
             EZTRANS_DLL_BROWSE => match self.browse_dll_file("J2KEngine.dll 선택") {
                 Ok(Some(path)) => {
-                    self.apply_translation_change(TranslationSettingChange::EzTransDllPath(
-                        path.clone(),
-                    ));
+                    let _ = self.apply_translation_change(
+                        TranslationSettingChange::EzTransDllPath(path.clone()),
+                    );
                     self.set_control_text(EZTRANS_DLL_EDIT, &path);
-                    self.notify_change();
                 }
                 Ok(None) => {}
                 Err(error) => self.show_file_dialog_error(&error),
@@ -286,11 +269,10 @@ impl SettingsDialog {
             // EzTrans Dat 폴더 찾아보기
             EZTRANS_DAT_BROWSE => match self.browse_folder_with_title("EzTrans Dat 폴더 선택") {
                 Ok(Some(path)) => {
-                    self.apply_translation_change(TranslationSettingChange::EzTransDatPath(
-                        path.clone(),
-                    ));
+                    let _ = self.apply_translation_change(
+                        TranslationSettingChange::EzTransDatPath(path.clone()),
+                    );
                     self.set_control_text(EZTRANS_DAT_EDIT, &path);
-                    self.notify_change();
                 }
                 Ok(None) => {}
                 Err(error) => self.show_file_dialog_error(&error),
@@ -317,7 +299,7 @@ impl SettingsDialog {
         }
         if !self
             .apply_translation_change(TranslationSettingChange::AddDeepLKey(key.clone()))
-            .changed
+            .is_ok_and(|result| result.changed)
         {
             return;
         }
@@ -336,7 +318,6 @@ impl SettingsDialog {
             );
         }
         self.set_control_text(ctrl_id::DEEPL_KEY_ADD_EDIT, "");
-        self.notify_change();
     }
 
     /// DeepL 보조 키 삭제 — 선택된 항목 제거 및 Config 동기화
@@ -360,8 +341,8 @@ impl SettingsDialog {
             );
             sel
         };
-        self.apply_translation_change(TranslationSettingChange::RemoveDeepLKey(sel as usize));
-        self.notify_change();
+        let _ =
+            self.apply_translation_change(TranslationSettingChange::RemoveDeepLKey(sel as usize));
     }
 
     /// 글로서리 편집기 다이얼로그 열기
@@ -380,11 +361,12 @@ impl SettingsDialog {
     fn handle_color_button(&mut self, ctrl_id: u16, text_type: TextType, color_type: ColorType) {
         let initial = self.config.borrow().get_text_color(text_type, color_type);
         if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
-            self.config
-                .borrow_mut()
-                .set_text_color(text_type, color_type, result.argb);
+            self.apply_settings_change(SettingsChange::TextColor {
+                text_type,
+                color_type,
+                argb: result.argb,
+            });
             self.invalidate_color_button(ctrl_id);
-            self.notify_change();
         }
     }
 
@@ -404,12 +386,11 @@ impl SettingsDialog {
         };
 
         if let Some(result) = FontDialog::show(self.hwnd, font_config) {
-            let mut cfg = self.config.borrow_mut();
-            let style = cfg.get_text_style_mut(text_type);
-            style.font_face = result.face_name;
-            style.font_style = result.style.to_bits();
-            drop(cfg);
-            self.notify_change();
+            self.apply_settings_change(SettingsChange::Font {
+                text_type,
+                face_name: result.face_name,
+                style_bits: result.style.to_bits(),
+            });
         }
     }
 
@@ -417,57 +398,32 @@ impl SettingsDialog {
     pub(super) fn handle_trackbar(&mut self, id: u16, value: i32) {
         use ctrl_id::*;
 
-        match id {
-            BACKGROUND_TRACKBAR => {
-                let mut cfg = self.config.borrow_mut();
-                let rgb = cfg.background_color & 0x00FFFFFF;
-                cfg.background_color = ((value as u32) << 24) | rgb;
-            }
-            TEXTSIZE_TRACKBAR => {
-                self.config
-                    .borrow_mut()
-                    .set_all_text_size(ColorType::Primary, value);
-                self.set_control_text(TEXTSIZE_TEXT, &format!("크기: {}", value));
-            }
-            OUTLINE1_TRACKBAR => {
-                self.config
-                    .borrow_mut()
-                    .set_all_text_size(ColorType::Outline1, value);
-            }
-            OUTLINE2_TRACKBAR => {
-                self.config
-                    .borrow_mut()
-                    .set_all_text_size(ColorType::Outline2, value);
-            }
-            SHADOW_X_TRACKBAR => {
-                self.config.borrow_mut().shadow_offset_x = value;
-            }
-            SHADOW_Y_TRACKBAR => {
-                self.config.borrow_mut().shadow_offset_y = value;
-            }
-            MARGIN_X_TRACKBAR => {
-                self.config.borrow_mut().text_margin_x = value;
-            }
-            MARGIN_Y_TRACKBAR => {
-                self.config.borrow_mut().text_margin_y = value;
-            }
-            MARGIN_NAME_TRACKBAR => {
-                self.config.borrow_mut().name_margin = value;
-            }
-            BORDER_SIZE_TRACKBAR => {
-                self.config.borrow_mut().border_width = value;
-            }
+        let setting = match id {
+            BACKGROUND_TRACKBAR => NumericSetting::BackgroundAlpha,
+            TEXTSIZE_TRACKBAR => NumericSetting::TextSize(ColorType::Primary),
+            OUTLINE1_TRACKBAR => NumericSetting::TextSize(ColorType::Outline1),
+            OUTLINE2_TRACKBAR => NumericSetting::TextSize(ColorType::Outline2),
+            SHADOW_X_TRACKBAR => NumericSetting::ShadowOffsetX,
+            SHADOW_Y_TRACKBAR => NumericSetting::ShadowOffsetY,
+            MARGIN_X_TRACKBAR => NumericSetting::TextMarginX,
+            MARGIN_Y_TRACKBAR => NumericSetting::TextMarginY,
+            MARGIN_NAME_TRACKBAR => NumericSetting::NameMargin,
+            BORDER_SIZE_TRACKBAR => NumericSetting::BorderWidth,
             LLM_TEMPERATURE_TRACKBAR => {
-                self.apply_translation_change(TranslationSettingChange::LlmTemperatureSlider(
-                    value,
-                ));
+                let _ = self.apply_translation_change_deferred(
+                    TranslationSettingChange::LlmTemperatureSlider(value),
+                );
                 let temp = self.config.borrow().translation.llm.temperature;
                 self.set_control_text(LLM_TEMPERATURE_LABEL, &format!("{:.2}", temp));
+                return;
             }
             _ => return,
+        };
+        self.apply_settings_change_deferred(SettingsChange::Numeric { setting, value });
+        if id == TEXTSIZE_TRACKBAR {
+            let size = self.config.borrow().translation_style.size;
+            self.set_control_text(TEXTSIZE_TEXT, &format!("크기: {size}"));
         }
-        self.pending_disk_save.set(true);
-        self.notify_preview();
     }
 
     /// ComboBox 선택 변경 처리
@@ -487,39 +443,44 @@ impl SettingsDialog {
                 TRANS_ENGINE => {
                     use crate::translation::TranslationEngine;
                     let engine = TranslationEngine::from_u8(sel as u8);
-                    self.apply_translation_change(TranslationSettingChange::Engine(engine));
+                    if self
+                        .apply_translation_change(TranslationSettingChange::Engine(engine))
+                        .is_err()
+                    {
+                        return;
+                    }
                     // 엔진 변경 시 해당 그룹만 활성화하고 언어 콤보 항목 재구성
                     self.apply_engine_state(engine);
                 }
                 TRANS_SOURCE_LANG => {
                     let engine = self.config.borrow().translation.get_engine();
                     if let Some(&language) = engine.supported_source_languages().get(sel) {
-                        self.apply_translation_change(TranslationSettingChange::SourceLanguage(
-                            language,
-                        ));
+                        let _ = self.apply_translation_change(
+                            TranslationSettingChange::SourceLanguage(language),
+                        );
                     }
                 }
                 TRANS_TARGET_LANG => {
                     let engine = self.config.borrow().translation.get_engine();
                     if let Some(&language) = engine.supported_target_languages().get(sel) {
-                        self.apply_translation_change(TranslationSettingChange::TargetLanguage(
-                            language,
-                        ));
+                        let _ = self.apply_translation_change(
+                            TranslationSettingChange::TargetLanguage(language),
+                        );
                     }
                 }
                 LLM_PROVIDER => {
                     use crate::translation::LlmProvider;
                     let provider = LlmProvider::from_u8(sel as u8);
-                    self.apply_translation_change(TranslationSettingChange::LlmProvider(provider));
+                    let _ = self
+                        .apply_translation_change(TranslationSettingChange::LlmProvider(provider));
                 }
                 DEEPL_STRATEGY_COMBO => {
-                    self.apply_translation_change(
+                    let _ = self.apply_translation_change(
                         TranslationSettingChange::DeepLStrategyRoundRobin(sel == 1),
                     );
                 }
-                _ => return,
+                _ => {}
             }
-            self.notify_change();
         }
     }
 
@@ -531,16 +492,63 @@ impl SettingsDialog {
         }
     }
 
+    fn apply_settings_change(&self, change: SettingsChange) -> SettingsChangeResult {
+        let result = SettingsEditor::apply(&mut self.config.borrow_mut(), change);
+        self.finish_settings_change(result, true);
+        result
+    }
+
+    fn apply_settings_change_deferred(&self, change: SettingsChange) -> SettingsChangeResult {
+        let result = SettingsEditor::apply(&mut self.config.borrow_mut(), change);
+        self.finish_settings_change(result, false);
+        result
+    }
+
+    fn finish_settings_change(&self, result: SettingsChangeResult, persist_now: bool) {
+        if result.preview_refresh_required {
+            self.notify_preview();
+        }
+        if result.save_required {
+            self.pending_disk_save.set(true);
+            if persist_now {
+                self.persist_pending_changes();
+            }
+        }
+    }
+
     fn apply_translation_change(
         &self,
         change: TranslationSettingChange,
-    ) -> crate::translation::settings::SettingsApplyResult {
+    ) -> std::result::Result<SettingsApplyResult, TranslationSettingsError> {
         let result =
-            TranslationSettingsEditor::apply(&mut self.config.borrow_mut().translation, change);
+            TranslationSettingsEditor::apply(&mut self.config.borrow_mut().translation, change)?;
+        self.finish_translation_change(result, true);
+        Ok(result)
+    }
+
+    fn apply_translation_change_deferred(
+        &self,
+        change: TranslationSettingChange,
+    ) -> std::result::Result<SettingsApplyResult, TranslationSettingsError> {
+        let result =
+            TranslationSettingsEditor::apply(&mut self.config.borrow_mut().translation, change)?;
+        self.finish_translation_change(result, false);
+        Ok(result)
+    }
+
+    fn finish_translation_change(&self, result: SettingsApplyResult, persist_now: bool) {
         if result.runtime_sync_required {
             self.sync_translation_manager();
         }
-        result
+        if result.preview_refresh_required {
+            self.notify_preview();
+        }
+        if result.save_required {
+            self.pending_disk_save.set(true);
+            if persist_now {
+                self.persist_pending_changes();
+            }
+        }
     }
 
     /// 컨트롤 텍스트 설정 헬퍼
@@ -589,52 +597,33 @@ impl SettingsDialog {
     fn handle_edit_killfocus(&mut self, ctrl_id: u16) {
         let text = self.get_control_text(ctrl_id);
         use ctrl_id::*;
-        match ctrl_id {
-            DEEPL_API_KEY_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::DeepLApiKey(text));
-                self.notify_change();
+        let change = match ctrl_id {
+            DEEPL_API_KEY_EDIT => TranslationSettingChange::DeepLApiKey(text),
+            PAPAGO_ID_EDIT => TranslationSettingChange::PapagoClientId(text),
+            PAPAGO_SECRET_EDIT => TranslationSettingChange::PapagoClientSecret(text),
+            EZTRANS_DLL_EDIT => TranslationSettingChange::EzTransDllPath(text),
+            EZTRANS_DAT_EDIT => TranslationSettingChange::EzTransDatPath(text),
+            LLM_MODEL_EDIT => TranslationSettingChange::LlmModel(text),
+            LLM_API_KEY_EDIT => TranslationSettingChange::LlmApiKey(text),
+            LLM_BASE_URL_EDIT => TranslationSettingChange::LlmBaseUrl(text),
+            LLM_SYSTEM_PROMPT_EDIT => TranslationSettingChange::LlmSystemPrompt(text),
+            LLM_MAX_TOKENS_EDIT => TranslationSettingChange::LlmMaxTokensText(text),
+            LLM_DEBOUNCE_EDIT => TranslationSettingChange::LlmDebounceText(text),
+            _ => return,
+        };
+        if let Err(error) = self.apply_translation_change(change) {
+            tracing::warn!("번역 설정 입력을 적용할 수 없습니다: {error}");
+            match ctrl_id {
+                LLM_MAX_TOKENS_EDIT => {
+                    let value = self.config.borrow().translation.llm.max_tokens;
+                    self.set_control_text(ctrl_id, &value.to_string());
+                }
+                LLM_DEBOUNCE_EDIT => {
+                    let value = self.config.borrow().translation.llm.debounce_ms;
+                    self.set_control_text(ctrl_id, &value.to_string());
+                }
+                _ => {}
             }
-            PAPAGO_ID_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::PapagoClientId(text));
-                self.notify_change();
-            }
-            PAPAGO_SECRET_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::PapagoClientSecret(text));
-                self.notify_change();
-            }
-            EZTRANS_DLL_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::EzTransDllPath(text));
-                self.notify_change();
-            }
-            EZTRANS_DAT_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::EzTransDatPath(text));
-                self.notify_change();
-            }
-            LLM_MODEL_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::LlmModel(text));
-                self.notify_change();
-            }
-            LLM_API_KEY_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::LlmApiKey(text));
-                self.notify_change();
-            }
-            LLM_BASE_URL_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::LlmBaseUrl(text));
-                self.notify_change();
-            }
-            LLM_SYSTEM_PROMPT_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::LlmSystemPrompt(text));
-                self.notify_change();
-            }
-            LLM_MAX_TOKENS_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::LlmMaxTokensText(text));
-                self.notify_change();
-            }
-            LLM_DEBOUNCE_EDIT => {
-                self.apply_translation_change(TranslationSettingChange::LlmDebounceText(text));
-                self.notify_change();
-            }
-            _ => {}
         }
     }
 
@@ -679,13 +668,6 @@ impl SettingsDialog {
         self.set_control_text(ctrl_id::TEXTSIZE_TEXT, &format!("크기: {}", size));
     }
 
-    /// 설정 변경 알림
-    pub(super) fn notify_change(&self) {
-        self.notify_preview();
-        self.pending_disk_save.set(true);
-        self.persist_pending_changes();
-    }
-
     fn notify_preview(&self) {
         if let Some(ref cb) = self.on_change {
             cb(&self.config.borrow());
@@ -698,12 +680,40 @@ impl SettingsDialog {
     }
 
     pub(super) fn persist_pending_changes(&self) {
-        if !self.pending_disk_save.replace(false) {
-            return;
-        }
-        if let Err(error) = self.config.borrow().save() {
-            self.pending_disk_save.set(true);
+        if let Err(error) =
+            persist_if_pending(&self.pending_disk_save, || self.config.borrow().save())
+        {
             tracing::error!("설정 저장 실패: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persist_if_pending;
+    use std::cell::Cell;
+
+    #[test]
+    fn failed_save_preserves_retry_flag() {
+        let pending = Cell::new(true);
+
+        let result = persist_if_pending(&pending, || Err::<(), _>("disk full"));
+
+        assert_eq!(result, Err("disk full"));
+        assert!(pending.get());
+    }
+
+    #[test]
+    fn no_pending_save_skips_persistence() {
+        let pending = Cell::new(false);
+        let called = Cell::new(false);
+
+        let result = persist_if_pending(&pending, || {
+            called.set(true);
+            Ok::<(), ()>(())
+        });
+
+        assert_eq!(result, Ok(false));
+        assert!(!called.get());
     }
 }

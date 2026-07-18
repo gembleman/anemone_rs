@@ -193,23 +193,11 @@ impl Config {
         self.get_text_style(text_type).get_color(color_type)
     }
 
-    /// 텍스트 색상 설정
-    pub fn set_text_color(&mut self, text_type: TextType, color_type: ColorType, color: u32) {
-        self.get_text_style_mut(text_type)
-            .set_color(color_type, color);
-    }
-
     /// 모든 텍스트 타입의 크기 동시 설정
     pub fn set_all_text_size(&mut self, size_type: ColorType, size: i32) {
         self.name_style.set_size(size_type, size);
         self.original_style.set_size(size_type, size);
         self.translation_style.set_size(size_type, size);
-    }
-
-    /// 그림자 활성화 토글
-    pub fn toggle_shadow(&mut self, text_type: TextType) {
-        let style = self.get_text_style_mut(text_type);
-        style.shadow_enabled = !style.shadow_enabled;
     }
 
     /// 설정 파일에서 로드 (TOML 형식)
