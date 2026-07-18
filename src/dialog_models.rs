@@ -8,7 +8,7 @@ pub enum DraftChange {
     Updated(usize),
 }
 
-/// 적용 전까지 설정을 바꾸지 않는 글로서리 편집 초안.
+/// 적용 전까지 설정을 바꾸지 않는 사전 편집 초안.
 #[derive(Clone, Debug, Default)]
 pub struct GlossaryDraft {
     entries: Vec<LlmGlossaryEntry>,
