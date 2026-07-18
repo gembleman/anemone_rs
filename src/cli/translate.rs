@@ -6,8 +6,6 @@ use crate::translation::http_common::shared_client;
 use crate::translation::worker::{TranslationDispatch, TranslationRequest};
 use crate::translation::{Language, TranslationEngine, TranslationJobSpec, lang_utils};
 
-use super::helpers::{JsonVal, json_object};
-
 #[derive(clap::Args)]
 pub(super) struct Args {
     /// 번역할 텍스트
@@ -27,7 +25,7 @@ pub(super) struct Args {
     stdin: bool,
 }
 
-pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
+pub(super) fn run(args: Args) -> Result<(), String> {
     let text = if args.stdin {
         read_stdin_to_string()?
     } else {
@@ -52,20 +50,7 @@ pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
     let translated = run_translation(&spec, &text)?;
 
-    if json {
-        println!(
-            "{}",
-            json_object(&[
-                ("engine", JsonVal::Str(engine.to_str())),
-                ("source", JsonVal::Str(lang_utils::to_code(source_lang))),
-                ("target", JsonVal::Str(lang_utils::to_code(target_lang))),
-                ("input", JsonVal::Str(&text)),
-                ("output", JsonVal::Str(&translated)),
-            ])
-        );
-    } else {
-        println!("{translated}");
-    }
+    println!("{translated}");
     Ok(())
 }
 

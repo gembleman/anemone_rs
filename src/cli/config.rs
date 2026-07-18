@@ -1,7 +1,5 @@
 use crate::config::Config;
 
-use super::helpers::{JsonVal, json_object};
-
 #[derive(clap::Subcommand)]
 pub(super) enum Command {
     /// 현재 config.toml 내용 출력
@@ -12,32 +10,19 @@ pub(super) enum Command {
     Set { key: String, value: String },
 }
 
-pub(super) fn run(command: Command, json: bool) -> Result<(), String> {
+pub(super) fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Show => {
             let config = Config::load_or_default();
             let toml =
                 toml::to_string_pretty(&config).map_err(|e| format!("TOML 직렬화 실패: {e}"))?;
-            if json {
-                let json_text =
-                    serde_json::to_string(&config).map_err(|e| format!("JSON 직렬화 실패: {e}"))?;
-                println!("{json_text}");
-            } else {
-                print!("{toml}");
-            }
+            print!("{toml}");
             Ok(())
         }
         Command::Get { key } => {
             let config = Config::load_or_default();
             let value = config_get(&config, &key)?;
-            if json {
-                println!(
-                    "{}",
-                    json_object(&[("key", JsonVal::Str(&key)), ("value", JsonVal::Str(&value))])
-                );
-            } else {
-                println!("{value}");
-            }
+            println!("{value}");
             Ok(())
         }
         Command::Set { key, value } => {
@@ -46,31 +31,16 @@ pub(super) fn run(command: Command, json: bool) -> Result<(), String> {
             config
                 .save()
                 .map_err(|e| format!("config 저장 실패: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    json_object(&[
-                        ("key", JsonVal::Str(&key)),
-                        ("value", JsonVal::Str(&value)),
-                        ("saved", JsonVal::Bool(true)),
-                    ])
-                );
-            } else {
-                println!("저장됨: {key} = {value}");
-            }
+            println!("저장됨: {key} = {value}");
             Ok(())
         }
     }
 }
 
-pub(super) fn print_path(json: bool) -> Result<(), String> {
+pub(super) fn print_path() -> Result<(), String> {
     let path = Config::default_config_path();
     let s = path.to_string_lossy();
-    if json {
-        println!("{}", json_object(&[("path", JsonVal::Str(&s))]));
-    } else {
-        println!("{s}");
-    }
+    println!("{s}");
     Ok(())
 }
 

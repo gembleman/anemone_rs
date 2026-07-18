@@ -1,4 +1,4 @@
-use clap::{CommandFactory, Parser, error::ErrorKind};
+use clap::{CommandFactory, Parser};
 
 use super::Cli;
 
@@ -20,7 +20,6 @@ fn parses_existing_command_shapes() {
             "output.txt",
             "--format",
             "both-nl",
-            "--json",
         ])
         .is_ok()
     );
@@ -37,12 +36,9 @@ fn parses_existing_command_shapes() {
 }
 
 #[test]
-fn json_without_command_is_an_error_instead_of_a_panic() {
-    let error = match Cli::try_parse_from(["anemone_rs", "--json"]) {
-        Ok(_) => panic!("명령 없는 --json을 허용하면 안 됨"),
-        Err(error) => error,
-    };
-    assert_eq!(error.kind(), ErrorKind::MissingSubcommand);
+fn rejects_removed_json_flag() {
+    assert!(Cli::try_parse_from(["anemone_rs", "--json", "list-engines"]).is_err());
+    assert!(Cli::try_parse_from(["anemone_rs", "list-engines", "--json"]).is_err());
 }
 
 #[test]

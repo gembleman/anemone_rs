@@ -1,15 +1,13 @@
 //! CLI(headless) 진입점.
 //!
 //! GUI 다이얼로그 없이 번역/설정/파일 번역/메타 조회를 수행할 수 있도록 한다.
-//! 자동화·AI 테스트 친화성을 우선해 사람이 읽기 좋은 plain text 를 기본으로
-//! 내고, `--json` 플래그가 있으면 구조화 출력으로 전환한다.
+//! 사람이 읽기 좋은 plain text 로 결과를 출력한다.
 //!
 //! Win32/GUI 초기화 경로는 거치지 않으므로 console 서브시스템에서 그대로
 //! 동작하며, `tracing`/COM/D2D 초기화도 생략한다.
 
 mod config;
 mod file_trans;
-mod helpers;
 mod list;
 mod translate;
 
@@ -41,10 +39,6 @@ CONFIG KEYS (대표):\n\
     after_help = AFTER_HELP
 )]
 struct Cli {
-    /// 결과를 JSON 한 줄로 출력
-    #[arg(long, global = true)]
-    json: bool,
-
     #[command(subcommand)]
     command: Command,
 }
@@ -122,12 +116,12 @@ pub fn run() -> CliOutcome {
     };
 
     let result = match cli.command {
-        Command::Translate(args) => translate::run(args, cli.json),
-        Command::FileTrans(args) => file_trans::run(args, cli.json),
-        Command::ListEngines => list::engines(cli.json),
-        Command::ListLangs(args) => list::languages(args, cli.json),
-        Command::Config { command } => config::run(command, cli.json),
-        Command::ConfigPath => config::print_path(cli.json),
+        Command::Translate(args) => translate::run(args),
+        Command::FileTrans(args) => file_trans::run(args),
+        Command::ListEngines => list::engines(),
+        Command::ListLangs(args) => list::languages(args),
+        Command::Config { command } => config::run(command),
+        Command::ConfigPath => config::print_path(),
     };
 
     match result {

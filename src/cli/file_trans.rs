@@ -11,7 +11,6 @@ use crate::file_trans::{
 };
 use crate::translation::TranslationJobSpec;
 
-use super::helpers::{JsonVal, json_object};
 use super::translate::{resolve_engine, resolve_languages};
 
 #[derive(clap::Args)]
@@ -39,7 +38,7 @@ pub(super) struct Args {
     no_trans_linefeed: bool,
 }
 
-pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
+pub(super) fn run(args: Args) -> Result<(), String> {
     let Args {
         input,
         output,
@@ -91,24 +90,12 @@ pub(super) fn run(args: Args, json: bool) -> Result<(), String> {
     let output = &job.output_files[0];
     let total = total.get();
 
-    if json {
-        println!(
-            "{}",
-            json_object(&[
-                ("input", JsonVal::Str(&input.to_string_lossy())),
-                ("output", JsonVal::Str(&output.to_string_lossy())),
-                ("lines", JsonVal::Num(total as i64)),
-                ("engine", JsonVal::Str(engine.to_str())),
-            ])
-        );
-    } else {
-        println!(
-            "완료: {} → {} ({} 줄)",
-            input.display(),
-            output.display(),
-            total
-        );
-    }
+    println!(
+        "완료: {} → {} ({} 줄)",
+        input.display(),
+        output.display(),
+        total
+    );
     Ok(())
 }
 
