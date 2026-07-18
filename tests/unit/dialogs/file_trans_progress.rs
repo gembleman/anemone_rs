@@ -30,15 +30,20 @@ fn progress_events_update_model_state() {
 fn terminal_event_prevents_later_state_updates() {
     let mut completed = ProgressState::default();
     completed.apply(&ProgressEvent::TotalProgress(3));
-    completed.apply(&ProgressEvent::Complete);
+    completed.apply(&ProgressEvent::Finished(Ok(
+        crate::file_trans::FileTranslationSummary {
+            total_files: 1,
+            total_lines: 3,
+        },
+    )));
     completed.apply(&ProgressEvent::TotalProgress(99));
     assert_eq!(completed.current_line, 3);
     assert!(completed.terminal);
 
     let mut failed = ProgressState::default();
-    failed.apply(&ProgressEvent::Error(
+    failed.apply(&ProgressEvent::Finished(Err(
         crate::file_trans::FileTranslationError::Runtime("failed".into()),
-    ));
+    )));
     failed.apply(&ProgressEvent::TotalFiles(99));
     assert_eq!(failed.total_files, 0);
     assert!(failed.terminal);
@@ -48,7 +53,7 @@ fn terminal_event_prevents_later_state_updates() {
 #[ignore = "requires a Win32 desktop and embedded dialog resources"]
 fn win32_cancel_and_close_request_task_cancellation() {
     use super::{FileTransProgressDialog, ctrl_id};
-    use crate::file_trans::{FileTransJobData, FileTransRunner, WriteType};
+    use crate::file_trans::{FileTransJobData, FileTranslationSupervisor, WriteType};
     use crate::translation::{Language, PreparedJob};
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -73,7 +78,8 @@ fn win32_cancel_and_close_request_task_cancellation() {
 
     let parent = unsafe { GetDesktopWindow() };
 
-    let close_task = FileTransRunner::start(failing_job());
+    let close_supervisor = FileTranslationSupervisor::new();
+    let close_task = close_supervisor.start(failing_job()).unwrap();
     let close_cancel = close_task.cancel_handle();
     let close_dialog = FileTransProgressDialog::show(parent, close_task).unwrap();
     unsafe {
@@ -85,7 +91,8 @@ fn win32_cancel_and_close_request_task_cancellation() {
         DestroyWindow(close_dialog).unwrap();
     }
 
-    let button_task = FileTransRunner::start(failing_job());
+    let button_supervisor = FileTranslationSupervisor::new();
+    let button_task = button_supervisor.start(failing_job()).unwrap();
     let button_cancel = button_task.cancel_handle();
     let button_dialog = FileTransProgressDialog::show(parent, button_task).unwrap();
     let cancel_button = unsafe {

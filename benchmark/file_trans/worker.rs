@@ -1,7 +1,7 @@
 use super::{
     BoundedTranslationCache, read_input_line, translate_eztrans_window, validate_and_count_reader,
 };
-use crate::translation::EzTransBatchTranslator;
+use crate::translation::BenchmarkEzTransBatchTranslator as EzTransBatchTranslator;
 use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
@@ -38,9 +38,9 @@ impl EzTransBatchTranslator for MockBatchTranslator {
     }
 }
 
-fn eztrans_job() -> crate::file_trans::FileTransJobData {
+fn eztrans_job() -> crate::file_trans::FileTranslationRequest {
     use crate::translation::{Language, PreparedJob};
-    crate::file_trans::FileTransJobData {
+    crate::file_trans::FileTranslationRequest {
         input_files: Vec::new(),
         output_files: Vec::new(),
         write_type: super::WriteType::TranslationOnly,

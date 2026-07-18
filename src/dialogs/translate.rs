@@ -32,7 +32,7 @@ use crate::config::Config;
 use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::manual::{ManualOutputFormat, ManualTranslationOptions};
 use crate::translation::{Language, LlmProvider, PreparedJob, TranslationEngine};
-use crate::translation_ui::{request_translation, take_response, unregister_translation_hwnd};
+use crate::translation_ui::GuiTranslationHost;
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -74,6 +74,7 @@ const CUSTOM_ENGINE_INDEX: usize = TranslationEngine::Custom as usize;
 pub struct TranslateDialog {
     hwnd: HWND,
     config: Rc<RefCell<Config>>,
+    translation_service: Rc<GuiTranslationHost>,
     applied_dpi: u32,
     source_edit: HWND,
     dest_edit: HWND,
@@ -99,6 +100,7 @@ define_dialog_instance!(TRANSLATE_INSTANCE: TranslateDialog);
 
 struct PendingTranslate {
     config: Rc<RefCell<Config>>,
+    translation_service: Rc<GuiTranslationHost>,
 }
 
 thread_local! {
@@ -116,14 +118,22 @@ unsafe extern "system" fn translate_dialog_proc(
     unsafe {
         if msg == WM_INITDIALOG {
             let pending = TRANSLATE_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(PendingTranslate { config }) = pending else {
+            let Some(PendingTranslate {
+                config,
+                translation_service,
+            }) = pending
+            else {
                 TRANSLATE_INIT_ERROR.with(|slot| {
                     *slot.borrow_mut() = Some("번역 창 초기화 인자가 없습니다".into());
                 });
                 return 0;
             };
 
-            let dialog = Rc::new(RefCell::new(TranslateDialog::new(hwnd, config)));
+            let dialog = Rc::new(RefCell::new(TranslateDialog::new(
+                hwnd,
+                config,
+                translation_service,
+            )));
             TRANSLATE_INSTANCE.with(|slot| {
                 *slot.borrow_mut() = Some(dialog.clone());
             });
@@ -206,7 +216,7 @@ unsafe extern "system" fn translate_dialog_proc(
             }
             WM_DESTROY => {
                 let _ = KillTimer(Some(hwnd), AUTO_TRANSLATE_TIMER);
-                unregister_translation_hwnd(hwnd);
+                dialog.borrow().translation_service.unregister(hwnd);
                 unregister_resource_dialog(hwnd);
                 TRANSLATE_INSTANCE.with(|slot| {
                     if let Ok(mut guard) = slot.try_borrow_mut() {
@@ -225,10 +235,15 @@ unsafe extern "system" fn translate_dialog_proc(
 }
 
 impl TranslateDialog {
-    fn new(hwnd: HWND, config: Rc<RefCell<Config>>) -> Self {
+    fn new(
+        hwnd: HWND,
+        config: Rc<RefCell<Config>>,
+        translation_service: Rc<GuiTranslationHost>,
+    ) -> Self {
         Self {
             hwnd,
             config,
+            translation_service,
             applied_dpi: crate::dpi::dpi_for_window(hwnd),
             source_edit: HWND::default(),
             dest_edit: HWND::default(),
@@ -250,7 +265,11 @@ impl TranslateDialog {
     }
 
     /// `resources/translate.rc`의 모델리스 DIALOGEX 리소스를 연다.
-    pub fn show(parent: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> {
+    pub fn show(
+        parent: HWND,
+        config: Rc<RefCell<Config>>,
+        translation_service: Rc<GuiTranslationHost>,
+    ) -> Result<HWND> {
         let existing = TRANSLATE_INSTANCE
             .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
         if let Some(hwnd) = existing
@@ -267,7 +286,10 @@ impl TranslateDialog {
             slot.borrow_mut().take();
         });
         TRANSLATE_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingTranslate { config });
+            *slot.borrow_mut() = Some(PendingTranslate {
+                config,
+                translation_service,
+            });
         });
 
         let result = unsafe {
@@ -800,7 +822,10 @@ impl TranslateDialog {
         }
 
         self.set_dest_text("[번역 중...]");
-        match request_translation(self.hwnd, Arc::from(text), spec) {
+        match self
+            .translation_service
+            .request(self.hwnd, Arc::from(text), spec)
+        {
             Ok(req_id) => {
                 self.in_flight_id = Some(req_id);
                 self.last_submitted_source = source;
@@ -814,7 +839,7 @@ impl TranslateDialog {
 
     /// 번역 완료 처리. WPARAM 의 `req_id` 로 자신의 응답만 꺼낸다.
     fn handle_translation_complete(&mut self) {
-        let Some((req_id, response)) = take_response(self.hwnd) else {
+        let Some((req_id, response)) = self.translation_service.take_response(self.hwnd) else {
             return;
         };
         if self.in_flight_id != Some(req_id) {
@@ -901,7 +926,7 @@ impl TranslateDialog {
 
     fn invalidate_translation_route(&mut self) {
         if self.in_flight_id.take().is_some() {
-            crate::translation_ui::cancel_translation(self.hwnd);
+            self.translation_service.cancel(self.hwnd);
         }
         self.last_submitted_source.clear();
     }

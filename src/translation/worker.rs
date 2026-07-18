@@ -217,14 +217,17 @@ pub struct TranslationDispatch {
 }
 
 impl TranslationDispatch {
-    pub(crate) fn spawn(notifier: Arc<dyn CompletionNotifier>) -> Self {
+    pub(crate) fn spawn(
+        notifier: Arc<dyn CompletionNotifier>,
+        http_client: reqwest::Client,
+    ) -> Self {
         let (tx, rx) = mpsc::channel::<DispatchJob>();
         let shared = Arc::new(DispatchShared::new(notifier));
         let worker_shared = shared.clone();
 
         // Shutdown에서 join할 수 있도록 보관한다.
         let handle = thread::spawn(move || {
-            Self::worker_thread(rx, worker_shared);
+            Self::worker_thread(rx, worker_shared, http_client);
         });
 
         Self {
@@ -341,7 +344,11 @@ impl TranslationDispatch {
     }
 
     /// 워커 스레드 진입점
-    fn worker_thread(rx: Receiver<DispatchJob>, shared: Arc<DispatchShared>) {
+    fn worker_thread(
+        rx: Receiver<DispatchJob>,
+        shared: Arc<DispatchShared>,
+        client: reqwest::Client,
+    ) {
         // 명령 수신은 직렬화하고 실제 번역은 제한된 동시성으로 실행한다.
         let rt = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
@@ -355,7 +362,6 @@ impl TranslationDispatch {
             }
         };
 
-        let client = super::http_common::shared_client();
         let http_limit = Arc::new(Semaphore::new(4));
 
         while let Ok(job) = rx.recv() {

@@ -2,9 +2,9 @@ use std::io::Read;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::translation::http_common::shared_client;
-use crate::translation::worker::{TranslationDispatch, TranslationRequest};
-use crate::translation::{Language, PreparedJob, TranslationEngine, lang_utils};
+use crate::translation::{
+    Language, PreparedJob, TranslationEngine, TranslationService, lang_utils,
+};
 
 #[derive(clap::Args)]
 pub(super) struct Args {
@@ -58,13 +58,8 @@ fn run_translation(job: PreparedJob, text: &str) -> Result<String, String> {
         .enable_all()
         .build()
         .map_err(|e| format!("tokio 런타임 생성 실패: {e}"))?;
-    let client = shared_client();
-    let req = TranslationRequest {
-        id: 0,
-        text: Arc::from(text),
-        job,
-    };
-    rt.block_on(TranslationDispatch::translate_async(&req, &client))
+    let service = TranslationService::new();
+    rt.block_on(service.translate(job, Arc::from(text)))
         .map_err(|e| format!("번역 실패: {e}"))
 }
 

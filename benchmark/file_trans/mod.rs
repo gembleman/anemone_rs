@@ -1,4 +1,4 @@
-use super::{FileTransJobData, FileTransRunner, FileTransTask, ProgressEvent, WriteType};
+use super::{FileTransJobData, FileTransTask, FileTranslationSupervisor, ProgressEvent, WriteType};
 use crate::translation::{Language, PreparedJob};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,7 +44,7 @@ fn receive_through_terminal(task: &FileTransTask) -> Vec<ProgressEvent> {
         let event = task
             .recv_event_timeout(Duration::from_secs(5))
             .expect("file translation terminal event");
-        let terminal = matches!(event, ProgressEvent::Complete | ProgressEvent::Error(_));
+        let terminal = event.is_terminal();
         events.push(event);
         if terminal {
             events.extend(task.drain_events());
@@ -75,13 +75,17 @@ fn translates_japanese_translation_sample_with_eztrans() {
     )
     .unwrap();
 
-    let task = FileTransRunner::start(sample_job);
+    let supervisor = FileTranslationSupervisor::new();
+    let task = supervisor.start(sample_job).unwrap();
     let events = receive_through_terminal(&task);
-    assert_eq!(events.last(), Some(&ProgressEvent::Complete));
+    assert!(matches!(
+        events.last(),
+        Some(ProgressEvent::Finished(Ok(_)))
+    ));
     assert!(
         !events
             .iter()
-            .any(|event| matches!(event, ProgressEvent::Error(_)))
+            .any(|event| matches!(event, ProgressEvent::Finished(Err(_))))
     );
     assert!(events.contains(&ProgressEvent::TotalFiles(1)));
     assert!(events.contains(&ProgressEvent::TotalLines(expected_lines)));
@@ -140,15 +144,19 @@ fn measures_repeated_and_unique_sample_translation_performance() {
         .unwrap();
 
         let started = Instant::now();
-        let task = FileTransRunner::start(sample_job);
+        let supervisor = FileTranslationSupervisor::new();
+        let task = supervisor.start(sample_job).unwrap();
         let events = receive_through_terminal(&task);
         let elapsed = started.elapsed();
 
-        assert_eq!(events.last(), Some(&ProgressEvent::Complete));
+        assert!(matches!(
+            events.last(),
+            Some(ProgressEvent::Finished(Ok(_)))
+        ));
         assert!(
             !events
                 .iter()
-                .any(|event| matches!(event, ProgressEvent::Error(_)))
+                .any(|event| matches!(event, ProgressEvent::Finished(Err(_))))
         );
         let translated = std::fs::read_to_string(output).unwrap();
         let translated = translated.strip_prefix('\u{feff}').unwrap_or(&translated);

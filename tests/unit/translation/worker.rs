@@ -22,7 +22,10 @@ fn test_notifier() -> Arc<TestNotifier> {
 }
 
 fn test_dispatch() -> TranslationDispatch {
-    TranslationDispatch::spawn(test_notifier())
+    TranslationDispatch::spawn(
+        test_notifier(),
+        crate::translation::http_common::create_client(),
+    )
 }
 
 fn spawn_llm_server(

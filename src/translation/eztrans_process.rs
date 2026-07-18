@@ -7,7 +7,7 @@
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 
 use serde::{Deserialize, Serialize};
@@ -432,23 +432,31 @@ fn worker_executable() -> Result<std::path::PathBuf, String> {
     Ok(current)
 }
 
-static GLOBAL_POOL: OnceLock<Mutex<Option<Arc<EzTransProcessPool>>>> = OnceLock::new();
+pub(crate) struct EzTransProcessPoolRegistry {
+    slot: Mutex<Option<Arc<EzTransProcessPool>>>,
+}
 
-pub(crate) fn global_eztrans_process_pool(
-    config: &EzTransProcessConfig,
-) -> Result<Arc<EzTransProcessPool>, String> {
-    let slot = GLOBAL_POOL.get_or_init(|| Mutex::new(None));
-    let mut guard = slot
-        .lock()
-        .map_err(|_| "EzTrans helper 풀 상태가 손상되었습니다".to_string())?;
-    if let Some(pool) = guard.as_ref()
-        && pool.matches(config)
-    {
-        return Ok(pool.clone());
+impl EzTransProcessPoolRegistry {
+    pub fn new() -> Self {
+        Self {
+            slot: Mutex::new(None),
+        }
     }
-    let pool = Arc::new(EzTransProcessPool::new(config.clone())?);
-    *guard = Some(pool.clone());
-    Ok(pool)
+
+    pub fn get(&self, config: &EzTransProcessConfig) -> Result<Arc<EzTransProcessPool>, String> {
+        let mut guard = self
+            .slot
+            .lock()
+            .map_err(|_| "EzTrans helper 풀 상태가 손상되었습니다".to_string())?;
+        if let Some(pool) = guard.as_ref()
+            && pool.matches(config)
+        {
+            return Ok(pool.clone());
+        }
+        let pool = Arc::new(EzTransProcessPool::new(config.clone())?);
+        *guard = Some(pool.clone());
+        Ok(pool)
+    }
 }
 
 /// 숨김 CLI worker 진입점. stdout은 부모와의 프로토콜 전용이다.

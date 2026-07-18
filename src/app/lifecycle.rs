@@ -29,7 +29,7 @@ use crate::dialogs::BacklogStore;
 use crate::dialogs::helpers::dispatch_resource_dialog_message;
 use crate::hotkey::HotkeyManager;
 use crate::menu::ContextMenu;
-use crate::translation_ui::unregister_translation_hwnd;
+use crate::services::AppServices;
 use crate::tray::{self, TrayIcon};
 
 #[cfg(feature = "benchmark")]
@@ -47,13 +47,13 @@ impl Drop for AppCleanupGuard {
             if let Some(app) = slot.take()
                 && let Ok(app) = app.try_borrow()
             {
-                unregister_translation_hwnd(app.hwnd);
+                app.services.translation_ui.unregister(app.hwnd);
                 if let Err(error) = app.config.borrow().save() {
                     tracing::error!("설정 저장 실패: {error}");
                 }
+                app.services.shutdown();
             }
         });
-        crate::translation_ui::shutdown();
     }
 }
 
@@ -142,6 +142,7 @@ impl App {
 
             // 설정 로드 (파일이 없으면 기본값)
             let config = Rc::new(RefCell::new(Config::load_or_default()));
+            let services = AppServices::new();
 
             let app = Rc::new(RefCell::new(App {
                 hwnd,
@@ -156,6 +157,7 @@ impl App {
                     clipboard_debounce: state::ClipboardDebounce::default(),
                 },
                 config,
+                services,
                 tray: TrayIcon::new(),
                 menu: ContextMenu::new()?,
                 hotkey: None,

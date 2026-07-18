@@ -148,7 +148,10 @@ impl App {
     fn open_translate_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic("translate", || TranslateDialog::show(main_hwnd, config));
+        let translation = self.services.translation_ui.clone();
+        Self::open_dialog_generic("translate", || {
+            TranslateDialog::show(main_hwnd, config, translation)
+        });
     }
 
     /// 백로그 대화상자 열기
@@ -162,7 +165,10 @@ impl App {
     fn open_file_trans_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic("file_trans", || FileTransDialog::show(main_hwnd, config));
+        let supervisor = self.services.file_translation.clone();
+        Self::open_dialog_generic("file_trans", || {
+            FileTransDialog::show(main_hwnd, config, supervisor)
+        });
     }
 
     /// Config 기반 magnetic, click-through, topmost, visibility, clipboard 정책을 적용한다.

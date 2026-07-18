@@ -4,7 +4,6 @@ use super::{App, state};
 use crate::clipboard::ClipboardUpdate;
 use crate::dialogs::{LogEntry, add_to_backlog};
 use crate::translation::TranslationEngine;
-use crate::translation_ui::{request_translation, take_response};
 
 fn debounce_delay_ms(engine: TranslationEngine, configured_ms: u32) -> u32 {
     if engine == TranslationEngine::Llm {
@@ -133,7 +132,7 @@ impl App {
         }
         self.state.clipboard_debounce.clear();
         self.state.pending_translation = None;
-        crate::translation_ui::cancel_translation(self.hwnd);
+        self.services.translation_ui.cancel(self.hwnd);
     }
 
     /// 비동기 번역 요청
@@ -158,7 +157,10 @@ impl App {
         let original: Arc<str> = Arc::from(text);
 
         // 디스패치에 번역 요청 (워커는 프로세스 전역)
-        let request = request_translation(self.hwnd, Arc::clone(&original), job);
+        let request = self
+            .services
+            .translation_ui
+            .request(self.hwnd, Arc::clone(&original), job);
 
         match request {
             Ok(req_id) => {
@@ -183,7 +185,7 @@ impl App {
 
     /// 대상별 완료 큐에서 원래 64-bit request ID와 응답을 함께 꺼낸다.
     pub(super) fn handle_translation_complete(&mut self) {
-        let Some((req_id, response)) = take_response(self.hwnd) else {
+        let Some((req_id, response)) = self.services.translation_ui.take_response(self.hwnd) else {
             return;
         };
 

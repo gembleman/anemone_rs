@@ -3,7 +3,7 @@
 //! 번역 워커는 불투명 대상 ID와 [`CompletionNotifier`]만 알고, 이 모듈이
 //! `HWND` 변환과 `PostMessageW`를 전담한다.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
@@ -36,38 +36,48 @@ impl CompletionNotifier for WindowMessageNotifier {
     }
 }
 
-static DISPATCH: OnceLock<TranslationDispatch> = OnceLock::new();
-
-fn dispatch() -> &'static TranslationDispatch {
-    DISPATCH.get_or_init(|| TranslationDispatch::spawn(Arc::new(WindowMessageNotifier)))
-}
-
 fn target(hwnd: HWND) -> TargetId {
     TargetId::new(hwnd.0 as usize)
 }
 
-pub(crate) fn request_translation(
-    hwnd: HWND,
-    text: Arc<str>,
-    job: PreparedJob,
-) -> Result<u64, TranslationRequestError> {
-    dispatch().request(target(hwnd), TranslationRequest { id: 0, text, job })
+/// Win32 완료 통지와 dispatcher 수명을 명시적으로 소유하는 GUI 번역 서비스.
+pub(crate) struct GuiTranslationHost {
+    _service: crate::translation::TranslationService,
+    dispatch: TranslationDispatch,
 }
 
-pub(crate) fn take_response(hwnd: HWND) -> Option<(u64, TranslationResponse)> {
-    dispatch().take_response_for_target(target(hwnd))
-}
+impl GuiTranslationHost {
+    pub(crate) fn new(service: crate::translation::TranslationService) -> Self {
+        let http_client = service.http_client();
+        Self {
+            _service: service,
+            dispatch: TranslationDispatch::spawn(Arc::new(WindowMessageNotifier), http_client),
+        }
+    }
 
-pub(crate) fn unregister_translation_hwnd(hwnd: HWND) {
-    dispatch().unregister(target(hwnd));
-}
+    pub(crate) fn request(
+        &self,
+        hwnd: HWND,
+        text: Arc<str>,
+        job: PreparedJob,
+    ) -> Result<u64, TranslationRequestError> {
+        self.dispatch
+            .request(target(hwnd), TranslationRequest { id: 0, text, job })
+    }
 
-pub(crate) fn cancel_translation(hwnd: HWND) {
-    dispatch().cancel(target(hwnd));
-}
+    pub(crate) fn take_response(&self, hwnd: HWND) -> Option<(u64, TranslationResponse)> {
+        self.dispatch.take_response_for_target(target(hwnd))
+    }
 
-pub(crate) fn shutdown() {
-    if let Some(dispatch) = DISPATCH.get() {
-        dispatch.shutdown();
+    pub(crate) fn unregister(&self, hwnd: HWND) {
+        self.dispatch.unregister(target(hwnd));
+    }
+
+    pub(crate) fn cancel(&self, hwnd: HWND) {
+        self.dispatch.cancel(target(hwnd));
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.dispatch.shutdown();
     }
 }

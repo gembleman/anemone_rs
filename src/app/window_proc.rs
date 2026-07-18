@@ -20,7 +20,6 @@ use crate::constants::{
     MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
     WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
-use crate::translation_ui::unregister_translation_hwnd;
 use crate::window;
 
 #[derive(Clone, Copy)]
@@ -94,7 +93,7 @@ impl App {
                 WM_DESTROY => {
                     DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().clear());
                     // 죽은 hwnd로 완료 message를 보내지 않도록 routing을 먼저 해제한다.
-                    unregister_translation_hwnd(hwnd);
+                    self.services.translation_ui.unregister(hwnd);
                     PostQuitMessage(0);
                     Some(LRESULT(0))
                 }
@@ -330,7 +329,6 @@ impl App {
             ReentryPolicy::Quit => {
                 tracing::warn!("WM_DESTROY arrived during wndproc reentry; quitting safely");
                 DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().clear());
-                unregister_translation_hwnd(hwnd);
                 unsafe { PostQuitMessage(0) };
                 LRESULT(0)
             }

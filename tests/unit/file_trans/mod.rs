@@ -1,6 +1,7 @@
 use super::{
-    FileTransJobData, FileTransRunner, FileTransTask, ProgressEvent, WriteType,
-    default_output_paths, run, validate_job_paths,
+    FileTransJobData, FileTransTask, FileTranslationError, FileTranslationSummary,
+    FileTranslationSupervisor, ProgressEvent, WriteType, default_output_paths, run,
+    validate_job_paths,
 };
 use crate::translation::{Language, PreparedJob};
 use std::path::PathBuf;
@@ -47,10 +48,7 @@ fn receive_through_terminal(task: &FileTransTask) -> Vec<ProgressEvent> {
         let event = task
             .recv_event_timeout(Duration::from_secs(5))
             .expect("file translation terminal event");
-        let terminal = matches!(
-            event,
-            ProgressEvent::Complete | ProgressEvent::Cancelled | ProgressEvent::Error(_)
-        );
+        let terminal = event.is_terminal();
         events.push(event);
         if terminal {
             events.extend(task.drain_events());
@@ -101,7 +99,8 @@ fn dropping_task_requests_cancellation_without_joining() {
     let input = directory.0.join("empty.txt");
     let output = directory.0.join("result.txt");
     std::fs::write(&input, "").unwrap();
-    let task = FileTransRunner::start(job(vec![input], vec![output]));
+    let supervisor = FileTranslationSupervisor::new();
+    let task = supervisor.start(job(vec![input], vec![output])).unwrap();
     let cancel = task.cancel_handle();
     drop(task);
     assert!(cancel.is_cancelled());
@@ -114,7 +113,8 @@ fn runner_delivers_ordered_progress_and_one_complete() {
     let output = directory.0.join("result.txt");
     std::fs::write(&input, "").unwrap();
 
-    let task = FileTransRunner::start(job(vec![input], vec![output]));
+    let supervisor = FileTranslationSupervisor::new();
+    let task = supervisor.start(job(vec![input], vec![output])).unwrap();
     let events = receive_through_terminal(&task);
 
     assert_eq!(
@@ -125,13 +125,16 @@ fn runner_delivers_ordered_progress_and_one_complete() {
             ProgressEvent::FileIndex(1),
             ProgressEvent::FileName("empty.txt".into()),
             ProgressEvent::FileLines(0),
-            ProgressEvent::Complete,
+            ProgressEvent::Finished(Ok(FileTranslationSummary {
+                total_files: 1,
+                total_lines: 0,
+            })),
         ]
     );
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::Complete))
+            .filter(|event| matches!(event, ProgressEvent::Finished(Ok(_))))
             .count(),
         1
     );
@@ -143,17 +146,17 @@ fn runner_error_has_one_terminal_error_and_no_complete() {
     let input = directory.0.join("input.txt");
     std::fs::write(&input, "").unwrap();
 
-    let task = FileTransRunner::start(job(vec![input], vec![]));
+    let supervisor = FileTranslationSupervisor::new();
+    let task = supervisor.start(job(vec![input], vec![])).unwrap();
     let events = receive_through_terminal(&task);
 
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::Error(_)))
+            .filter(|event| matches!(event, ProgressEvent::Finished(Err(_))))
             .count(),
         1
     );
-    assert!(!events.contains(&ProgressEvent::Complete));
 }
 
 #[test]
@@ -164,7 +167,10 @@ fn runner_cancellation_has_one_cancelled_and_no_complete() {
     std::fs::write(&input, " \n".repeat(100_000)).unwrap();
     std::fs::write(&output, "기존 결과").unwrap();
 
-    let task = FileTransRunner::start(job(vec![input], vec![output.clone()]));
+    let supervisor = FileTranslationSupervisor::new();
+    let task = supervisor
+        .start(job(vec![input], vec![output.clone()]))
+        .unwrap();
     task.cancel();
     let events = receive_through_terminal(&task);
 
@@ -172,11 +178,15 @@ fn runner_cancellation_has_one_cancelled_and_no_complete() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::Cancelled))
+            .filter(|event| {
+                matches!(
+                    event,
+                    ProgressEvent::Finished(Err(FileTranslationError::Cancelled))
+                )
+            })
             .count(),
         1
     );
-    assert!(!events.contains(&ProgressEvent::Complete));
 }
 
 #[test]
@@ -203,9 +213,32 @@ fn cancellation_cleans_temporary_output_and_preserves_existing_result() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::Cancelled))
+            .filter(|event| {
+                matches!(
+                    event,
+                    ProgressEvent::Finished(Err(FileTranslationError::Cancelled))
+                )
+            })
             .count(),
         1
     );
-    assert!(!events.contains(&ProgressEvent::Complete));
+}
+
+#[test]
+fn supervisor_cancels_joins_and_rejects_new_work_during_shutdown() {
+    let directory = TestDirectory::new();
+    let input = directory.0.join("large.txt");
+    let output = directory.0.join("result.txt");
+    std::fs::write(&input, " \n".repeat(100_000)).unwrap();
+
+    let supervisor = FileTranslationSupervisor::new();
+    let task = supervisor
+        .start(job(vec![input.clone()], vec![output.clone()]))
+        .unwrap();
+    let report = supervisor.shutdown(Duration::from_secs(2));
+
+    assert_eq!(report.detached, 0);
+    assert_eq!(supervisor.active_tasks(), 0);
+    assert!(task.cancel_handle().is_cancelled());
+    assert!(supervisor.start(job(vec![input], vec![output])).is_err());
 }

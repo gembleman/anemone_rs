@@ -1,11 +1,7 @@
 //! HTTP 번역 engine 공통 client, timeout, response 처리.
 
 use super::TranslationError;
-use std::sync::OnceLock;
 use std::time::Duration;
-
-/// 프로세스 전역 reqwest::Client (connection pool 재사용)
-static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// 일반 번역 요청이 worker 종료를 오래 막지 않게 하는 전체 timeout.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -20,19 +16,15 @@ pub const LLM_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const SUCCESS_BODY_LIMIT: usize = 8 * 1024 * 1024;
 const ERROR_BODY_LIMIT: usize = 64 * 1024;
 
-pub fn shared_client() -> reqwest::Client {
-    SHARED_CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .timeout(REQUEST_TIMEOUT)
-                .connect_timeout(CONNECT_TIMEOUT)
-                .build()
-                .unwrap_or_else(|e| {
-                    tracing::warn!("reqwest 클라이언트 빌드 실패, 기본값 사용: {}", e);
-                    reqwest::Client::new()
-                })
+pub fn create_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+        .unwrap_or_else(|error| {
+            tracing::warn!("reqwest 클라이언트 빌드 실패, 기본값 사용: {error}");
+            reqwest::Client::new()
         })
-        .clone()
 }
 
 /// 성공 body를 반환하고 오류 status를 `TranslationError::Api`로 바꾼다.

@@ -13,6 +13,7 @@ use crate::dialogs::BacklogStore;
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::ContextMenu;
+use crate::services::AppServices;
 use crate::tray::TrayIcon;
 
 #[cfg(feature = "benchmark")]
@@ -40,6 +41,7 @@ pub struct App {
     hwnd: HWND,
     state: state::AppState,
     config: Rc<RefCell<Config>>,
+    services: AppServices,
     tray: TrayIcon,
     menu: ContextMenu,
     hotkey: Option<HotkeyManager>,

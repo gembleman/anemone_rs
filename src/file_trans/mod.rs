@@ -1,102 +1,39 @@
 //! UI와 독립된 파일 번역 코어.
 //!
 //! 작업 설정, 경로 검증, 기본 출력 경로 생성과 실제 파일 처리를 제공한다.
-//! 진행 상황은 [`ProgressEvent`] 콜백으로 전달하므로 Win32 UI에 의존하지 않는다.
+//! 진행 상황은 [`FileTranslationProgress`]로 전달하므로 Win32 UI에 의존하지 않는다.
 
 mod error;
-mod worker;
+mod eztrans;
+mod input;
+mod output;
+mod pipeline;
+mod progress;
+mod supervisor;
 
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::mpsc::RecvTimeoutError;
-use std::sync::mpsc::{self, Receiver};
-use std::thread::JoinHandle;
-use std::time::Duration;
 
 use crate::translation::PreparedJob;
 
 pub use error::FileTranslationError;
-pub use worker::run;
-pub(crate) use worker::split_eztrans_batch;
+pub(crate) use eztrans::split_eztrans_batch;
+pub(crate) use pipeline::run;
+pub use progress::{FileTranslationProgress, FileTranslationSummary};
+pub use supervisor::{
+    CancelHandle, FileTranslationSupervisor, FileTranslationTask, ShutdownReport,
+};
+
+pub(crate) type ProgressEvent = FileTranslationProgress;
+pub(crate) type FileTransTask = FileTranslationTask;
 
 #[cfg(feature = "benchmark")]
 pub mod benchmark_support {
-    pub use super::worker::{
-        BoundedTranslationCache, read_input_line, translate_eztrans_window,
-        validate_and_count_reader,
-    };
-}
-
-/// 파일 번역 작업을 취소하는 스레드 안전한 핸들.
-#[derive(Clone)]
-pub struct CancelHandle(Arc<AtomicBool>);
-
-impl CancelHandle {
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-
-/// 워커 수명과 진행 이벤트 수신기를 소유하는 파일 번역 작업.
-pub struct FileTransTask {
-    cancel: CancelHandle,
-    events: Receiver<ProgressEvent>,
-    worker: Option<JoinHandle<()>>,
-}
-
-impl FileTransTask {
-    pub fn cancel(&self) {
-        self.cancel.cancel();
-    }
-    pub fn drain_events(&self) -> Vec<ProgressEvent> {
-        self.events.try_iter().collect()
-    }
-
-    pub fn recv_event_timeout(&self, timeout: Duration) -> Result<ProgressEvent, RecvTimeoutError> {
-        self.events.recv_timeout(timeout)
-    }
-
-    pub fn cancel_handle(&self) -> CancelHandle {
-        self.cancel.clone()
-    }
-}
-
-impl Drop for FileTransTask {
-    fn drop(&mut self) {
-        self.cancel();
-        // UI 스레드를 막지 않도록 완료 대기는 하지 않는다. JoinHandle은 작업 객체가
-        // 소유하며 drop 시 분리되고, 취소 토큰은 워커가 임시 파일을 정리하게 한다.
-        self.worker.take();
-    }
-}
-
-/// UI와 CLI가 공유하는 파일 번역 실행자.
-pub struct FileTransRunner;
-
-impl FileTransRunner {
-    pub fn start(mut job: FileTransJobData) -> FileTransTask {
-        let (sender, events) = mpsc::channel();
-        let cancel = CancelHandle(Arc::new(AtomicBool::new(false)));
-        job.cancel_token = cancel.0.clone();
-        let worker = std::thread::spawn(move || {
-            run(&job, |event| {
-                let _ = sender.send(event);
-            })
-        });
-        FileTransTask {
-            cancel,
-            events,
-            worker: Some(worker),
-        }
-    }
+    pub use super::eztrans::{BoundedTranslationCache, translate_eztrans_window};
+    pub use super::input::{read_input_line, validate_and_count_reader};
 }
 
 /// 출력 형식.
@@ -112,7 +49,7 @@ pub enum WriteType {
 }
 
 /// UI와 무관한 파일 번역 작업 설정.
-pub struct FileTransJobData {
+pub struct FileTranslationRequest {
     pub input_files: Vec<PathBuf>,
     pub output_files: Vec<PathBuf>,
     pub write_type: WriteType,
@@ -121,20 +58,7 @@ pub struct FileTransJobData {
     pub translation: PreparedJob,
 }
 
-/// 파일 번역 작업이 UI 또는 CLI 호출자에게 전달하는 진행 이벤트.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ProgressEvent {
-    TotalFiles(i32),
-    TotalLines(i32),
-    FileIndex(i32),
-    FileName(String),
-    FileLines(i32),
-    FileProgress(i32),
-    TotalProgress(i32),
-    Complete,
-    Cancelled,
-    Error(FileTranslationError),
-}
+pub(crate) type FileTransJobData = FileTranslationRequest;
 
 /// Windows 파일 시스템의 대소문자 비구분 규칙에 맞춰 비교할 절대 경로 키를 만든다.
 fn normalized_path_key(path: &Path) -> Result<String, FileTranslationError> {
@@ -155,7 +79,7 @@ fn normalized_path_key(path: &Path) -> Result<String, FileTranslationError> {
 }
 
 /// 입력과 출력 경로가 서로 겹치거나 출력 경로끼리 중복되는지 검사한다.
-pub fn validate_job_paths(
+pub(crate) fn validate_job_paths(
     inputs: &[PathBuf],
     outputs: &[PathBuf],
 ) -> Result<(), FileTranslationError> {
@@ -192,7 +116,9 @@ pub fn validate_job_paths(
 }
 
 /// 입력 순서대로 충돌하지 않는 기본 출력 경로를 만든다.
-pub fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, FileTranslationError> {
+pub(crate) fn default_output_paths(
+    inputs: &[PathBuf],
+) -> Result<Vec<PathBuf>, FileTranslationError> {
     let input_keys = inputs
         .iter()
         .map(|path| normalized_path_key(path))
@@ -226,3 +152,16 @@ pub fn default_output_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, FileTran
 #[cfg(test)]
 #[path = "../../tests/unit/file_trans/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+use eztrans::{BoundedTranslationCache, partition_eztrans_batches, translate_eztrans_window};
+#[cfg(test)]
+use input::{InputLine, LineEnding, read_input_line, validate_and_count_reader};
+#[cfg(test)]
+use output::{PendingOutput, write_output};
+#[cfg(test)]
+use pipeline::{TranslationContext, translate_line};
+
+#[cfg(test)]
+#[path = "../../tests/unit/file_trans/worker.rs"]
+mod worker_tests;

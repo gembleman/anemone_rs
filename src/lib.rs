@@ -14,6 +14,7 @@ mod logging;
 mod magnetic;
 mod menu;
 mod runtime;
+mod services;
 mod settings_model;
 pub mod translation;
 mod translation_ui;

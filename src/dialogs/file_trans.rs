@@ -27,7 +27,8 @@ use super::helpers::{
 use crate::config::Config;
 use crate::define_dialog_instance;
 use crate::file_trans::{
-    FileTransJobData, FileTransRunner, WriteType, default_output_paths, validate_job_paths,
+    FileTransJobData, FileTranslationSupervisor, WriteType, default_output_paths,
+    validate_job_paths,
 };
 use crate::translation::{PreparedJob, TranslationEngine};
 
@@ -52,6 +53,7 @@ mod ctrl_id {
 pub struct FileTransDialog {
     hwnd: HWND,
     config: Rc<RefCell<Config>>,
+    supervisor: Rc<FileTranslationSupervisor>,
     applied_dpi: u32,
     load_edit: HWND,
     save_edit: HWND,
@@ -68,6 +70,7 @@ define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
 
 struct PendingFileTrans {
     config: Rc<RefCell<Config>>,
+    supervisor: Rc<FileTranslationSupervisor>,
 }
 
 thread_local! {
@@ -85,14 +88,14 @@ unsafe extern "system" fn file_trans_dialog_proc(
     unsafe {
         if msg == WM_INITDIALOG {
             let pending = FILE_TRANS_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(PendingFileTrans { config }) = pending else {
+            let Some(PendingFileTrans { config, supervisor }) = pending else {
                 FILE_TRANS_INIT_ERROR.with(|slot| {
                     *slot.borrow_mut() = Some("파일 번역 창 초기화 인자가 없습니다".into());
                 });
                 return 0;
             };
 
-            let dialog = Rc::new(RefCell::new(FileTransDialog::new(hwnd, config)));
+            let dialog = Rc::new(RefCell::new(FileTransDialog::new(hwnd, config, supervisor)));
             FILE_TRANS_INSTANCE.with(|slot| {
                 *slot.borrow_mut() = Some(dialog.clone());
             });
@@ -167,10 +170,15 @@ unsafe extern "system" fn file_trans_dialog_proc(
 }
 
 impl FileTransDialog {
-    fn new(hwnd: HWND, config: Rc<RefCell<Config>>) -> Self {
+    fn new(
+        hwnd: HWND,
+        config: Rc<RefCell<Config>>,
+        supervisor: Rc<FileTranslationSupervisor>,
+    ) -> Self {
         Self {
             hwnd,
             config,
+            supervisor,
             applied_dpi: crate::dpi::dpi_for_window(hwnd),
             load_edit: HWND::default(),
             save_edit: HWND::default(),
@@ -185,7 +193,11 @@ impl FileTransDialog {
     }
 
     /// `resources/file_trans.rc`의 모델리스 DIALOGEX 리소스를 연다.
-    pub fn show(parent: HWND, config: Rc<RefCell<Config>>) -> Result<HWND> {
+    pub fn show(
+        parent: HWND,
+        config: Rc<RefCell<Config>>,
+        supervisor: Rc<FileTranslationSupervisor>,
+    ) -> Result<HWND> {
         let existing = FILE_TRANS_INSTANCE
             .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
         if let Some(hwnd) = existing
@@ -202,7 +214,7 @@ impl FileTransDialog {
             slot.borrow_mut().take();
         });
         FILE_TRANS_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingFileTrans { config });
+            *slot.borrow_mut() = Some(PendingFileTrans { config, supervisor });
         });
 
         let result = unsafe {
@@ -532,7 +544,17 @@ impl FileTransDialog {
             cancel_token: Default::default(),
             translation: spec,
         };
-        let task = FileTransRunner::start(job_data);
+        let task = match self.supervisor.start(job_data) {
+            Ok(task) => task,
+            Err(error) => {
+                crate::dialogs::helpers::show_error_message(
+                    self.hwnd,
+                    "파일 번역 오류",
+                    &error.to_string(),
+                );
+                return;
+            }
+        };
         if let Err(e) = FileTransProgressDialog::show(self.hwnd, task) {
             tracing::error!("Failed to create progress dialog: {:?}", e);
             crate::dialogs::helpers::show_error_message(

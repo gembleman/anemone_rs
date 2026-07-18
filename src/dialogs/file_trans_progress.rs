@@ -64,7 +64,7 @@ impl ProgressState {
             ProgressEvent::FileLines(value) => self.list_size = *value,
             ProgressEvent::FileProgress(_) => {}
             ProgressEvent::TotalProgress(value) => self.current_line = *value,
-            ProgressEvent::Complete | ProgressEvent::Cancelled | ProgressEvent::Error(_) => {
+            ProgressEvent::Finished(_) => {
                 self.terminal = true;
             }
             ProgressEvent::FileName(_) => {}
@@ -520,7 +520,7 @@ impl FileTransProgressDialog {
                         );
                     }
                 }
-                ProgressEvent::Complete => {
+                ProgressEvent::Finished(Ok(_)) => {
                     let _ = set_window_text(self.name_text, "완료!");
                     let _ = set_window_text(self.progress_text, "번역 완료");
                     let _ = EnableWindow(self.cancel_btn, false);
@@ -541,14 +541,16 @@ impl FileTransProgressDialog {
                     // 창 닫기
                     let _ = PostMessageW(Some(self.hwnd), WM_PROGRESS_FINISH, WPARAM(0), LPARAM(0));
                 }
-                ProgressEvent::Cancelled => {
+                ProgressEvent::Finished(Err(
+                    crate::file_trans::FileTranslationError::Cancelled,
+                )) => {
                     let _ = set_window_text(self.name_text, "취소됨");
                     let _ = set_window_text(self.progress_text, "번역을 취소했습니다");
                     let _ = EnableWindow(self.cancel_btn, false);
                     self.clear_taskbar_progress();
                     let _ = PostMessageW(Some(self.hwnd), WM_PROGRESS_FINISH, WPARAM(0), LPARAM(0));
                 }
-                ProgressEvent::Error(error_msg) => {
+                ProgressEvent::Finished(Err(error_msg)) => {
                     let _ = set_window_text(self.name_text, "오류 발생");
                     let _ = EnableWindow(self.cancel_btn, false);
 
