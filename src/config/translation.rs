@@ -28,6 +28,9 @@ pub struct TranslationConfig {
     /// EzTrans Dat 경로
     #[serde(default)]
     pub eztrans_dat_path: String,
+    /// 파일 번역에서 동시에 유지할 EzTrans helper 프로세스 수
+    #[serde(default = "default_eztrans_process_count")]
+    pub eztrans_process_count: u32,
     /// DeepL API 키 (단일 키 — 하위 호환). `deepl_keys`가 비어 있을 때만 사용.
     #[serde(default)]
     pub deepl_api_key: String,
@@ -65,6 +68,10 @@ fn default_target_lang() -> String {
 
 fn default_deepl_strategy() -> String {
     "failover".to_string()
+}
+
+fn default_eztrans_process_count() -> u32 {
+    2
 }
 
 impl TranslationConfig {
@@ -201,6 +208,7 @@ impl Default for TranslationConfig {
             target_lang: "ko".to_string(),
             eztrans_dll_path: default_eztrans_subpath("J2KEngine.dll"),
             eztrans_dat_path: default_eztrans_subpath("Dat"),
+            eztrans_process_count: default_eztrans_process_count(),
             deepl_api_key: String::new(),
             deepl_keys: Vec::new(),
             deepl_strategy: default_deepl_strategy(),

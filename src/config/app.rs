@@ -160,6 +160,8 @@ impl Config {
         self.shadow_offset_x = self.shadow_offset_x.clamp(0, 20);
         self.shadow_offset_y = self.shadow_offset_y.clamp(0, 20);
         self.repeat_text_mode = self.repeat_text_mode.min(4);
+        self.translation.eztrans_process_count =
+            self.translation.eztrans_process_count.clamp(1, 16);
 
         for style in [
             &mut self.name_style,

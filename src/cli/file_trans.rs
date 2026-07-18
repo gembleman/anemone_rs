@@ -60,8 +60,7 @@ pub(super) fn run(args: Args) -> Result<(), String> {
         target_lang,
     )
     .map_err(|error| error.to_string())?;
-    spec.prepare().map_err(|error| error.to_string())?;
-    let (engine, source_lang, target_lang, credentials) = spec.into_parts();
+    let (engine, source_lang, target_lang, credentials, eztrans_process) = spec.into_file_parts();
 
     let job = FileTransJobData {
         input_files: vec![input],
@@ -73,6 +72,7 @@ pub(super) fn run(args: Args) -> Result<(), String> {
         source_lang,
         target_lang,
         credentials,
+        eztrans_process,
     };
     let total = Cell::new(0usize);
     let error = RefCell::new(None);

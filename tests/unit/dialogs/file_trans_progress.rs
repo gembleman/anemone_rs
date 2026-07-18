@@ -69,6 +69,7 @@ fn win32_cancel_and_close_request_task_cancellation() {
             source_lang: Language::Jpn,
             target_lang: Language::Kor,
             credentials: EngineCredentials::None,
+            eztrans_process: None,
         }
     }
 

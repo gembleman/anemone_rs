@@ -1,21 +1,27 @@
 //! 파일 번역과 진행률 보고를 수행하는 백그라운드 작업.
 
+use std::collections::{HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
 
 use super::{FileTransJobData, ProgressEvent, WriteType, validate_job_paths};
 use crate::translation::{
-    TranslationEngine,
+    EzTransBatchTranslator, TranslationEngine, global_eztrans_process_pool,
     http_common::shared_client,
     worker::{TranslationDispatch, TranslationRequest},
 };
 
 const EZTRANS_BATCH_MAX_LINES: usize = 256;
 const EZTRANS_BATCH_MAX_CHARS: usize = 96 * 1024;
+const EZTRANS_WINDOW_MAX_LINES: usize = 50_000;
+const EZTRANS_WINDOW_MAX_CHARS: usize = 16 * 1024 * 1024;
+const EZTRANS_CACHE_MAX_ENTRIES: usize = 100_000;
+const PROGRESS_REPORT_INTERVAL: usize = 256;
 
 /// 작업 중 시스템 절전만 막고 화면 절전은 허용하는 RAII 가드.
 struct SleepBlocker;
@@ -193,10 +199,35 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
         }
     };
 
+    let eztrans_pool = if job_data.engine == TranslationEngine::EzTrans {
+        let Some(config) = job_data.eztrans_process.as_ref() else {
+            report(ProgressEvent::Error(
+                "EzTrans 파일 번역 helper 설정이 없습니다.".to_string(),
+            ));
+            return;
+        };
+        match global_eztrans_process_pool(config) {
+            Ok(pool) => Some(pool),
+            Err(error) => {
+                report(ProgressEvent::Error(error));
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     report(ProgressEvent::TotalFiles(job_data.input_files.len() as i32));
     report(ProgressEvent::TotalLines(total_lines));
 
     let mut global_current_line = 0;
+    let mut file_runtime = FileRuntime {
+        translation: &translation,
+        eztrans_pool: eztrans_pool
+            .as_deref()
+            .map(|pool| pool as &dyn EzTransBatchTranslator),
+        eztrans_cache: BoundedTranslationCache::new(EZTRANS_CACHE_MAX_ENTRIES),
+    };
 
     for (idx, (input_path, output_path)) in job_data
         .input_files
@@ -219,7 +250,7 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
             job_data,
             file_line_counts[idx],
             &mut global_current_line,
-            &translation,
+            &mut file_runtime,
             &report,
         ) {
             Ok(()) => {}
@@ -236,6 +267,12 @@ pub(crate) fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
 struct TranslationContext<'a> {
     runtime: &'a tokio::runtime::Runtime,
     http_client: &'a reqwest::Client,
+}
+
+struct FileRuntime<'a> {
+    translation: &'a TranslationContext<'a>,
+    eztrans_pool: Option<&'a dyn EzTransBatchTranslator>,
+    eztrans_cache: BoundedTranslationCache,
 }
 
 /// UTF-8 검증과 파일별 줄 수 계산을 결합한 사전 검사.
@@ -342,6 +379,42 @@ struct InputLine {
     ending: LineEnding,
 }
 
+/// 파일 작업 동안만 유지되는 bounded FIFO 번역 캐시. HashMap 조회는 평균 O(1)이고,
+/// 삽입 순서 큐로 메모리 상한을 강제한다. 설정/사전이 다른 다음 작업으로는 넘어가지 않는다.
+struct BoundedTranslationCache {
+    capacity: usize,
+    entries: HashMap<Arc<str>, Arc<str>>,
+    insertion_order: VecDeque<Arc<str>>,
+}
+
+impl BoundedTranslationCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            entries: HashMap::with_capacity(capacity.min(16_384)),
+            insertion_order: VecDeque::with_capacity(capacity.min(16_384)),
+        }
+    }
+
+    fn get(&self, original: &str) -> Option<&str> {
+        self.entries.get(original).map(AsRef::as_ref)
+    }
+
+    fn insert(&mut self, original: Arc<str>, translated: Arc<str>) {
+        if self.capacity == 0 || self.entries.contains_key(original.as_ref()) {
+            return;
+        }
+        while self.entries.len() >= self.capacity {
+            let Some(oldest) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.entries.remove(oldest.as_ref());
+        }
+        self.insertion_order.push_back(original.clone());
+        self.entries.insert(original, translated);
+    }
+}
+
 fn read_input_line<R: BufRead>(
     reader: &mut R,
     path: &Path,
@@ -408,7 +481,7 @@ fn process_single_file(
     job_data: &FileTransJobData,
     line_count: usize,
     global_current: &mut i32,
-    translation: &TranslationContext<'_>,
+    runtime: &mut FileRuntime<'_>,
     report: &impl Fn(ProgressEvent),
 ) -> Result<(), String> {
     let mut reader = crate::util::open_utf8_translation_input(input_path)?;
@@ -429,24 +502,24 @@ fn process_single_file(
 
     while next_line.is_some() {
         let mut lines = Vec::new();
-        let mut batch_chars = 0usize;
+        let mut window_chars = 0usize;
 
         while let Some(line) = next_line.take() {
             let separator_chars = usize::from(!lines.is_empty());
             let line_chars = line.text.chars().count();
-            let exceeds_batch = !lines.is_empty()
+            let exceeds_window = !lines.is_empty()
                 && job_data.engine == TranslationEngine::EzTrans
-                && (lines.len() >= EZTRANS_BATCH_MAX_LINES
-                    || batch_chars
+                && (lines.len() >= EZTRANS_WINDOW_MAX_LINES
+                    || window_chars
                         .saturating_add(separator_chars)
                         .saturating_add(line_chars)
-                        > EZTRANS_BATCH_MAX_CHARS);
-            if exceeds_batch {
+                        > EZTRANS_WINDOW_MAX_CHARS);
+            if exceeds_window {
                 next_line = Some(line);
                 break;
             }
 
-            batch_chars = batch_chars
+            window_chars = window_chars
                 .saturating_add(separator_chars)
                 .saturating_add(line_chars);
             lines.push(line);
@@ -460,7 +533,14 @@ fn process_single_file(
         if job_data.cancel_token.load(Ordering::SeqCst) {
             return Err("사용자가 취소했습니다.".to_string());
         }
-        let translated_lines = translate_lines(&lines, job_data, translation)?;
+        let translated_lines = if job_data.engine == TranslationEngine::EzTrans {
+            let pool = runtime
+                .eztrans_pool
+                .ok_or_else(|| "EzTrans 파일 번역 helper 풀이 준비되지 않았습니다".to_string())?;
+            translate_eztrans_window(&lines, job_data, pool, &mut runtime.eztrans_cache)?
+        } else {
+            translate_lines(&lines, job_data, runtime.translation)?
+        };
 
         let batch_len = lines.len();
         for (line_index, (line, translated)) in lines.into_iter().zip(translated_lines).enumerate()
@@ -476,8 +556,10 @@ fn process_single_file(
 
             idx += 1;
             *global_current += 1;
-            report(ProgressEvent::FileProgress(idx as i32));
-            report(ProgressEvent::TotalProgress(*global_current));
+            if idx == 1 || idx == line_count || idx.is_multiple_of(PROGRESS_REPORT_INTERVAL) {
+                report(ProgressEvent::FileProgress(idx as i32));
+                report(ProgressEvent::TotalProgress(*global_current));
+            }
         }
     }
 
@@ -489,53 +571,117 @@ fn translate_lines(
     job_data: &FileTransJobData,
     translation: &TranslationContext<'_>,
 ) -> Result<Vec<String>, String> {
-    if job_data.engine != TranslationEngine::EzTrans || lines.len() <= 1 {
-        return lines
-            .iter()
-            .map(|line| translate_line(&line.text, job_data, translation))
-            .collect();
-    }
-
-    let translated_indices = lines
+    lines
         .iter()
-        .enumerate()
-        .filter(|(_, line)| should_translate_line(&line.text, job_data.no_trans_linefeed))
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    if translated_indices.len() <= 1 {
-        return lines
-            .iter()
-            .map(|line| translate_line(&line.text, job_data, translation))
-            .collect();
-    }
+        .map(|line| translate_line(&line.text, job_data, translation))
+        .collect()
+}
 
-    let originals = translated_indices
-        .iter()
-        .map(|&index| lines[index].text.as_str())
-        .collect::<Vec<_>>();
-    let combined = originals.join("\n");
-    let translated = translate_line(&combined, job_data, translation)?;
-
-    let Some(parts) = split_eztrans_batch(&translated, &originals) else {
-        tracing::warn!(
-            input_lines = originals.len(),
-            output_lines = translated.split('\n').count(),
-            "EzTrans batch changed line boundaries; retrying one line at a time"
-        );
-        return lines
-            .iter()
-            .map(|line| translate_line(&line.text, job_data, translation))
-            .collect();
-    };
-
+fn translate_eztrans_window(
+    lines: &[InputLine],
+    job_data: &FileTransJobData,
+    translator: &dyn EzTransBatchTranslator,
+    cache: &mut BoundedTranslationCache,
+) -> Result<Vec<String>, String> {
     let mut results = lines
         .iter()
         .map(|line| line.text.clone())
         .collect::<Vec<_>>();
-    for (index, translated) in translated_indices.into_iter().zip(parts) {
-        results[index] = translated;
+    let mut miss_by_text: HashMap<Arc<str>, usize> = HashMap::new();
+    let mut misses = Vec::<Arc<str>>::new();
+    let mut line_misses = vec![None; lines.len()];
+
+    for (index, line) in lines.iter().enumerate() {
+        if !should_translate_line(&line.text, job_data.no_trans_linefeed) {
+            continue;
+        }
+        if let Some(translated) = cache.get(&line.text) {
+            results[index] = translated.to_string();
+            continue;
+        }
+        if let Some(&miss_index) = miss_by_text.get(line.text.as_str()) {
+            line_misses[index] = Some(miss_index);
+            continue;
+        }
+        let original: Arc<str> = Arc::from(line.text.as_str());
+        let miss_index = misses.len();
+        miss_by_text.insert(original.clone(), miss_index);
+        misses.push(original);
+        line_misses[index] = Some(miss_index);
+    }
+
+    if misses.is_empty() {
+        return Ok(results);
+    }
+    let batches = partition_eztrans_batches(&misses, translator.process_count());
+    let translated_batches = translator.translate_batches(batches, &job_data.cancel_token)?;
+    let translated_misses = translated_batches.into_iter().flatten().collect::<Vec<_>>();
+    if translated_misses.len() != misses.len() {
+        return Err(format!(
+            "EzTrans helper 결과 수가 일치하지 않습니다: 요청 {}, 응답 {}",
+            misses.len(),
+            translated_misses.len()
+        ));
+    }
+
+    for (original, translated) in misses.iter().cloned().zip(&translated_misses) {
+        cache.insert(original, Arc::from(translated.as_str()));
+    }
+    for (index, miss_index) in line_misses.into_iter().enumerate() {
+        if let Some(miss_index) = miss_index {
+            results[index] = translated_misses[miss_index].clone();
+        }
     }
     Ok(results)
+}
+
+fn partition_eztrans_batches(originals: &[Arc<str>], process_count: usize) -> Vec<Vec<Arc<str>>> {
+    if originals.is_empty() {
+        return Vec::new();
+    }
+    let process_count = process_count.max(1);
+    let total_chars = originals
+        .iter()
+        .map(|text| text.chars().count().saturating_add(1))
+        .sum::<usize>();
+    let target_lines = originals
+        .len()
+        .div_ceil(process_count)
+        .clamp(1, EZTRANS_BATCH_MAX_LINES);
+    let target_chars = total_chars
+        .div_ceil(process_count)
+        .clamp(1, EZTRANS_BATCH_MAX_CHARS);
+    let mut batches = Vec::new();
+    let mut current = Vec::new();
+    let mut current_chars = 0usize;
+
+    for original in originals {
+        let separator = usize::from(!current.is_empty());
+        let chars = original.chars().count();
+        let exceeds_target = !current.is_empty()
+            && (current.len() >= target_lines
+                || current_chars
+                    .saturating_add(separator)
+                    .saturating_add(chars)
+                    > target_chars
+                || current.len() >= EZTRANS_BATCH_MAX_LINES
+                || current_chars
+                    .saturating_add(separator)
+                    .saturating_add(chars)
+                    > EZTRANS_BATCH_MAX_CHARS);
+        if exceeds_target {
+            batches.push(std::mem::take(&mut current));
+            current_chars = 0;
+        }
+        current_chars = current_chars
+            .saturating_add(usize::from(!current.is_empty()))
+            .saturating_add(chars);
+        current.push(original.clone());
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    batches
 }
 
 fn should_translate_line(line: &str, no_trans_linefeed: bool) -> bool {
@@ -544,7 +690,7 @@ fn should_translate_line(line: &str, no_trans_linefeed: bool) -> bool {
 
 /// EzTrans는 다중 줄 입력의 줄바꿈 양옆에 공백 하나를 삽입한다. 원문 경계에
 /// 이미 공백이 있으면 추가하지 않으므로, 원문에 없던 경계 공백만 제거한다.
-fn split_eztrans_batch(translated: &str, originals: &[&str]) -> Option<Vec<String>> {
+pub(crate) fn split_eztrans_batch(translated: &str, originals: &[&str]) -> Option<Vec<String>> {
     let mut parts = translated
         .split('\n')
         .map(|part| part.strip_suffix('\r').unwrap_or(part).to_string())

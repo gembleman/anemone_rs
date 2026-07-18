@@ -2,7 +2,7 @@
 
 use crate::config::TranslationConfig;
 use crate::translation::worker::EngineCredentials;
-use crate::translation::{Language, TranslationEngine, prepare_eztrans};
+use crate::translation::{EzTransProcessConfig, Language, TranslationEngine, prepare_eztrans};
 
 /// 비밀 자격증명을 포함할 수 있는 실행 사양. 의도적으로 `Debug`를 구현하지 않는다.
 #[derive(Clone)]
@@ -13,6 +13,7 @@ pub struct TranslationJobSpec {
     credentials: EngineCredentials,
     eztrans_dll_path: String,
     eztrans_dat_path: String,
+    eztrans_process_count: usize,
 }
 
 impl TranslationJobSpec {
@@ -104,6 +105,7 @@ impl TranslationJobSpec {
             credentials,
             eztrans_dll_path: config.eztrans_dll_path.clone(),
             eztrans_dat_path: config.eztrans_dat_path.clone(),
+            eztrans_process_count: config.eztrans_process_count.clamp(1, 16) as usize,
         })
     }
 
@@ -123,6 +125,31 @@ impl TranslationJobSpec {
             self.source_lang,
             self.target_lang,
             self.credentials,
+        )
+    }
+
+    /// 파일 번역용 실행 사양. EzTrans는 부모 프로세스 actor 대신 격리된 helper 풀에서
+    /// 초기화하므로 경로와 프로세스 수를 함께 넘긴다.
+    pub fn into_file_parts(
+        self,
+    ) -> (
+        TranslationEngine,
+        Language,
+        Language,
+        EngineCredentials,
+        Option<EzTransProcessConfig>,
+    ) {
+        let eztrans = (self.engine == TranslationEngine::EzTrans).then_some(EzTransProcessConfig {
+            dll_path: self.eztrans_dll_path,
+            dat_path: self.eztrans_dat_path,
+            process_count: self.eztrans_process_count,
+        });
+        (
+            self.engine,
+            self.source_lang,
+            self.target_lang,
+            self.credentials,
+            eztrans,
         )
     }
 

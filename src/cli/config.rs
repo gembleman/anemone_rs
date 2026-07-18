@@ -261,9 +261,11 @@ mod tests {
         config_set(&mut config, "translation.llm.max_tokens", "999999").unwrap();
         config_set(&mut config, "translation.llm.debounce_ms", "999999").unwrap();
         config_set(&mut config, "translation.llm.temperature", "9.5").unwrap();
+        config_set(&mut config, "translation.eztrans_process_count", "999999").unwrap();
         assert_eq!(config.translation.llm.max_tokens, 32_000);
         assert_eq!(config.translation.llm.debounce_ms, 10_000);
         assert_eq!(config.translation.llm.temperature, 2.0);
+        assert_eq!(config.translation.eztrans_process_count, 16);
     }
 
     #[test]

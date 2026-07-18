@@ -90,6 +90,21 @@ fn llm_limits_are_normalized_at_every_config_boundary() {
 }
 
 #[test]
+fn eztrans_process_count_defaults_and_is_clamped() {
+    let partial = Config::from_toml_str("[translation]\nengine = \"eztrans\"\n").unwrap();
+    assert_eq!(partial.translation.eztrans_process_count, 2);
+
+    let mut raw = Config::default();
+    raw.translation.eztrans_process_count = u32::MAX;
+    let normalized = Config::from_toml_str(&toml::to_string(&raw).unwrap()).unwrap();
+    assert_eq!(normalized.translation.eztrans_process_count, 16);
+
+    raw.translation.eztrans_process_count = 0;
+    let normalized = Config::from_toml_str(&toml::to_string(&raw).unwrap()).unwrap();
+    assert_eq!(normalized.translation.eztrans_process_count, 1);
+}
+
+#[test]
 fn save_is_atomic_and_preserves_last_known_good_generation() {
     let root = unique_test_dir("save");
     let path = root.join("config.toml");

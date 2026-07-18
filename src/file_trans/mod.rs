@@ -14,9 +14,9 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 
-use crate::translation::{EngineCredentials, Language, TranslationEngine};
+use crate::translation::{EngineCredentials, EzTransProcessConfig, Language, TranslationEngine};
 
-pub(crate) use worker::run;
+pub(crate) use worker::{run, split_eztrans_batch};
 
 /// 파일 번역 작업을 취소하는 스레드 안전한 핸들.
 #[derive(Clone)]
@@ -107,6 +107,7 @@ pub(crate) struct FileTransJobData {
     pub source_lang: Language,
     pub target_lang: Language,
     pub credentials: EngineCredentials,
+    pub eztrans_process: Option<EzTransProcessConfig>,
 }
 
 /// 파일 번역 작업이 UI 또는 CLI 호출자에게 전달하는 진행 이벤트.

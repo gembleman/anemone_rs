@@ -1,10 +1,13 @@
 use super::{
-    LineEnding, PendingOutput, read_input_line, split_eztrans_batch, validate_and_count_reader,
+    BoundedTranslationCache, InputLine, LineEnding, PendingOutput, partition_eztrans_batches,
+    read_input_line, split_eztrans_batch, translate_eztrans_window, validate_and_count_reader,
     write_output,
 };
+use crate::translation::EzTransBatchTranslator;
 use std::io::{BufReader, Cursor, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -160,6 +163,161 @@ fn eztrans_batch_split_rejects_changed_line_boundaries() {
     assert_eq!(split_eztrans_batch("하나\n둘\n셋", &["一", "二"]), None);
 }
 
+struct MockBatchTranslator {
+    process_count: usize,
+    translated_lines: AtomicUsize,
+    batches: Mutex<Vec<Vec<String>>>,
+}
+
+impl MockBatchTranslator {
+    fn new(process_count: usize) -> Self {
+        Self {
+            process_count,
+            translated_lines: AtomicUsize::new(0),
+            batches: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl EzTransBatchTranslator for MockBatchTranslator {
+    fn process_count(&self) -> usize {
+        self.process_count
+    }
+
+    fn translate_batches(
+        &self,
+        batches: Vec<Vec<Arc<str>>>,
+        _cancelled: &Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Vec<Vec<String>>, String> {
+        self.translated_lines.fetch_add(
+            batches.iter().map(Vec::len).sum::<usize>(),
+            Ordering::Relaxed,
+        );
+        self.batches.lock().unwrap().extend(
+            batches
+                .iter()
+                .map(|batch| batch.iter().map(|text| text.to_string()).collect()),
+        );
+        Ok(batches
+            .into_iter()
+            .map(|batch| {
+                batch
+                    .into_iter()
+                    .map(|text| format!("번역:{text}"))
+                    .collect()
+            })
+            .collect())
+    }
+}
+
+fn eztrans_job() -> crate::file_trans::FileTransJobData {
+    use crate::translation::{EngineCredentials, Language, TranslationEngine};
+    crate::file_trans::FileTransJobData {
+        input_files: Vec::new(),
+        output_files: Vec::new(),
+        write_type: super::WriteType::TranslationOnly,
+        no_trans_linefeed: true,
+        cancel_token: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        engine: TranslationEngine::EzTrans,
+        source_lang: Language::Jpn,
+        target_lang: Language::Kor,
+        credentials: EngineCredentials::None,
+        eztrans_process: None,
+    }
+}
+
+fn input_line(text: &str) -> InputLine {
+    InputLine {
+        text: text.into(),
+        ending: LineEnding::Lf,
+    }
+}
+
+#[test]
+fn eztrans_window_deduplicates_and_reuses_bounded_cache() {
+    let translator = MockBatchTranslator::new(4);
+    let job = eztrans_job();
+    let mut cache = BoundedTranslationCache::new(100);
+    let first = [input_line("同じ"), input_line("別"), input_line("同じ")];
+    assert_eq!(
+        translate_eztrans_window(&first, &job, &translator, &mut cache).unwrap(),
+        ["번역:同じ", "번역:別", "번역:同じ"]
+    );
+    let second = [input_line("同じ"), input_line("新規")];
+    assert_eq!(
+        translate_eztrans_window(&second, &job, &translator, &mut cache).unwrap(),
+        ["번역:同じ", "번역:新規"]
+    );
+    assert_eq!(translator.translated_lines.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+fn eztrans_batches_are_balanced_across_configured_processes_and_bounded() {
+    let originals = (0..1_000)
+        .map(|index| Arc::<str>::from(format!("문장 {index}")))
+        .collect::<Vec<_>>();
+    let batches = partition_eztrans_batches(&originals, 8);
+    assert!(batches.len() >= 8);
+    assert!(batches.iter().all(|batch| batch.len() <= 256));
+    assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), 1_000);
+}
+
+#[test]
+fn large_fixture_streams_in_bounded_windows_and_translates_each_unique_line_once() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("large_japanese_translation_sample.txt");
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let reader = crate::util::open_utf8_translation_input(&path).unwrap();
+    assert_eq!(
+        validate_and_count_reader(reader, &path, &cancel).unwrap(),
+        200_000
+    );
+
+    let translator = MockBatchTranslator::new(8);
+    let job = eztrans_job();
+    let mut cache = BoundedTranslationCache::new(100_000);
+    let mut reader = crate::util::open_utf8_translation_input(&path).unwrap();
+    let mut first_line = true;
+    let mut processed = 0usize;
+    loop {
+        let mut window = Vec::with_capacity(50_000);
+        while window.len() < 50_000 {
+            let Some(line) = read_input_line(&mut reader, &path, first_line).unwrap() else {
+                break;
+            };
+            first_line = false;
+            window.push(line);
+        }
+        if window.is_empty() {
+            break;
+        }
+        let translated = translate_eztrans_window(&window, &job, &translator, &mut cache).unwrap();
+        assert_eq!(translated.len(), window.len());
+        assert_eq!(translated[0], format!("번역:{}", window[0].text));
+        processed += translated.len();
+    }
+
+    assert_eq!(processed, 200_000);
+    assert_eq!(translator.translated_lines.load(Ordering::Relaxed), 10_000);
+}
+
+#[test]
+fn unique_fixture_contains_ten_thousand_distinct_sentences() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("benchmark")
+        .join("unique_japanese_translation_sample.txt");
+    let contents = std::fs::read_to_string(path).unwrap();
+    let lines = contents.lines().collect::<Vec<_>>();
+    let unique = lines
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+
+    assert_eq!(lines.len(), 10_000);
+    assert_eq!(unique.len(), 10_000);
+}
+
 #[test]
 fn cancellation_aborts_an_in_flight_file_http_request() {
     use crate::file_trans::FileTransJobData;
@@ -196,6 +354,7 @@ fn cancellation_aborts_an_in_flight_file_http_request() {
             max_tokens: 10,
             glossary: Vec::new(),
         }),
+        eztrans_process: None,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

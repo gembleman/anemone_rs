@@ -53,6 +53,21 @@ fn builds_deepl_credentials_from_the_effective_key_list() {
 }
 
 #[test]
+fn file_job_carries_normalized_eztrans_process_configuration() {
+    let config = TranslationConfig {
+        eztrans_process_count: 99,
+        ..TranslationConfig::default()
+    };
+    let spec = TranslationJobSpec::from_config(&config).unwrap();
+    let (engine, _, _, _, process) = spec.into_file_parts();
+    assert_eq!(engine, TranslationEngine::EzTrans);
+    let process = process.unwrap();
+    assert_eq!(process.process_count, 16);
+    assert_eq!(process.dll_path, config.eztrans_dll_path);
+    assert_eq!(process.dat_path, config.eztrans_dat_path);
+}
+
+#[test]
 fn builds_and_validates_custom_api_credentials() {
     let mut config = TranslationConfig {
         engine: "custom".into(),

@@ -6,7 +6,7 @@ use crate::translation::{EngineCredentials, Language, TranslationEngine};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -41,6 +41,7 @@ fn job(input_files: Vec<PathBuf>, output_files: Vec<PathBuf>) -> FileTransJobDat
         source_lang: Language::Jpn,
         target_lang: Language::Kor,
         credentials: EngineCredentials::None,
+        eztrans_process: None,
     }
 }
 
@@ -227,11 +228,11 @@ fn translates_japanese_translation_sample_with_eztrans() {
     let mut sample_job = job(vec![input.clone()], vec![output.clone()]);
     sample_job.engine = TranslationEngine::EzTrans;
 
-    crate::translation::prepare_eztrans(
-        dll_path.to_str().expect("EzTrans DLL path is valid UTF-8"),
-        dat_path.to_str().expect("EzTrans DAT path is valid UTF-8"),
-    )
-    .expect("bundled EzTrans initializes");
+    sample_job.eztrans_process = Some(crate::translation::EzTransProcessConfig {
+        dll_path: dll_path.to_string_lossy().into_owned(),
+        dat_path: dat_path.to_string_lossy().into_owned(),
+        process_count: 4,
+    });
 
     let task = FileTransRunner::start(sample_job);
     let events = receive_through_terminal(&task);
@@ -259,4 +260,62 @@ fn translates_japanese_translation_sample_with_eztrans() {
             .chars()
             .any(|character| ('가'..='힣').contains(&character))
     );
+}
+
+#[test]
+#[ignore = "performance test that uses the bundled EzTrans DLL"]
+fn measures_repeated_and_unique_sample_translation_performance() {
+    assert!(
+        !cfg!(debug_assertions),
+        "performance measurements must run with cargo test --release"
+    );
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dll_path = project_root.join("eztrans_dll").join("J2KEngine.dll");
+    let dat_path = project_root.join("eztrans_dll").join("Dat");
+    let directory = TestDirectory::new();
+
+    for (label, relative_path, expected_lines) in [
+        (
+            "repeated-200k",
+            "tests/large_japanese_translation_sample.txt",
+            200_000,
+        ),
+        (
+            "unique-10k",
+            "benchmark/unique_japanese_translation_sample.txt",
+            10_000,
+        ),
+    ] {
+        let input = project_root.join(relative_path);
+        let output = directory.0.join(format!("{label}_ko.txt"));
+        let mut sample_job = job(vec![input], vec![output.clone()]);
+        sample_job.engine = TranslationEngine::EzTrans;
+        sample_job.eztrans_process = Some(crate::translation::EzTransProcessConfig {
+            dll_path: dll_path.to_string_lossy().into_owned(),
+            dat_path: dat_path.to_string_lossy().into_owned(),
+            process_count: 4,
+        });
+
+        let started = Instant::now();
+        let task = FileTransRunner::start(sample_job);
+        let events = receive_through_terminal(&task);
+        let elapsed = started.elapsed();
+
+        assert_eq!(events.last(), Some(&ProgressEvent::Complete));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ProgressEvent::Error(_)))
+        );
+        let translated = std::fs::read_to_string(output).unwrap();
+        let translated = translated.strip_prefix('\u{feff}').unwrap_or(&translated);
+        assert_eq!(translated.lines().count(), expected_lines);
+        assert!(!translated.contains("[번역 실패:"));
+
+        eprintln!(
+            "{label}: {expected_lines} lines in {:.3}s ({:.0} lines/s)",
+            elapsed.as_secs_f64(),
+            expected_lines as f64 / elapsed.as_secs_f64()
+        );
+    }
 }

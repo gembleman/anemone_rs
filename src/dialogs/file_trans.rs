@@ -522,20 +522,8 @@ impl FileTransDialog {
                 return;
             }
         };
-        if let Err(error) = spec.prepare() {
-            // SAFETY: self.hwnd is a valid dialog window handle used as the message box owner.
-            unsafe {
-                let message = to_wide(&error.to_string());
-                let _ = MessageBoxW(
-                    Some(self.hwnd),
-                    PCWSTR(message.as_ptr()),
-                    w!("번역 엔진 오류"),
-                    MB_ICONERROR,
-                );
-            }
-            return;
-        }
-        let (engine, source_lang, target_lang, credentials) = spec.into_parts();
+        let (engine, source_lang, target_lang, credentials, eztrans_process) =
+            spec.into_file_parts();
 
         let job_data = FileTransJobData {
             input_files: self.input_files.clone(),
@@ -548,6 +536,7 @@ impl FileTransDialog {
             source_lang,
             target_lang,
             credentials,
+            eztrans_process,
         };
         let task = FileTransRunner::start(job_data);
         if let Err(e) = FileTransProgressDialog::show(self.hwnd, task) {

@@ -19,6 +19,7 @@ LANG:   ISO 639-1 (예: ja, ko, en, zh)
 CONFIG KEYS (대표):
     translation.engine, translation.source_lang, translation.target_lang
     translation.eztrans_dll_path, translation.eztrans_dat_path
+    translation.eztrans_process_count (파일 번역 helper 프로세스 수, 1..16)
     translation.llm.provider, translation.llm.model
     translation.llm.base_url, translation.llm.temperature, translation.llm.max_tokens
     translation.custom.url, translation.custom.request_template, translation.custom.response_path
@@ -55,6 +56,14 @@ enum Command {
     },
     /// config.toml 절대 경로 출력
     ConfigPath,
+    /// 내부 EzTrans helper 프로세스. 직접 호출하지 않는다.
+    #[command(hide = true)]
+    EztransWorker {
+        #[arg(long)]
+        dll: String,
+        #[arg(long)]
+        dat: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -117,6 +126,7 @@ pub fn run() -> CliOutcome {
         Command::ListLangs(args) => list::languages(args),
         Command::Config { command } => config::run(command),
         Command::ConfigPath => config::print_path(),
+        Command::EztransWorker { dll, dat } => crate::translation::run_eztrans_worker(&dll, &dat),
     };
 
     match result {

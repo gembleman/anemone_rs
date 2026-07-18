@@ -39,13 +39,13 @@ impl EzTransState {
     }
 }
 
-struct RegisteredDllDirectory {
+pub(super) struct RegisteredDllDirectory {
     path: String,
     cookie: usize,
 }
 
 impl RegisteredDllDirectory {
-    fn register(dll_path: &str) -> Result<Self, String> {
+    pub(super) fn register(dll_path: &str) -> Result<Self, String> {
         let dir = eztrans_dll_search_dir(dll_path)?;
         let wide: Vec<u16> = dir.encode_utf16().chain(std::iter::once(0)).collect();
         // SAFETY: `wide` is a null-terminated UTF-16 string valid for this call.

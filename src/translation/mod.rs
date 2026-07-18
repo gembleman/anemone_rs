@@ -5,6 +5,7 @@ pub mod deepl;
 mod error;
 mod eztrans;
 mod eztrans_actor;
+mod eztrans_process;
 pub mod google;
 pub(crate) mod http_common;
 mod job;
@@ -18,6 +19,9 @@ pub mod worker;
 pub use error::{TranslationError, TranslationResult};
 pub use eztrans::EzTransTranslator;
 pub use eztrans_actor::{prepare_eztrans, translate_with_eztrans};
+pub(crate) use eztrans_process::{
+    EzTransBatchTranslator, EzTransProcessConfig, global_eztrans_process_pool, run_eztrans_worker,
+};
 pub use job::TranslationJobSpec;
 pub use language::{EnumParseError, Language, TranslationEngine, lang_utils};
 pub use llm::LlmProvider;
