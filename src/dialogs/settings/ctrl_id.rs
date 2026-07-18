@@ -66,13 +66,11 @@ pub const PRINT_ORGTEXT: u16 = 1200;
 pub const PRINT_TRANSTEXT: u16 = 1201;
 pub const PRINT_ORGNAME: u16 = 1202;
 pub const SEPERATE_NAME: u16 = 1203;
-pub const REPEAT_TEXT: u16 = 1204;
 
 // 윈도우 옵션
 pub const TOPMOST: u16 = 1210;
 pub const USE_MAGNETIC: u16 = 1211;
 pub const MAGNETIC_MINIMIZE: u16 = 1212;
-pub const HIDEWIN: u16 = 1213;
 pub const CLIPBOARD_WATCH: u16 = 1214;
 pub const WNDCLICK_THROUGH: u16 = 1215;
 

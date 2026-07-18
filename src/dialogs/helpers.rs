@@ -1,6 +1,6 @@
 //! Resource dialog 수명, DPI, text와 ListBox 공통 helper.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use windows::{
     Win32::{
@@ -12,8 +12,80 @@ use windows::{
 
 use crate::util::to_wide;
 
+/// owner를 가진 일관된 오류 대화상자를 표시한다.
+pub fn show_error_message(owner: HWND, title: &str, message: &str) {
+    let title = to_wide(title);
+    let message = to_wide(message);
+    unsafe {
+        let _ = MessageBoxW(
+            Some(owner),
+            PCWSTR(message.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+/// 모델리스 dialog의 RefCell 재진입으로 처리하지 못한 pointer-free message를 재예약한다.
+pub unsafe fn defer_dialog_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
+    DEFERRED_DIALOG_MESSAGES.with(|queue| {
+        queue
+            .borrow_mut()
+            .push_back((hwnd.0 as isize, msg, wparam.0, lparam.0));
+    });
+}
+
+/// 바깥 dialog handler의 borrow가 해제된 뒤 해당 HWND의 deferred message를 게시한다.
+pub fn flush_deferred_dialog_messages(hwnd: HWND) {
+    let raw = hwnd.0 as isize;
+    let pending = DEFERRED_DIALOG_MESSAGES.with(|queue| {
+        let mut queue = queue.borrow_mut();
+        let mut pending = Vec::new();
+        let mut retained = VecDeque::new();
+        while let Some(message) = queue.pop_front() {
+            if message.0 == raw {
+                pending.push(message);
+            } else {
+                retained.push_back(message);
+            }
+        }
+        *queue = retained;
+        pending
+    });
+    if !unsafe { IsWindow(Some(hwnd)).as_bool() } {
+        return;
+    }
+    for (_, msg, wparam, lparam) in pending {
+        if let Err(error) = unsafe { PostMessageW(Some(hwnd), msg, WPARAM(wparam), LPARAM(lparam)) }
+        {
+            tracing::warn!("failed to post deferred dialog message 0x{msg:04X}: {error}");
+        }
+    }
+}
+
+/// WM_DPICHANGED의 임시 RECT는 즉시 복사·적용하고 pointer를 제거한 후 재예약한다.
+pub unsafe fn defer_dialog_dpi_change(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
+    if lparam.0 != 0 {
+        let rect = unsafe { *(lparam.0 as *const RECT) };
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+    unsafe { defer_dialog_message(hwnd, WM_DPICHANGED, wparam, LPARAM(0)) };
+}
+
 thread_local! {
     static RESOURCE_DIALOGS: std::cell::RefCell<Vec<isize>> = const { std::cell::RefCell::new(Vec::new()) };
+    static DEFERRED_DIALOG_MESSAGES: std::cell::RefCell<VecDeque<(isize, u32, usize, isize)>> =
+        const { std::cell::RefCell::new(VecDeque::new()) };
 }
 
 /// 열린 리소스 기반 모델리스 다이얼로그를 메시지 루프에 등록한다.
@@ -34,6 +106,11 @@ pub fn register_resource_dialog(hwnd: HWND) {
 pub fn unregister_resource_dialog(hwnd: HWND) {
     RESOURCE_DIALOGS.with(|dialogs| {
         dialogs.borrow_mut().retain(|&raw| raw != hwnd.0 as isize);
+    });
+    DEFERRED_DIALOG_MESSAGES.with(|queue| {
+        queue
+            .borrow_mut()
+            .retain(|message| message.0 != hwnd.0 as isize);
     });
 }
 
@@ -303,17 +380,6 @@ pub fn listbox_reset(hwnd: HWND) {
 
 pub fn listbox_get_sel(hwnd: HWND) -> i32 {
     unsafe { SendMessageW(hwnd, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
-}
-
-pub fn listbox_set_sel(hwnd: HWND, index: i32) {
-    unsafe {
-        let _ = SendMessageW(
-            hwnd,
-            LB_SETCURSEL,
-            Some(WPARAM(index as usize)),
-            Some(LPARAM(0)),
-        );
-    }
 }
 
 /// 다이얼로그 타입별 thread-local 인스턴스 슬롯을 선언한다.

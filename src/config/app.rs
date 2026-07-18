@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ColorType, HookConfig, TextAlign, TextStyle, TextType, TranslationConfig};
+use super::{ColorType, TextAlign, TextStyle, TextType, TranslationConfig};
 
 /// 애플리케이션 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -11,7 +11,6 @@ pub struct Config {
     // 윈도우 표시
     pub window_visible: bool,
     pub window_topmost: bool,
-    pub temp_window_hide: bool,
     pub click_through: bool,
 
     // 클립보드
@@ -51,38 +50,12 @@ pub struct Config {
     pub shadow_offset_x: i32,
     pub shadow_offset_y: i32,
 
-    // 텍스트 반복 처리 모드 (0-4)
-    pub repeat_text_mode: u8,
-
     // 이름 처리 옵션
     pub separate_name: bool,
-    pub revise_name: bool,
-    pub middle_bracket_recognize: bool,
-
-    // 후크 설정
-    #[serde(default)]
-    pub hook: HookConfig,
 
     // 번역 설정
     #[serde(default)]
     pub translation: TranslationConfig,
-
-    // 외부 단축키 사용
-    pub extern_hotkey: bool,
-
-    // 숨김 시 클립보드 감시 해제
-    pub hide_unwatch_clipboard: bool,
-    // 숨김 시 단축키 해제
-    pub hide_unlock_hotkey: bool,
-
-    // 업데이트 알림
-    pub update_notify: bool,
-
-    // 이전 검색 번호 표시
-    pub prev_search_num: bool,
-
-    // AneDic 강제 사용
-    pub force_anedic: bool,
 }
 
 impl Default for Config {
@@ -90,7 +63,6 @@ impl Default for Config {
         Self {
             window_visible: true,
             window_topmost: true,
-            temp_window_hide: false,
             click_through: false,
 
             clipboard_watch: true,
@@ -125,27 +97,11 @@ impl Default for Config {
             shadow_offset_x: 2,
             shadow_offset_y: 2,
 
-            // 텍스트 반복 처리
-            repeat_text_mode: 0,
-
             // 이름 처리
             separate_name: true,
-            revise_name: false,
-            middle_bracket_recognize: false,
-
-            // 후크
-            hook: HookConfig::default(),
 
             // 번역
             translation: TranslationConfig::default(),
-
-            // 기타 옵션
-            extern_hotkey: false,
-            hide_unwatch_clipboard: false,
-            hide_unlock_hotkey: false,
-            update_notify: true,
-            prev_search_num: false,
-            force_anedic: false,
         }
     }
 }
@@ -159,7 +115,6 @@ impl Config {
         self.name_margin = self.name_margin.clamp(0, 300);
         self.shadow_offset_x = self.shadow_offset_x.clamp(0, 20);
         self.shadow_offset_y = self.shadow_offset_y.clamp(0, 20);
-        self.repeat_text_mode = self.repeat_text_mode.min(4);
         self.translation.eztrans_process_count =
             self.translation.eztrans_process_count.clamp(1, 16);
         self.translation.normalize_custom_apis();
@@ -191,10 +146,6 @@ impl Config {
 
     pub fn toggle_click_through(&mut self) {
         self.click_through = !self.click_through;
-    }
-
-    pub fn toggle_clipboard_watch(&mut self) {
-        self.clipboard_watch = !self.clipboard_watch;
     }
 
     pub fn toggle_background_visible(&mut self) {

@@ -51,7 +51,10 @@ fn receive_through_terminal(task: &FileTransTask) -> Vec<ProgressEvent> {
         let event = task
             .recv_event_timeout(Duration::from_secs(5))
             .expect("file translation terminal event");
-        let terminal = matches!(event, ProgressEvent::Complete | ProgressEvent::Error(_));
+        let terminal = matches!(
+            event,
+            ProgressEvent::Complete | ProgressEvent::Cancelled | ProgressEvent::Error(_)
+        );
         events.push(event);
         if terminal {
             events.extend(task.drain_events());
@@ -158,7 +161,7 @@ fn runner_error_has_one_terminal_error_and_no_complete() {
 }
 
 #[test]
-fn runner_cancellation_has_one_terminal_error_and_no_complete() {
+fn runner_cancellation_has_one_cancelled_and_no_complete() {
     let directory = TestDirectory::new();
     let input = directory.0.join("large.txt");
     let output = directory.0.join("result.txt");
@@ -173,7 +176,7 @@ fn runner_cancellation_has_one_terminal_error_and_no_complete() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::Error(_)))
+            .filter(|event| matches!(event, ProgressEvent::Cancelled))
             .count(),
         1
     );
@@ -204,7 +207,7 @@ fn cancellation_cleans_temporary_output_and_preserves_existing_result() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::Error(_)))
+            .filter(|event| matches!(event, ProgressEvent::Cancelled))
             .count(),
         1
     );

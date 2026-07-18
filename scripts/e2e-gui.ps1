@@ -16,9 +16,20 @@ namespace AnemoneE2E
 {
     public static class NativeMethods
     {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT { public int X, Y; }
+
         private const uint WM_COMMAND = 0x0111;
+        private const uint BM_SETCHECK = 0x00F1;
         private const uint CB_GETCURSEL = 0x0147;
         private const uint CB_SETCURSEL = 0x014E;
+        private const uint BST_UNCHECKED = 0;
+        private const uint BST_CHECKED = 1;
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_NOACTIVATE = 0x0010;
         private const uint SMTO_BLOCK = 0x0001;
         private const uint SMTO_ABORTIFHUNG = 0x0002;
         private const uint MessageTimeoutMilliseconds = 5000;
@@ -27,6 +38,12 @@ namespace AnemoneE2E
 
         [DllImport("user32.dll")]
         private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lparam);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc callback, IntPtr lparam);
+
+        [DllImport("user32.dll")]
+        private static extern int GetDlgCtrlID(IntPtr hwnd);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern int GetClassNameW(IntPtr hwnd, StringBuilder className, int maxCount);
@@ -39,6 +56,30 @@ namespace AnemoneE2E
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr GetDlgItem(IntPtr dialog, int controlId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateWindowExW(uint exStyle, string className, string title,
+            uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu,
+            IntPtr instance, IntPtr parameter);
+
+        [DllImport("user32.dll")]
+        private static extern bool DestroyWindow(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hwnd);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter,
+            int x, int y, int width, int height, uint flags);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr WindowFromPoint(POINT point);
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr SendMessageTimeoutW(
@@ -81,8 +122,15 @@ namespace AnemoneE2E
             IntPtr control = GetDlgItem(dialog, controlId);
             if (control == IntPtr.Zero)
             {
+                StringBuilder ids = new StringBuilder();
+                EnumChildWindows(dialog, delegate(IntPtr hwnd, IntPtr lparam)
+                {
+                    if (ids.Length > 0) ids.Append(", ");
+                    ids.Append(GetDlgCtrlID(hwnd));
+                    return true;
+                }, IntPtr.Zero);
                 throw new Win32Exception(Marshal.GetLastWin32Error(),
-                    "Control not found: " + controlId);
+                    "Control not found: " + controlId + "; child IDs: " + ids);
             }
             return control;
         }
@@ -106,6 +154,87 @@ namespace AnemoneE2E
         {
             ulong value = (ulong)(ushort)controlId | ((ulong)(ushort)notification << 16);
             Send(window, WM_COMMAND, new UIntPtr(value), control);
+        }
+
+        public static void AssertClickThrough(IntPtr overlay)
+        {
+            const uint WS_POPUP = 0x80000000;
+            const uint WS_VISIBLE = 0x10000000;
+            RECT rect;
+            if (!GetWindowRect(overlay, out rect))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "GetWindowRect failed");
+            IntPtr target = CreateWindowExW(0, "BUTTON", "Anemone click target",
+                WS_POPUP | WS_VISIBLE, rect.Left + 20, rect.Top + 20, 80, 80,
+                IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            if (target == IntPtr.Zero)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "click target creation failed");
+            try
+            {
+                SendCommand(overlay, 103, 0, IntPtr.Zero);
+                POINT point = new POINT { X = rect.Left + 40, Y = rect.Top + 40 };
+                IntPtr hit = WindowFromPoint(point);
+                if (hit != target)
+                    throw new InvalidOperationException(
+                        "click-through hit-test returned " + hit + " instead of target " + target);
+            }
+            finally
+            {
+                SendCommand(overlay, 103, 0, IntPtr.Zero);
+                DestroyWindow(target);
+            }
+        }
+
+        public static void AssertMagneticFromSettings(IntPtr overlay, IntPtr settings)
+        {
+            const uint WS_EX_TOPMOST = 0x00000008;
+            const uint WS_POPUP = 0x80000000;
+            const uint WS_VISIBLE = 0x10000000;
+            const int MagneticControlId = 1211;
+            RECT overlayBefore;
+            if (!GetWindowRect(overlay, out overlayBefore))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "overlay GetWindowRect failed");
+
+            IntPtr target = CreateWindowExW(WS_EX_TOPMOST, "BUTTON", "Anemone magnetic target",
+                WS_POPUP | WS_VISIBLE, overlayBefore.Left + 240, overlayBefore.Top + 180,
+                180, 100, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            if (target == IntPtr.Zero)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "magnetic target creation failed");
+
+            IntPtr checkbox = RequireControl(settings, MagneticControlId);
+            try
+            {
+                if (!SetForegroundWindow(target) || !SetForegroundWindow(settings) ||
+                    GetForegroundWindow() != settings)
+                    throw new InvalidOperationException("Could not prepare magnetic target z-order");
+
+                Send(checkbox, BM_SETCHECK, new UIntPtr(BST_CHECKED), IntPtr.Zero);
+                SendCommand(settings, MagneticControlId, 0, checkbox);
+                System.Threading.Thread.Sleep(300);
+
+                RECT targetBefore;
+                if (!GetWindowRect(target, out targetBefore))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "target GetWindowRect failed");
+                if (!SetWindowPos(target, IntPtr.Zero, targetBefore.Left + 30, targetBefore.Top + 20,
+                    0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "target move failed");
+                System.Threading.Thread.Sleep(500);
+
+                RECT overlayAfter;
+                if (!GetWindowRect(overlay, out overlayAfter))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "overlay GetWindowRect failed");
+                if (overlayAfter.Left - overlayBefore.Left != 30 ||
+                    overlayAfter.Top - overlayBefore.Top != 20)
+                    throw new InvalidOperationException(
+                        "magnetic overlay moved by (" +
+                        (overlayAfter.Left - overlayBefore.Left) + ", " +
+                        (overlayAfter.Top - overlayBefore.Top) + ") instead of (30, 20)");
+            }
+            finally
+            {
+                Send(checkbox, BM_SETCHECK, new UIntPtr(BST_UNCHECKED), IntPtr.Zero);
+                SendCommand(settings, MagneticControlId, 0, checkbox);
+                DestroyWindow(target);
+            }
         }
 
         private static long Send(IntPtr hwnd, uint message, UIntPtr wparam, IntPtr lparam)
@@ -216,6 +345,9 @@ try {
         -Title '아네모네' `
         -Description '메인'
 
+    # Verify that click-through skips the layered top-level overlay across processes.
+    [AnemoneE2E.NativeMethods]::AssertClickThrough($mainWindow)
+
     # Open Settings through the same WM_COMMAND path used by the context menu.
     [AnemoneE2E.NativeMethods]::SendCommand($mainWindow, 108, 0, [IntPtr]::Zero)
     $settingsWindow = Wait-ProcessWindow `
@@ -223,6 +355,9 @@ try {
         -ClassName '#32770' `
         -Title '아네모네 설정' `
         -Description '설정'
+
+    # Enable magnetic mode through Settings and follow an external-process target window.
+    [AnemoneE2E.NativeMethods]::AssertMagneticFromSettings($mainWindow, $settingsWindow)
 
     # Select Google (index 1) and deliver the normal CBN_SELCHANGE notification.
     $engineCombo = [AnemoneE2E.NativeMethods]::RequireControl($settingsWindow, 1260)
@@ -281,7 +416,7 @@ try {
         throw "로그 파일이 생성되지 않았습니다: $logPath"
     }
 
-    Write-Host 'GUI settings persistence and clean-exit E2E test passed.'
+    Write-Host 'GUI click-through, magnetic, settings persistence, and clean-exit E2E test passed.'
 }
 finally {
     if ($null -ne $process) {

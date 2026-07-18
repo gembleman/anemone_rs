@@ -44,19 +44,6 @@ pub(super) enum EngineGroup {
     Custom = 4,
 }
 
-/// 반복 모드 라벨 (repeat_text_mode 값에 대응)
-pub(super) fn repeat_mode_label(mode: u8) -> String {
-    let name = match mode {
-        0 => "끄기",
-        1 => "한 번",
-        2 => "계속",
-        3 => "역순",
-        4 => "랜덤",
-        _ => "?",
-    };
-    format!("반복: {}", name)
-}
-
 pub(super) fn mask_secret(secret: &str) -> String {
     if secret.is_empty() {
         return String::new();
@@ -172,8 +159,26 @@ unsafe extern "system" fn settings_dialog_proc(
         };
 
         if msg == WM_DPICHANGED {
+            let mut can_flush = false;
             if let Ok(mut dialog) = dialog.try_borrow_mut() {
                 dialog.handle_dpi_changed(wparam, lparam);
+                can_flush = true;
+            } else {
+                super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
+            }
+            if can_flush {
+                super::helpers::flush_deferred_dialog_messages(hwnd);
+            }
+            return 1;
+        }
+
+        if msg == crate::dialogs::glossary::WM_GLOSSARY_APPLIED {
+            if let Ok(dialog) = dialog.try_borrow() {
+                dialog.refresh_glossary_count();
+                drop(dialog);
+                super::helpers::flush_deferred_dialog_messages(hwnd);
+            } else {
+                super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
             }
             return 1;
         }
@@ -181,28 +186,41 @@ unsafe extern "system" fn settings_dialog_proc(
         if let Ok(mut dialog) = dialog.try_borrow_mut()
             && let Some(result) = dialog.handle_message(msg, wparam, lparam)
         {
+            drop(dialog);
+            super::helpers::flush_deferred_dialog_messages(hwnd);
             return result.0;
         }
 
-        match msg {
+        let mut can_flush = false;
+        let result = match msg {
             WM_COMMAND => {
                 let id = (wparam.0 & 0xFFFF) as u16;
                 let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
                 if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     dialog.handle_command(id, notify_code);
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
                 }
                 1
             }
             WM_CLOSE => {
-                if let Ok(dialog) = dialog.try_borrow() {
-                    dialog.persist_pending_changes();
+                match dialog.try_borrow() {
+                    Ok(dialog) => {
+                        let should_close = dialog.persist_pending_changes();
+                        drop(dialog);
+                        can_flush = true;
+                        if should_close {
+                            let _ = DestroyWindow(hwnd);
+                        }
+                    }
+                    Err(_) => super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam),
                 }
-                let _ = DestroyWindow(hwnd);
                 1
             }
             WM_DESTROY => {
                 if let Ok(dialog) = dialog.try_borrow() {
-                    dialog.persist_pending_changes();
+                    let _ = dialog.persist_pending_changes();
                 }
                 unregister_resource_dialog(hwnd);
                 SETTINGS_INSTANCE.with(|slot| {
@@ -213,7 +231,11 @@ unsafe extern "system" fn settings_dialog_proc(
                 1
             }
             _ => 0,
+        };
+        if can_flush {
+            super::helpers::flush_deferred_dialog_messages(hwnd);
         }
+        result
     }
 }
 
@@ -229,6 +251,12 @@ impl SettingsDialog {
         config: Rc<RefCell<Config>>,
         on_change: Option<SettingsChangeCallback>,
     ) -> Result<HWND> {
+        if let Some(hwnd) = Self::current_hwnd() {
+            unsafe {
+                let _ = SetForegroundWindow(hwnd);
+            }
+            return Ok(hwnd);
+        }
         // SAFETY: None은 현재 프로세스 모듈을 뜻한다.
         let instance = unsafe { GetModuleHandleW(None)? };
         SETTINGS_INIT_ERROR.with(|slot| {
@@ -283,12 +311,31 @@ impl SettingsDialog {
         Ok(hwnd)
     }
 
+    pub(crate) fn current_hwnd() -> Option<HWND> {
+        let hwnd = SETTINGS_INSTANCE.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .and_then(|dialog| dialog.try_borrow().ok().map(|dialog| dialog.hwnd))
+        })?;
+        unsafe { IsWindow(Some(hwnd)).as_bool().then_some(hwnd) }
+    }
+
     /// 주 창이 설정 요청을 처리한 뒤 실제 magnetic 상태를 반영한다.
     pub(crate) fn set_magnetic_checked(dialog_hwnd: HWND, enabled: bool) {
         unsafe {
             let _ = CheckDlgButton(
                 dialog_hwnd,
                 ctrl_id::USE_MAGNETIC as i32,
+                if enabled { BST_CHECKED } else { BST_UNCHECKED },
+            );
+        }
+    }
+
+    pub(crate) fn set_clipboard_checked(dialog_hwnd: HWND, enabled: bool) {
+        unsafe {
+            let _ = CheckDlgButton(
+                dialog_hwnd,
+                ctrl_id::CLIPBOARD_WATCH as i32,
                 if enabled { BST_CHECKED } else { BST_UNCHECKED },
             );
         }

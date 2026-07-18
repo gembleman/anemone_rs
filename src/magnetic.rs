@@ -6,7 +6,10 @@ use std::ptr;
 use std::rc::Rc;
 
 use windows::{
-    Win32::{Foundation::*, UI::Accessibility::*, UI::WindowsAndMessaging::*},
+    Win32::{
+        Foundation::*, System::Threading::GetCurrentProcessId, UI::Accessibility::*,
+        UI::WindowsAndMessaging::*,
+    },
     core::*,
 };
 
@@ -19,7 +22,6 @@ struct MagneticState {
     is_minimized: bool,
     offset_x: i32,
     offset_y: i32,
-    minimize_with_target: bool,
     config: Rc<RefCell<Config>>,
 }
 
@@ -50,16 +52,13 @@ impl MagneticManager {
             return Ok(());
         }
 
-        // SAFETY: GetForegroundWindow returns a valid HWND or null (checked below).
-        let target = unsafe { GetForegroundWindow() };
-        if target.is_invalid() || target == self.main_hwnd {
+        let Some(target) = find_external_target_window() else {
             return Err(Error::from_hresult(HRESULT::from_win32(
                 ERROR_INVALID_WINDOW_HANDLE.0,
             )));
-        }
+        };
 
         let (offset_x, offset_y) = self.calculate_offset(target)?;
-        let minimize_with_target = self.config.borrow().magnetic_minimize;
 
         MAGNETIC_INSTANCE.with(|cell| {
             *cell.borrow_mut() = Some(MagneticState {
@@ -68,7 +67,6 @@ impl MagneticManager {
                 is_minimized: false,
                 offset_x,
                 offset_y,
-                minimize_with_target,
                 config: self.config.clone(),
             });
         });
@@ -181,7 +179,7 @@ impl MagneticManager {
                 }
 
                 EVENT_SYSTEM_MINIMIZESTART
-                    if hwnd == state.target_hwnd && state.minimize_with_target =>
+                    if hwnd == state.target_hwnd && state.config.borrow().magnetic_minimize =>
                 {
                     state.is_minimized = true;
                     // SAFETY: Called within unsafe extern "system" fn
@@ -222,6 +220,27 @@ impl MagneticManager {
                 _ => {}
             }
         });
+    }
+}
+
+/// 현재 foreground가 앱 자신의 메뉴/대화상자여도 z-order 아래의 첫 외부 top-level
+/// 창을 찾는다. 메뉴와 설정창이 foreground를 가져간 뒤 자석 모드를 켜는 경로를 함께 지원한다.
+fn find_external_target_window() -> Option<HWND> {
+    unsafe {
+        let own_pid = GetCurrentProcessId();
+        let mut candidate = GetForegroundWindow();
+        while !candidate.is_invalid() {
+            let mut candidate_pid = 0;
+            GetWindowThreadProcessId(candidate, Some(&mut candidate_pid));
+            if candidate_pid != 0
+                && candidate_pid != own_pid
+                && IsWindowVisible(candidate).as_bool()
+            {
+                return Some(candidate);
+            }
+            candidate = GetWindow(candidate, GW_HWNDNEXT).ok()?;
+        }
+        None
     }
 }
 

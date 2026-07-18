@@ -13,7 +13,6 @@ pub enum BoolSetting {
     SeparateName,
     WindowTopmost,
     MagneticMinimize,
-    TempWindowHide,
     ClipboardWatch,
     ClickThrough,
 }
@@ -32,7 +31,6 @@ pub enum NumericSetting {
 
 pub enum SettingsChange {
     Toggle(BoolSetting),
-    CycleRepeatTextMode,
     TextAlignment(TextAlign),
     Numeric {
         setting: NumericSetting,
@@ -65,10 +63,6 @@ impl SettingsEditor {
     pub fn apply(config: &mut Config, change: SettingsChange) -> SettingsChangeResult {
         let changed = match change {
             SettingsChange::Toggle(setting) => toggle(config, setting),
-            SettingsChange::CycleRepeatTextMode => {
-                let next = config.repeat_text_mode.checked_add(1).unwrap_or(0) % 5;
-                set_if_changed(&mut config.repeat_text_mode, next)
-            }
             SettingsChange::TextAlignment(value) => set_if_changed(&mut config.text_align, value),
             SettingsChange::Numeric { setting, value } => set_numeric(config, setting, value),
             SettingsChange::BackgroundColor(argb) => {
@@ -121,7 +115,6 @@ fn toggle(config: &mut Config, setting: BoolSetting) -> bool {
         BoolSetting::SeparateName => &mut config.separate_name,
         BoolSetting::WindowTopmost => &mut config.window_topmost,
         BoolSetting::MagneticMinimize => &mut config.magnetic_minimize,
-        BoolSetting::TempWindowHide => &mut config.temp_window_hide,
         BoolSetting::ClipboardWatch => &mut config.clipboard_watch,
         BoolSetting::ClickThrough => &mut config.click_through,
     };

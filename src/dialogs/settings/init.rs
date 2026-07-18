@@ -107,14 +107,6 @@ impl SettingsDialog {
         self.register_engine_controls()?;
         self.initialize_tab_titles()?;
         self.initialize_values()?;
-        // 반복 정책과 임시 숨김은 런타임 계약이 정의될 때까지 노출하지 않는다.
-        for id in [ctrl_id::REPEAT_TEXT, ctrl_id::HIDEWIN] {
-            let control = self.control(id)?;
-            unsafe {
-                let _ = ShowWindow(control, SW_HIDE);
-            }
-        }
-
         for &hwnd in &self.tab_controls[TAB_DISPLAY] {
             unsafe {
                 let _ = ShowWindow(hwnd, SW_HIDE);
@@ -247,10 +239,6 @@ impl SettingsDialog {
         self.set_checked(ctrl_id::PRINT_TRANSTEXT, config.show_translation)?;
         self.set_checked(ctrl_id::PRINT_ORGNAME, config.show_name)?;
         self.set_checked(ctrl_id::SEPERATE_NAME, config.separate_name)?;
-        self.set_text(
-            ctrl_id::REPEAT_TEXT,
-            &repeat_mode_label(config.repeat_text_mode),
-        )?;
         self.set_checked(
             ctrl_id::TEXTALIGN_LEFT,
             config.text_align == TextAlign::Left,
@@ -266,7 +254,6 @@ impl SettingsDialog {
         self.set_checked(ctrl_id::TOPMOST, config.window_topmost)?;
         self.set_checked(ctrl_id::USE_MAGNETIC, config.magnetic_mode)?;
         self.set_checked(ctrl_id::MAGNETIC_MINIMIZE, config.magnetic_minimize)?;
-        self.set_checked(ctrl_id::HIDEWIN, config.temp_window_hide)?;
         self.set_checked(ctrl_id::CLIPBOARD_WATCH, config.clipboard_watch)?;
         self.set_checked(ctrl_id::WNDCLICK_THROUGH, config.click_through)?;
 

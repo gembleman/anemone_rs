@@ -5,20 +5,20 @@ use std::rc::Rc;
 
 use windows::{
     Win32::{
-        Foundation::{GetLastError, HMODULE, HWND},
+        Foundation::{COLORREF, GetLastError, HMODULE, HWND},
         Graphics::Gdi::{HBRUSH, UpdateWindow},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW,
-            HICON, IDC_ARROW, IsWindow, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
-            RegisterClassExW, TranslateMessage, WNDCLASSEXW, WNDPROC, WS_EX_NOREDIRECTIONBITMAP,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            HICON, IDC_ARROW, IsWindow, LWA_ALPHA, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
+            RegisterClassExW, SetLayeredWindowAttributes, TranslateMessage, WNDCLASSEXW, WNDPROC,
+            WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{Error, HRESULT, PCWSTR, Result},
 };
 
-use super::{APP, App, CLASS_NAME, DialogWindows, PARENT_CLASS_NAME, WINDOW_TITLE, state};
+use super::{APP, App, CLASS_NAME, PARENT_CLASS_NAME, WINDOW_TITLE, state};
 use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
 use crate::constants::{
@@ -114,7 +114,7 @@ impl App {
 
             // Redirection surface 없이 DComp premultiplied-alpha visual을 노출한다.
             let hwnd = CreateWindowExW(
-                WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 CLASS_NAME,
                 WINDOW_TITLE,
                 WS_POPUP,
@@ -127,6 +127,9 @@ impl App {
                 Some(instance.into()),
                 None,
             )?;
+            // Top-level WS_EX_TRANSPARENT의 hit-test 통과는 layered window와 결합해야
+            // 다른 process 창까지 보장된다. 불투명도는 DComp의 per-pixel alpha가 담당한다.
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
             created_windows.main = Some(hwnd);
 
             // TaskbarCreated 메시지 등록
@@ -158,7 +161,6 @@ impl App {
                 hotkey: None,
                 clipboard: ClipboardWatcher::new(hwnd),
                 taskbar_created_msg,
-                dialogs: DialogWindows::default(),
                 backlog_store: Rc::new(RefCell::new(BacklogStore::new())),
                 magnetic: None,
                 d2d_renderer: Some(d2d_renderer),
@@ -166,6 +168,7 @@ impl App {
                 composition_init_failures: 0,
                 composition_retry_scheduled: false,
                 hit_region: Vec::new(),
+                full_hit_region: true,
             }));
 
             // 전역 인스턴스 설정
@@ -195,7 +198,10 @@ impl App {
             // Listener 등록 중 재진입한 message는 mutable borrow가 끝난 뒤 처리한다.
             if should_start_clipboard {
                 let mut app_ref = app.borrow_mut();
-                app_ref.clipboard.start();
+                if let Err(error) = app_ref.clipboard.start() {
+                    app_ref.config.borrow_mut().clipboard_watch = false;
+                    tracing::error!("Failed to start clipboard listener: {error}");
+                }
             }
             Self::drain_deferred_messages(&app);
 

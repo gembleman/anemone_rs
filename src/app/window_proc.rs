@@ -13,7 +13,9 @@ use windows::Win32::{
     },
 };
 
-use super::{APP, App, CLIPBOARD_DEBOUNCE_TIMER, COMPOSITION_RETRY_TIMER};
+use super::{
+    APP, App, CLIPBOARD_DEBOUNCE_TIMER, CLIPBOARD_READ_RETRY_TIMER, COMPOSITION_RETRY_TIMER,
+};
 use crate::constants::{
     MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
     WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
@@ -172,6 +174,12 @@ impl App {
                     Some(LRESULT(0))
                 }
 
+                WM_TIMER if wparam.0 == CLIPBOARD_READ_RETRY_TIMER => {
+                    let _ = KillTimer(Some(hwnd), CLIPBOARD_READ_RETRY_TIMER);
+                    self.handle_clipboard_change();
+                    Some(LRESULT(0))
+                }
+
                 WM_CLIPBOARDUPDATE => {
                     self.handle_clipboard_change();
                     Some(LRESULT(0))
@@ -203,7 +211,7 @@ impl App {
                 }
 
                 _ if msg == WM_TRANSLATION_COMPLETE => {
-                    self.handle_translation_complete(wparam.0 as u64);
+                    self.handle_translation_complete();
                     Some(LRESULT(0))
                 }
 
@@ -349,16 +357,22 @@ impl App {
                 WM_NCHITTEST => {
                     let x = (lparam.0 & 0xFFFF) as i16 as i32;
                     let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                    if let Ok(app_ref) = app.try_borrow() {
+                        // 클릭 통과는 resize/drag 판정보다 항상 우선한다. 확장 스타일과
+                        // 명시적 hit-test를 함께 적용해 다른 프로세스의 아래 창도 후보가 된다.
+                        if app_ref.config.borrow().click_through {
+                            return LRESULT(HTTRANSPARENT as isize);
+                        }
+                        if !app_ref.full_hit_region
+                            && !window::point_in_any_rect(hwnd, x, y, &app_ref.hit_region)
+                        {
+                            return LRESULT(HTTRANSPARENT as isize);
+                        }
+                    }
                     if let Some(hit) =
                         window::hit_test_resize_border(hwnd, x, y, RESIZE_BORDER_WIDTH)
                     {
                         return LRESULT(hit as isize);
-                    }
-                    if let Ok(app_ref) = app.try_borrow()
-                        && !app_ref.hit_region.is_empty()
-                        && !window::point_in_any_rect(hwnd, x, y, &app_ref.hit_region)
-                    {
-                        return LRESULT(HTTRANSPARENT as isize);
                     }
                     return LRESULT(HTCAPTION as isize);
                 }

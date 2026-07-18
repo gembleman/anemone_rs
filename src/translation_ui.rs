@@ -18,7 +18,7 @@ use crate::translation::{Language, TranslationEngine};
 struct WindowMessageNotifier;
 
 impl CompletionNotifier for WindowMessageNotifier {
-    fn notify(&self, target: TargetId, request_id: u64) -> Result<(), String> {
+    fn notify(&self, target: TargetId, _request_id: u64) -> Result<(), String> {
         let hwnd = HWND(target.get() as *mut std::ffi::c_void);
         // SAFETY: 대상 등록 세대 잠금을 보유한 워커가 호출한다. UI 파괴 경로의
         // unregister도 같은 잠금을 통과하므로 해제된 세대에는 게시하지 않는다.
@@ -26,7 +26,9 @@ impl CompletionNotifier for WindowMessageNotifier {
             PostMessageW(
                 Some(hwnd),
                 WM_TRANSLATION_COMPLETE,
-                WPARAM(request_id as usize),
+                // request ID는 u64이므로 32-bit WPARAM에 싣지 않는다. message는
+                // 대상별 completion queue를 비우라는 신호로만 사용한다.
+                WPARAM(0),
                 LPARAM(0),
             )
         }
@@ -65,8 +67,8 @@ pub(crate) fn request_translation(
     )
 }
 
-pub(crate) fn take_response(request_id: u64) -> Option<TranslationResponse> {
-    dispatch().take_response(request_id)
+pub(crate) fn take_response(hwnd: HWND) -> Option<(u64, TranslationResponse)> {
+    dispatch().take_response_for_target(target(hwnd))
 }
 
 pub(crate) fn unregister_translation_hwnd(hwnd: HWND) {

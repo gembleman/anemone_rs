@@ -1,9 +1,8 @@
 //! D3D11/DXGI/D2D/DirectComposition 렌더링 자원과 수명을 관리한다.
 //!
 //! 렌더 경로: `D3D11 → DXGI flip swap chain → D2D device context → DComp → DWM`.
-//! 창은 `WS_EX_NOREDIRECTIONBITMAP`을 사용하고 `WS_EX_LAYERED`를 제외해야 한다.
-//! 픽셀 알파는 유지되지만 히트 테스트는 창 단위이므로 투명 영역은
-//! `WM_NCHITTEST`에서 별도로 처리한다.
+//! 창은 `WS_EX_LAYERED`를 사용해 top-level `WS_EX_TRANSPARENT` hit-test가 다른
+//! process 창까지 통과하도록 한다. DirectComposition target은 layered HWND도 지원한다.
 
 use windows::{
     Win32::{

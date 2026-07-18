@@ -61,6 +61,26 @@ pub enum TranslationEngine {
 }
 
 impl TranslationEngine {
+    pub const ALL: [Self; 6] = [
+        Self::EzTrans,
+        Self::Google,
+        Self::DeepL,
+        Self::Papago,
+        Self::Llm,
+        Self::Custom,
+    ];
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::EzTrans => "EzTrans",
+            Self::Google => "Google",
+            Self::DeepL => "DeepL",
+            Self::Papago => "Papago",
+            Self::Llm => "LLM",
+            Self::Custom => "Custom API",
+        }
+    }
+
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::EzTrans),

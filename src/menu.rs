@@ -21,7 +21,6 @@ pub mod id {
     pub const BACKLOG: u16 = 109;
     pub const TRANSLATE: u16 = 111;
     pub const FILE_TRANS: u16 = 112;
-    pub const HOOK_SETTINGS: u16 = 113;
     pub const EXIT: u16 = 110;
 
     // 텍스트 크기 조절

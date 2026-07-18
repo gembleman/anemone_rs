@@ -121,10 +121,14 @@ unsafe extern "system" fn file_trans_dialog_proc(
             return 0;
         };
 
-        match msg {
+        let mut can_flush = false;
+        let result = match msg {
             WM_DPICHANGED => {
                 if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     dialog.handle_dpi_changed(wparam, lparam);
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
                 }
                 1
             }
@@ -135,6 +139,9 @@ unsafe extern "system" fn file_trans_dialog_proc(
                     let _ = DestroyWindow(hwnd);
                 } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     dialog.handle_command(id, notify_code);
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
                 }
                 1
             }
@@ -152,7 +159,11 @@ unsafe extern "system" fn file_trans_dialog_proc(
                 1
             }
             _ => 0,
+        };
+        if can_flush {
+            super::helpers::flush_deferred_dialog_messages(hwnd);
         }
+        result
     }
 }
 
@@ -476,6 +487,9 @@ impl FileTransDialog {
 
     /// 번역 시작
     fn start_translation(&mut self) {
+        if FileTransProgressDialog::activate_existing() {
+            return;
+        }
         // 다이얼로그가 떠 있는 동안 다른 창에서 설정이 바뀌었을 수 있으므로
         // 번역 시작 직전에 안내 라벨을 한 번 갱신해 최신 상태를 보여준다.
         self.update_engine_label();
@@ -544,6 +558,11 @@ impl FileTransDialog {
         let task = FileTransRunner::start(job_data);
         if let Err(e) = FileTransProgressDialog::show(self.hwnd, task) {
             tracing::error!("Failed to create progress dialog: {:?}", e);
+            crate::dialogs::helpers::show_error_message(
+                self.hwnd,
+                "파일 번역 오류",
+                &format!("진행률 창을 만들 수 없어 작업을 시작하지 못했습니다.\n\n{e}"),
+            );
         }
     }
 }

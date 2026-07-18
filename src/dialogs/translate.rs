@@ -151,16 +151,23 @@ unsafe extern "system" fn translate_dialog_proc(
             return 0;
         };
 
-        match msg {
+        let mut can_flush = false;
+        let result = match msg {
             WM_TRANSLATION_COMPLETE => {
                 if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_translation_complete(wparam.0 as u64);
+                    dialog.handle_translation_complete();
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_message(hwnd, msg, WPARAM(0), LPARAM(0));
                 }
                 1
             }
             WM_DPICHANGED => {
                 if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     dialog.handle_dpi_changed(wparam, lparam);
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
                 }
                 1
             }
@@ -177,6 +184,9 @@ unsafe extern "system" fn translate_dialog_proc(
                         }
                     }
                     dialog.handle_command(id, notify_code);
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
                 }
                 1
             }
@@ -184,6 +194,9 @@ unsafe extern "system" fn translate_dialog_proc(
                 let _ = KillTimer(Some(hwnd), AUTO_TRANSLATE_TIMER);
                 if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     dialog.do_translate();
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, LPARAM(0));
                 }
                 1
             }
@@ -203,7 +216,11 @@ unsafe extern "system" fn translate_dialog_proc(
                 1
             }
             _ => 0,
+        };
+        if can_flush {
+            super::helpers::flush_deferred_dialog_messages(hwnd);
         }
+        result
     }
 }
 
@@ -339,8 +356,8 @@ impl TranslateDialog {
             let _ = CheckDlgButton(self.hwnd, ctrl_id::RADIO_OUTPUT_1 as i32, BST_CHECKED);
         }
 
-        for name in ["EzTrans", "Google", "DeepL", "Papago", "LLM"] {
-            self.add_combobox_item(self.engine_combo, name);
+        for engine in &TranslationEngine::ALL[..CUSTOM_ENGINE_INDEX] {
+            self.add_combobox_item(self.engine_combo, engine.display_name());
         }
         {
             let config = self.config.borrow();
@@ -503,6 +520,7 @@ impl TranslateDialog {
             RADIO_OUTPUT_3 => self.manual_options.output_format = ManualOutputFormat::NameSplit,
             // CBN_SELCHANGE
             COMBO_ENGINE | COMBO_SOURCE_LANG | COMBO_TARGET_LANG if notify_code == 1 => {
+                self.invalidate_translation_route();
                 if cmd == COMBO_ENGINE {
                     // SAFETY: engine_combo is a valid handle.
                     let engine_idx = unsafe {
@@ -530,12 +548,15 @@ impl TranslateDialog {
                 self.apply_current_settings();
             }
             COMBO_LLM_PROVIDER if notify_code == 1 => {
+                self.invalidate_translation_route();
                 self.apply_llm_provider();
             }
             EDIT_LLM_MODEL if notify_code == EN_CHANGE => {
+                self.invalidate_translation_route();
                 self.apply_llm_model();
             }
             EDIT_LLM_API_KEY if notify_code == EN_CHANGE => {
+                self.invalidate_translation_route();
                 self.apply_llm_api_key();
             }
             _ => {}
@@ -673,6 +694,9 @@ impl TranslateDialog {
     }
 
     fn schedule_auto_translate(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), AUTO_TRANSLATE_TIMER);
+        }
         let engine_idx =
             unsafe { SendMessageW(self.engine_combo, CB_GETCURSEL, None, None).0 as u8 };
         let Some(engine) = engine_from_combo_index(engine_idx as usize) else {
@@ -686,8 +710,12 @@ impl TranslateDialog {
         if delay_ms == 0 {
             self.do_translate();
         } else {
-            unsafe {
-                SetTimer(Some(self.hwnd), AUTO_TRANSLATE_TIMER, delay_ms, None);
+            let timer = unsafe { SetTimer(Some(self.hwnd), AUTO_TRANSLATE_TIMER, delay_ms, None) };
+            if timer == 0 {
+                tracing::warn!(
+                    "auto-translate timer could not be created; dispatching immediately"
+                );
+                self.do_translate();
             }
         }
     }
@@ -751,10 +779,6 @@ impl TranslateDialog {
         if source.is_empty() {
             return;
         }
-        if self.in_flight_id.is_some() && source == self.last_submitted_source {
-            return;
-        }
-
         self.apply_current_settings();
 
         let text = self.manual_options.prepare_input(&source);
@@ -797,8 +821,8 @@ impl TranslateDialog {
     }
 
     /// 번역 완료 처리. WPARAM 의 `req_id` 로 자신의 응답만 꺼낸다.
-    fn handle_translation_complete(&mut self, req_id: u64) {
-        let Some(response) = take_response(req_id) else {
+    fn handle_translation_complete(&mut self) {
+        let Some((req_id, response)) = take_response(self.hwnd) else {
             return;
         };
         if self.in_flight_id != Some(req_id) {

@@ -195,9 +195,20 @@ impl DispatchState {
         }
     }
 
+    #[cfg(test)]
     fn take_response(&mut self, req_id: u64) -> Option<TranslationResponse> {
         let idx = self.pending.iter().position(|e| e.req_id == req_id)?;
         self.pending.remove(idx).map(|e| e.response)
+    }
+
+    fn take_response_for_target(&mut self, target: TargetId) -> Option<(u64, TranslationResponse)> {
+        let idx = self
+            .pending
+            .iter()
+            .position(|entry| entry.target == target)?;
+        self.pending
+            .remove(idx)
+            .map(|entry| (entry.req_id, entry.response))
     }
 
     fn drop_response(&mut self, req_id: u64) {
@@ -361,9 +372,20 @@ impl TranslationDispatch {
     }
 
     /// 호출자가 자신의 응답을 꺼낸다.
+    #[cfg(test)]
     pub(crate) fn take_response(&self, req_id: u64) -> Option<TranslationResponse> {
         let mut st = self.shared.state.lock().expect("dispatch state poisoned");
         st.take_response(req_id)
+    }
+
+    /// HWND처럼 pointer-width인 대상에는 request ID를 message payload로 싣지 않고,
+    /// 대상별 완료 큐에서 원래 64-bit ID와 응답을 함께 꺼낸다.
+    pub(crate) fn take_response_for_target(
+        &self,
+        target: TargetId,
+    ) -> Option<(u64, TranslationResponse)> {
+        let mut st = self.shared.state.lock().expect("dispatch state poisoned");
+        st.take_response_for_target(target)
     }
 
     /// 소비자가 사라질 때 라우팅과 대기 응답을 함께 정리한다.

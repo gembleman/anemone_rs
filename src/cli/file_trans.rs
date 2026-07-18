@@ -80,6 +80,7 @@ pub(super) fn run(args: Args) -> Result<(), String> {
     run_file_trans(&job, |event| match event {
         ProgressEvent::TotalLines(value) => total.set(value.max(0) as usize),
         ProgressEvent::Error(message) => *error.borrow_mut() = Some(message),
+        ProgressEvent::Cancelled => *error.borrow_mut() = Some("사용자가 취소했습니다.".into()),
         _ => {}
     });
 

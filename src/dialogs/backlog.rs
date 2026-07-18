@@ -3,7 +3,7 @@
 //! RichEdit 기반 이력 뷰어.
 //! 원문/번역 필터링 및 파일 저장 지원.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use windows::{
@@ -12,7 +12,7 @@ use windows::{
         System::LibraryLoader::{GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
         UI::Controls::RichEdit::{
             CFE_BOLD, CFE_ITALIC, CFM_BOLD, CFM_COLOR, CFM_FACE, CFM_ITALIC, CFM_SIZE,
-            CHARFORMAT2W, EM_SETBKGNDCOLOR, EM_SETCHARFORMAT, SCF_SELECTION,
+            CHARFORMAT2W, EM_EXLIMITTEXT, EM_SETBKGNDCOLOR, EM_SETCHARFORMAT, SCF_SELECTION,
         },
         UI::Controls::*,
         UI::WindowsAndMessaging::*,
@@ -44,7 +44,9 @@ mod ctrl_id {
     pub const GROUP_ACTION: u16 = 3031;
 }
 
-use crate::backlog::{BacklogFilter, BacklogStore, LogEntry, TextKind};
+use crate::backlog::{
+    BacklogFilter, BacklogStore, LogEntry, MAX_BACKLOG_ENTRIES, MAX_BACKLOG_TEXT_BYTES, TextKind,
+};
 
 /// 백로그 대화상자
 pub struct BacklogDialog {
@@ -70,6 +72,7 @@ thread_local! {
     static RICHEDIT_LOADED: RefCell<bool> = const { RefCell::new(false) };
     static BACKLOG_PENDING: RefCell<Option<Rc<RefCell<BacklogStore>>>> = const { RefCell::new(None) };
     static BACKLOG_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+    static BACKLOG_VIEW_DIRTY: Cell<bool> = const { Cell::new(false) };
 }
 
 define_dialog_instance!(BACKLOG_INSTANCE: BacklogDialog);
@@ -115,19 +118,26 @@ unsafe extern "system" fn backlog_dialog_proc(
             return 0;
         };
 
-        match msg {
+        let mut can_flush = false;
+        let result = match msg {
             WM_SIZE => {
                 if let Ok(dialog) = dialog.try_borrow() {
                     dialog.on_size(
                         (lparam.0 & 0xFFFF) as i32,
                         ((lparam.0 >> 16) & 0xFFFF) as i32,
                     );
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
                 }
                 1
             }
             WM_DPICHANGED => {
                 if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     dialog.handle_dpi_changed(wparam, lparam);
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
                 }
                 1
             }
@@ -137,6 +147,9 @@ unsafe extern "system" fn backlog_dialog_proc(
                     let _ = DestroyWindow(hwnd);
                 } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     dialog.handle_command(id);
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
                 }
                 1
             }
@@ -154,7 +167,11 @@ unsafe extern "system" fn backlog_dialog_proc(
                 1
             }
             _ => 0,
+        };
+        if can_flush {
+            super::helpers::flush_deferred_dialog_messages(hwnd);
         }
+        result
     }
 }
 
@@ -263,6 +280,15 @@ impl BacklogDialog {
                 Some(WPARAM(1)),
                 Some(LPARAM(0)),
             );
+            // Store 상한에 포맷 label/newline 여유를 더한 명시적 문자 제한.
+            let display_limit =
+                MAX_BACKLOG_TEXT_BYTES.saturating_add(MAX_BACKLOG_ENTRIES.saturating_mul(128));
+            let _ = SendMessageW(
+                self.richedit,
+                EM_EXLIMITTEXT,
+                Some(WPARAM(0)),
+                Some(LPARAM(display_limit as isize)),
+            );
         }
         self.refresh_richedit();
         Ok(())
@@ -292,6 +318,7 @@ impl BacklogDialog {
             BTN_FONT => self.choose_font(),
             _ => {}
         }
+        self.refresh_if_dirty();
     }
 
     fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
@@ -414,6 +441,12 @@ impl BacklogDialog {
         self.append_styled_texts_to_richedit(segments);
     }
 
+    fn refresh_if_dirty(&self) {
+        if BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false)) {
+            self.refresh_richedit();
+        }
+    }
+
     /// 폰트 선택 대화상자
     fn choose_font(&mut self) {
         let cfg = FontDialogConfig {
@@ -470,6 +503,11 @@ impl BacklogDialog {
 
         if let Err(error) = self.store.borrow().export_utf8(&path) {
             tracing::error!("backlog save failed: {error}");
+            super::helpers::show_error_message(
+                self.hwnd,
+                "백로그 저장 오류",
+                &format!("백로그를 파일에 저장하지 못했습니다.\n\n{error}"),
+            );
         }
     }
 
@@ -533,19 +571,23 @@ pub fn add_to_backlog(store: &Rc<RefCell<BacklogStore>>, entry: LogEntry) {
     let evicted = store.borrow_mut().push(entry);
     BACKLOG_INSTANCE.with(|cell| {
         let Ok(guard) = cell.try_borrow() else {
+            BACKLOG_VIEW_DIRTY.with(|dirty| dirty.set(true));
             return;
         };
-        if let Some(ref dialog) = *guard
-            && let Ok(d) = dialog.try_borrow()
-        {
-            if evicted {
-                d.refresh_richedit();
-            } else {
-                d.append_styled_texts_to_richedit(BacklogStore::render_entry(
-                    &entry_for_render,
-                    d.filter,
-                    d.add_linefeed,
-                ));
+        if let Some(ref dialog) = *guard {
+            match dialog.try_borrow() {
+                Ok(d) => {
+                    if evicted || BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false)) {
+                        d.refresh_richedit();
+                    } else {
+                        d.append_styled_texts_to_richedit(BacklogStore::render_entry(
+                            &entry_for_render,
+                            d.filter,
+                            d.add_linefeed,
+                        ));
+                    }
+                }
+                Err(_) => BACKLOG_VIEW_DIRTY.with(|dirty| dirty.set(true)),
             }
         }
     });

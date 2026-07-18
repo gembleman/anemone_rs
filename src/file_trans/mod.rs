@@ -126,6 +126,7 @@ pub enum ProgressEvent {
     FileProgress(i32),
     TotalProgress(i32),
     Complete,
+    Cancelled,
     Error(String),
 }
 

@@ -62,6 +62,24 @@ fn compute_outline_bitmap_bounds(
 }
 
 impl D2DRenderer {
+    /// 주어진 폭에서 DirectWrite가 계산한 실제 시각적 줄 높이를 반환한다.
+    /// 명시적 개행 수가 아니라 layout metrics를 사용하므로 자동 줄바꿈도 포함한다.
+    pub fn measure_text_height(
+        &self,
+        text: &str,
+        style: &TextRenderStyle,
+        max_width: f32,
+    ) -> Result<f32> {
+        const MEASURE_MAX_HEIGHT: f32 = 1_000_000.0;
+        let layout =
+            self.create_text_layout_uncached(text, style, max_width, MEASURE_MAX_HEIGHT)?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe {
+            layout.GetMetrics(&mut metrics)?;
+        }
+        Ok(metrics.height.max(style.font_size.max(1) as f32))
+    }
+
     /// 활성 render target에 본문과 cache된 outline/shadow를 그린다.
     /// 효과가 없으면 중간 bitmap 없이 본문만 그린다.
     pub fn draw_text(

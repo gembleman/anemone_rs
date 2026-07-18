@@ -185,7 +185,11 @@ pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
     let file_line_counts = match preflight_inputs(&job_data.input_files, &job_data.cancel_token) {
         Ok(counts) => counts,
         Err(error) => {
-            report(ProgressEvent::Error(error));
+            if job_data.cancel_token.load(Ordering::SeqCst) {
+                report(ProgressEvent::Cancelled);
+            } else {
+                report(ProgressEvent::Error(error));
+            }
             return;
         }
     };
@@ -240,7 +244,7 @@ pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
         .enumerate()
     {
         if job_data.cancel_token.load(Ordering::SeqCst) {
-            report(ProgressEvent::Error("사용자가 취소했습니다.".to_string()));
+            report(ProgressEvent::Cancelled);
             return;
         }
 
@@ -259,7 +263,11 @@ pub fn run(job_data: &FileTransJobData, report: impl Fn(ProgressEvent)) {
         ) {
             Ok(()) => {}
             Err(e) => {
-                report(ProgressEvent::Error(e));
+                if job_data.cancel_token.load(Ordering::SeqCst) {
+                    report(ProgressEvent::Cancelled);
+                } else {
+                    report(ProgressEvent::Error(e));
+                }
                 return;
             }
         }

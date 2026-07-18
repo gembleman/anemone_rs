@@ -8,7 +8,7 @@ impl App {
         // 재진입 borrow를 막기 위해 벤치 동안 클립보드 감시를 멈춘다.
         let was_watching = self.clipboard.is_watching();
         if was_watching {
-            self.clipboard.stop();
+            let _ = self.clipboard.stop();
         }
 
         // 캐시와 셰이더의 최초 비용을 제거한다.
@@ -26,7 +26,7 @@ impl App {
             if let Err(e) = self.paint() {
                 tracing::warn!("bench paint failed: {e}");
                 if was_watching {
-                    self.clipboard.start();
+                    let _ = self.clipboard.start();
                 }
                 return;
             }
@@ -35,7 +35,7 @@ impl App {
         acc.report("paint");
 
         if was_watching {
-            self.clipboard.start();
+            let _ = self.clipboard.start();
         }
     }
 
@@ -47,7 +47,7 @@ impl App {
         // 재진입 borrow를 막기 위해 벤치 동안 클립보드 감시를 멈춘다.
         let was_watching = self.clipboard.is_watching();
         if was_watching {
-            self.clipboard.stop();
+            let _ = self.clipboard.stop();
         }
 
         // 선택적으로 outline/shadow를 꺼 본문 비용을 분리한다.
@@ -81,7 +81,7 @@ impl App {
                     self.state.translated_text = t;
                 }
                 if was_watching {
-                    self.clipboard.start();
+                    let _ = self.clipboard.start();
                 }
                 return;
             }
@@ -105,7 +105,7 @@ impl App {
                     self.state.translated_text = t;
                 }
                 if was_watching {
-                    self.clipboard.start();
+                    let _ = self.clipboard.start();
                 }
                 return;
             }
@@ -122,7 +122,7 @@ impl App {
             self.state.translated_text = t;
         }
         if was_watching {
-            self.clipboard.start();
+            let _ = self.clipboard.start();
         }
     }
 }

@@ -27,7 +27,6 @@ fn menu_ids_map_to_distinct_commands() {
         menu::id::TRANSLATE,
         menu::id::BACKLOG,
         menu::id::FILE_TRANS,
-        menu::id::HOOK_SETTINGS,
         menu::id::TEXT_SIZE_UP,
         menu::id::TEXT_SIZE_DOWN,
         menu::id::EXIT,

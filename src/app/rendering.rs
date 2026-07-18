@@ -20,6 +20,7 @@ struct RenderBlock {
     style: TextRenderStyle,
     top: f32,
     height: f32,
+    gap_after: f32,
 }
 
 fn split_name(text: &str) -> Option<(&str, &str)> {
@@ -91,11 +92,14 @@ fn build_render_blocks(config: &Config, original: &str, translated: &str) -> Vec
                 style,
                 top,
                 height,
+                gap_after: if text_type == TextType::Name {
+                    config.name_margin as f32
+                } else {
+                    0.0
+                },
             };
             top += height;
-            if text_type == TextType::Name {
-                top += config.name_margin as f32;
-            }
+            top += block.gap_after;
             block
         })
         .collect()
@@ -158,7 +162,7 @@ impl App {
         let border_width = cfg.border_width;
         let border_color = cfg.border_color;
 
-        let render_blocks =
+        let mut render_blocks =
             build_render_blocks(&cfg, &self.state.original_text, &self.state.translated_text);
         let margin_x = cfg.text_margin_x;
         let margin_y = cfg.text_margin_y;
@@ -173,6 +177,20 @@ impl App {
             Some(r) => r,
             None => return Ok(()),
         };
+        let max_width = Self::text_layout_extent(self.state.client_size.width, margin_x);
+        if let Some(first) = render_blocks.first() {
+            let mut top = first.top;
+            for block in &mut render_blocks {
+                block.top = top;
+                match renderer.measure_text_height(&block.text, &block.style, max_width) {
+                    Ok(height) => block.height = height,
+                    Err(error) => {
+                        tracing::warn!("DirectWrite text measurement failed: {error}");
+                    }
+                }
+                top += block.height + block.gap_after;
+            }
+        }
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Setup, t);
 
@@ -236,7 +254,6 @@ impl App {
 
         // 텍스트 그리기
         for block in &render_blocks {
-            let max_width = Self::text_layout_extent(self.state.client_size.width, margin_x);
             let max_height = (self.state.client_size.height as f32 - block.top - margin_y as f32)
                 .max(1.0)
                 .min(block.height.max(1.0));
@@ -289,45 +306,47 @@ impl App {
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Present, t);
 
-        // 렌더러 borrow가 끝난 뒤 hit region을 갱신한다. 빈 값은 창 전체를 뜻한다.
+        // 렌더러 borrow가 끝난 뒤 hit region을 갱신한다. 배경/테두리가 없고
+        // text 사각형도 없으면 완전히 보이지 않는 frame이므로 입력도 받지 않는다.
         self.hit_region.clear();
-        if !background_visible && !render_blocks.is_empty() {
-            let max_width = Self::text_layout_extent(self.state.client_size.width, margin_x);
-            if let Some(d2d) = self.d2d_renderer.as_mut() {
-                for block in &render_blocks {
-                    let max_height =
-                        (self.state.client_size.height as f32 - block.top - margin_y as f32)
-                            .max(1.0)
-                            .min(block.height.max(1.0));
-                    let shadow_inflate = if block.style.shadow_enabled {
-                        block
-                            .style
-                            .shadow_offset_x
-                            .saturating_abs()
-                            .saturating_add(block.style.shadow_offset_y.saturating_abs())
-                    } else {
-                        0
-                    };
-                    let inflate = block
+        self.full_hit_region = background_visible || border_visible;
+        if !self.full_hit_region
+            && !render_blocks.is_empty()
+            && let Some(d2d) = self.d2d_renderer.as_mut()
+        {
+            for block in &render_blocks {
+                let max_height =
+                    (self.state.client_size.height as f32 - block.top - margin_y as f32)
+                        .max(1.0)
+                        .min(block.height.max(1.0));
+                let shadow_inflate = if block.style.shadow_enabled {
+                    block
                         .style
-                        .outline1_size
-                        .saturating_add(block.style.outline2_size)
-                        .saturating_add(shadow_inflate)
-                        .saturating_add(1) as f32;
-                    match d2d.compute_text_line_rects(
-                        &block.text,
-                        &block.style,
-                        crate::d2d::TextBox {
-                            x: margin_x as f32,
-                            y: block.top,
-                            max_width,
-                            max_height,
-                        },
-                        inflate,
-                    ) {
-                        Ok(rects) => self.hit_region.extend_from_slice(rects),
-                        Err(e) => tracing::warn!("compute_text_line_rects failed: {e}"),
-                    }
+                        .shadow_offset_x
+                        .saturating_abs()
+                        .saturating_add(block.style.shadow_offset_y.saturating_abs())
+                } else {
+                    0
+                };
+                let inflate = block
+                    .style
+                    .outline1_size
+                    .saturating_add(block.style.outline2_size)
+                    .saturating_add(shadow_inflate)
+                    .saturating_add(1) as f32;
+                match d2d.compute_text_line_rects(
+                    &block.text,
+                    &block.style,
+                    crate::d2d::TextBox {
+                        x: margin_x as f32,
+                        y: block.top,
+                        max_width,
+                        max_height,
+                    },
+                    inflate,
+                ) {
+                    Ok(rects) => self.hit_region.extend_from_slice(rects),
+                    Err(e) => tracing::warn!("compute_text_line_rects failed: {e}"),
                 }
             }
         }

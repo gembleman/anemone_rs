@@ -33,6 +33,7 @@ mod ctrl_id {
 /// 글로서리 편집 다이얼로그
 pub struct GlossaryDialog {
     hwnd: HWND,
+    owner: HWND,
     config: Rc<RefCell<Config>>,
     applied_dpi: u32,
     /// 임시 편집 버퍼 (적용 전까지 Config에 반영하지 않음)
@@ -42,6 +43,7 @@ pub struct GlossaryDialog {
 define_dialog_instance!(GLOSSARY_INSTANCE: GlossaryDialog);
 
 struct PendingGlossary {
+    owner: HWND,
     config: Rc<RefCell<Config>>,
 }
 
@@ -60,7 +62,7 @@ unsafe extern "system" fn glossary_dialog_proc(
     unsafe {
         if msg == WM_INITDIALOG {
             let pending = GLOSSARY_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(PendingGlossary { config }) = pending else {
+            let Some(PendingGlossary { owner, config }) = pending else {
                 GLOSSARY_INIT_ERROR.with(|slot| {
                     *slot.borrow_mut() = Some("글로서리 초기화 인자가 없습니다".to_string());
                 });
@@ -70,6 +72,7 @@ unsafe extern "system" fn glossary_dialog_proc(
             let draft = GlossaryDraft::from_config(&config.borrow());
             let dialog = Rc::new(RefCell::new(GlossaryDialog {
                 hwnd,
+                owner,
                 config,
                 applied_dpi: crate::dpi::dpi_for_window(hwnd),
                 draft,
@@ -101,10 +104,14 @@ unsafe extern "system" fn glossary_dialog_proc(
             return 0;
         };
 
-        match msg {
+        let mut can_flush = false;
+        let result = match msg {
             WM_DPICHANGED => {
                 if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     dialog.handle_dpi_changed(wparam, lparam);
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
                 }
                 1
             }
@@ -115,6 +122,9 @@ unsafe extern "system" fn glossary_dialog_proc(
                     let _ = DestroyWindow(hwnd);
                 } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
                     dialog.handle_command(id, notify_code);
+                    can_flush = true;
+                } else {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
                 }
                 1
             }
@@ -132,7 +142,11 @@ unsafe extern "system" fn glossary_dialog_proc(
                 1
             }
             _ => 0,
+        };
+        if can_flush {
+            super::helpers::flush_deferred_dialog_messages(hwnd);
         }
+        result
     }
 }
 
@@ -156,7 +170,10 @@ impl GlossaryDialog {
             slot.borrow_mut().take();
         });
         GLOSSARY_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingGlossary { config });
+            *slot.borrow_mut() = Some(PendingGlossary {
+                owner: parent,
+                config,
+            });
         });
 
         // SAFETY: 리소스 ID는 빌드 시 실행 파일에 포함되고, 콜백은 DLGPROC ABI를
@@ -253,7 +270,16 @@ impl GlossaryDialog {
                 self.draft.clone().commit(&mut self.config.borrow_mut());
                 if let Err(e) = self.config.borrow().save() {
                     tracing::error!("글로서리 저장 실패: {}", e);
+                    super::helpers::show_error_message(
+                        self.hwnd,
+                        "사전 저장 오류",
+                        &format!("사전을 디스크에 저장하지 못했습니다.\n\n{e}"),
+                    );
+                    return;
                 }
+                let _ = unsafe {
+                    PostMessageW(Some(self.owner), WM_GLOSSARY_APPLIED, WPARAM(0), LPARAM(0))
+                };
             }
             BTN_ADD => self.add_or_update_entry(),
             BTN_REMOVE => self.remove_selected(),
@@ -364,3 +390,5 @@ impl GlossaryDialog {
         }
     }
 }
+
+pub(crate) const WM_GLOSSARY_APPLIED: u32 = WM_APP + 20;

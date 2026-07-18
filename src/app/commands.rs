@@ -5,17 +5,14 @@ use windows::{
         Foundation::{HWND, LPARAM, POINT, WPARAM},
         Graphics::Gdi::ClientToScreen,
         UI::WindowsAndMessaging::{
-            GetCursorPos, IsWindow, PostMessageW, SetForegroundWindow, WM_CLOSE, WM_LBUTTONUP,
-            WM_RBUTTONUP,
+            GetCursorPos, PostMessageW, WM_CLOSE, WM_LBUTTONUP, WM_RBUTTONUP,
         },
     },
     core::Result,
 };
 
 use super::{App, state};
-use crate::dialogs::{
-    BacklogDialog, FileTransDialog, HookSettingsDialog, SettingsDialog, TranslateDialog,
-};
+use crate::dialogs::{BacklogDialog, FileTransDialog, SettingsDialog, TranslateDialog};
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::window;
@@ -50,15 +47,27 @@ impl App {
                 window::set_click_through(self.hwnd, click_through);
             }
             state::AppCommand::ClipboardWatch => {
-                let mut cfg = self.config.borrow_mut();
-                cfg.toggle_clipboard_watch();
-                let watch = cfg.clipboard_watch;
-                drop(cfg);
-                if watch {
-                    self.clipboard.start();
+                let enable = !self.config.borrow().clipboard_watch;
+                let result = if enable {
+                    self.clipboard.start()
                 } else {
-                    self.clipboard.stop();
-                    self.cancel_clipboard_translation();
+                    self.clipboard.stop()
+                };
+                match result {
+                    Ok(()) => {
+                        self.config.borrow_mut().clipboard_watch = enable;
+                        if !enable {
+                            self.cancel_clipboard_translation();
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!("Failed to change clipboard listener state: {error}");
+                        crate::dialogs::helpers::show_error_message(
+                            self.hwnd,
+                            "클립보드 감시 오류",
+                            &format!("클립보드 감시 상태를 변경하지 못했습니다.\n\n{error}"),
+                        );
+                    }
                 }
             }
             state::AppCommand::BackgroundToggle => {
@@ -84,9 +93,6 @@ impl App {
             }
             state::AppCommand::FileTrans => {
                 self.open_file_trans_dialog();
-            }
-            state::AppCommand::HookSettings => {
-                self.open_hook_settings_dialog();
             }
             state::AppCommand::TextSizeUp => {
                 let mut cfg = self.config.borrow_mut();
@@ -117,27 +123,14 @@ impl App {
         Ok(())
     }
 
-    /// 기존 dialog에는 focus하고 없으면 새로 만든다.
-    fn open_dialog_generic<F, E>(hwnd_storage: &mut Option<HWND>, dialog_name: &str, create_fn: F)
+    /// 각 dialog의 instance registry가 기존 창 focus와 새 창 생성을 책임진다.
+    fn open_dialog_generic<F, E>(dialog_name: &str, create_fn: F)
     where
         F: FnOnce() -> std::result::Result<HWND, E>,
         E: std::fmt::Display,
     {
-        if let Some(hwnd) = *hwnd_storage {
-            // SAFETY: hwnd was previously returned by a successful dialog creation call.
-            // IsWindow validates it is still a valid window before use.
-            unsafe {
-                if IsWindow(Some(hwnd)).as_bool() {
-                    let _ = SetForegroundWindow(hwnd);
-                    return;
-                }
-            }
-        }
-
         match create_fn() {
-            Ok(hwnd) => {
-                *hwnd_storage = Some(hwnd);
-            }
+            Ok(_) => {}
             Err(e) => {
                 tracing::error!("Failed to open {} dialog: {}", dialog_name, e);
             }
@@ -148,45 +141,28 @@ impl App {
     fn open_settings_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(&mut self.dialogs.settings, "settings", || {
-            SettingsDialog::show(main_hwnd, config, None)
-        });
+        Self::open_dialog_generic("settings", || SettingsDialog::show(main_hwnd, config, None));
     }
 
     /// 번역 대화상자 열기
     fn open_translate_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(&mut self.dialogs.translate, "translate", || {
-            TranslateDialog::show(main_hwnd, config)
-        });
+        Self::open_dialog_generic("translate", || TranslateDialog::show(main_hwnd, config));
     }
 
     /// 백로그 대화상자 열기
     fn open_backlog_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let store = self.backlog_store.clone();
-        Self::open_dialog_generic(&mut self.dialogs.backlog, "backlog", || {
-            BacklogDialog::show(main_hwnd, store)
-        });
+        Self::open_dialog_generic("backlog", || BacklogDialog::show(main_hwnd, store));
     }
 
     /// 파일 번역 대화상자 열기
     fn open_file_trans_dialog(&mut self) {
         let main_hwnd = self.hwnd;
         let config = self.config.clone();
-        Self::open_dialog_generic(&mut self.dialogs.file_trans, "file_trans", || {
-            FileTransDialog::show(main_hwnd, config)
-        });
-    }
-
-    /// 후크 설정 대화상자 열기
-    fn open_hook_settings_dialog(&mut self) {
-        let main_hwnd = self.hwnd;
-        let config = self.config.clone();
-        Self::open_dialog_generic(&mut self.dialogs.hook_settings, "hook_settings", || {
-            HookSettingsDialog::show(main_hwnd, config)
-        });
+        Self::open_dialog_generic("file_trans", || FileTransDialog::show(main_hwnd, config));
     }
 
     /// Config 기반 magnetic, click-through, topmost, visibility, clipboard 정책을 적용한다.
@@ -216,10 +192,31 @@ impl App {
         window::set_window_visible(self.hwnd, visible);
 
         if watch && !self.clipboard.is_watching() {
-            self.clipboard.start();
+            if let Err(error) = self.clipboard.start() {
+                self.config.borrow_mut().clipboard_watch = false;
+                tracing::error!("Failed to start clipboard listener: {error}");
+                crate::dialogs::helpers::show_error_message(
+                    self.hwnd,
+                    "클립보드 감시 오류",
+                    &format!("클립보드 감시를 시작하지 못했습니다.\n\n{error}"),
+                );
+            }
         } else if !watch && self.clipboard.is_watching() {
-            self.clipboard.stop();
-            self.cancel_clipboard_translation();
+            match self.clipboard.stop() {
+                Ok(()) => self.cancel_clipboard_translation(),
+                Err(error) => {
+                    self.config.borrow_mut().clipboard_watch = true;
+                    tracing::error!("Failed to stop clipboard listener: {error}");
+                    crate::dialogs::helpers::show_error_message(
+                        self.hwnd,
+                        "클립보드 감시 오류",
+                        &format!("클립보드 감시를 중지하지 못했습니다.\n\n{error}"),
+                    );
+                }
+            }
+        }
+        if let Some(hwnd) = SettingsDialog::current_hwnd() {
+            SettingsDialog::set_clipboard_checked(hwnd, self.config.borrow().clipboard_watch);
         }
     }
 
@@ -259,7 +256,7 @@ impl App {
     }
 
     fn sync_magnetic_checkbox(&self) {
-        if let Some(hwnd) = self.dialogs.settings {
+        if let Some(hwnd) = SettingsDialog::current_hwnd() {
             SettingsDialog::set_magnetic_checked(hwnd, self.config.borrow().magnetic_mode);
         }
     }

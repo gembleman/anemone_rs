@@ -34,6 +34,7 @@ const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
 const WINDOW_TITLE: PCWSTR = w!("아네모네");
 pub(super) const COMPOSITION_RETRY_TIMER: usize = 0xD2D0;
 pub(super) const CLIPBOARD_DEBOUNCE_TIMER: usize = 0xD2D1;
+pub(super) const CLIPBOARD_READ_RETRY_TIMER: usize = 0xD2D2;
 
 pub struct App {
     hwnd: HWND,
@@ -44,7 +45,6 @@ pub struct App {
     hotkey: Option<HotkeyManager>,
     clipboard: ClipboardWatcher,
     taskbar_created_msg: u32,
-    dialogs: DialogWindows,
     backlog_store: Rc<RefCell<BacklogStore>>,
     magnetic: Option<MagneticManager>,
     d2d_renderer: Option<D2DRenderer>,
@@ -55,17 +55,10 @@ pub struct App {
     composition_init_failures: u32,
     composition_retry_scheduled: bool,
     /// 투명 배경에서 `WM_NCHITTEST`가 사용하는 client 좌표 text 사각형.
-    /// 비어 있으면 창 전체를 drag 영역으로 취급한다.
     hit_region: Vec<RECT>,
-}
-
-#[derive(Default)]
-struct DialogWindows {
-    settings: Option<HWND>,
-    translate: Option<HWND>,
-    backlog: Option<HWND>,
-    file_trans: Option<HWND>,
-    hook_settings: Option<HWND>,
+    /// 배경/테두리가 있어 text 사각형과 무관하게 전체 창을 조작할 수 있는지 여부.
+    /// `false`이면서 `hit_region`도 비어 있으면 완전히 빈 프레임이므로 입력을 통과시킨다.
+    full_hit_region: bool,
 }
 
 // 전역 앱 인스턴스 (WndProc에서 접근용)

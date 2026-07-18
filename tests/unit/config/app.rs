@@ -9,7 +9,6 @@ fn out_of_range_toml_is_normalized_at_deserialize_boundary() {
         name_margin: -10,
         shadow_offset_x: -20,
         shadow_offset_y: i32::MAX,
-        repeat_text_mode: u8::MAX,
         ..Config::default()
     };
 
@@ -33,7 +32,6 @@ fn out_of_range_toml_is_normalized_at_deserialize_boundary() {
     assert_eq!(normalized.name_margin, 0);
     assert_eq!(normalized.shadow_offset_x, 0);
     assert_eq!(normalized.shadow_offset_y, 20);
-    assert_eq!(normalized.repeat_text_mode, 4);
     for style in [
         &normalized.name_style,
         &normalized.original_style,

@@ -172,7 +172,11 @@ impl ColorDialog {
             // 알파
             GetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &mut buf);
             let alpha_str = String::from_utf16_lossy(&buf);
-            let alpha: u32 = alpha_str.trim_end_matches('\0').parse().unwrap_or(255);
+            let alpha: u32 = alpha_str
+                .trim_end_matches('\0')
+                .parse::<u32>()
+                .unwrap_or(255)
+                .min(255);
 
             // Red
             GetDlgItemTextW(hdlg, COLOR_RED_EDIT as i32, &mut buf);
@@ -395,6 +399,41 @@ impl ColorDialog {
                             cb(color);
                         }
                     });
+                }
+
+                WM_COMMAND => {
+                    let id = (wparam.0 & 0xFFFF) as u16;
+                    let notification = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                    if id == IDC_ALPHA_EDIT && matches!(notification, EN_CHANGE | EN_KILLFOCUS) {
+                        let mut buffer = [0u16; 16];
+                        GetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &mut buffer);
+                        let text = String::from_utf16_lossy(&buffer);
+                        if let Ok(value) = text.trim_end_matches('\0').parse::<i32>() {
+                            let alpha = value.clamp(0, 255);
+                            let _ = SendDlgItemMessageW(
+                                hdlg,
+                                IDC_ALPHA_TRACKBAR as i32,
+                                TBM_SETPOS,
+                                WPARAM(1),
+                                LPARAM(alpha as isize),
+                            );
+                            HOOK_CONTEXT.with(|ctx| {
+                                if let Ok(mut guard) = ctx.try_borrow_mut()
+                                    && let Some(ref mut context) = *guard
+                                {
+                                    context.alpha = alpha;
+                                }
+                            });
+                            if notification == EN_KILLFOCUS && value != alpha {
+                                let value = to_wide(&alpha.to_string());
+                                let _ = SetDlgItemTextW(
+                                    hdlg,
+                                    IDC_ALPHA_EDIT as i32,
+                                    PCWSTR(value.as_ptr()),
+                                );
+                            }
+                        }
+                    }
                 }
 
                 WM_KEYDOWN | WM_KEYUP | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN

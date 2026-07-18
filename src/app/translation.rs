@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::{App, state};
+use crate::clipboard::ClipboardUpdate;
 use crate::dialogs::{LogEntry, add_to_backlog};
 use crate::translation::TranslationEngine;
 use crate::translation_ui::{request_translation, take_response};
@@ -30,34 +31,57 @@ fn log_translation_failure(error: &crate::translation::TranslationError) {
 
 impl App {
     pub(super) fn handle_clipboard_change(&mut self) {
-        if let Some(text) = self.clipboard.on_clipboard_update() {
-            let max_len = self.config.borrow().clipboard_max_length as usize;
-            if max_len > 0 {
-                let text_len = text.chars().count();
-                if text_len > max_len {
-                    tracing::debug!(
-                        "Clipboard text skipped: length {} exceeds clipboard_max_length {}",
-                        text_len,
-                        max_len
-                    );
-                    return;
+        if !self.config.borrow().clipboard_watch || !self.clipboard.is_watching() {
+            return;
+        }
+        match self.clipboard.on_clipboard_update() {
+            ClipboardUpdate::Unchanged => {}
+            ClipboardUpdate::Retry(error) => {
+                tracing::debug!("clipboard read failed temporarily; retrying: {error}");
+                let timer = unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::SetTimer(
+                        Some(self.hwnd),
+                        super::CLIPBOARD_READ_RETRY_TIMER,
+                        50,
+                        None,
+                    )
+                };
+                if timer == 0 {
+                    tracing::warn!("clipboard read retry timer could not be created");
                 }
             }
-
-            log_clipboard_metadata(&text);
-
-            let delay_ms = {
-                let config = self.config.borrow();
-                let engine = match config.translation.get_engine() {
-                    Ok(engine) => engine,
-                    Err(error) => {
-                        tracing::error!("자동 번역 설정 오류: {error}");
+            ClipboardUpdate::Failed(error) => {
+                tracing::warn!("clipboard read failed after retries: {error}");
+            }
+            ClipboardUpdate::Text(text) => {
+                let max_len = self.config.borrow().clipboard_max_length as usize;
+                if max_len > 0 {
+                    let text_len = text.chars().count();
+                    if text_len > max_len {
+                        tracing::debug!(
+                            "Clipboard text skipped: length {} exceeds clipboard_max_length {}",
+                            text_len,
+                            max_len
+                        );
                         return;
                     }
+                }
+
+                log_clipboard_metadata(&text);
+
+                let delay_ms = {
+                    let config = self.config.borrow();
+                    let engine = match config.translation.get_engine() {
+                        Ok(engine) => engine,
+                        Err(error) => {
+                            tracing::error!("자동 번역 설정 오류: {error}");
+                            return;
+                        }
+                    };
+                    debounce_delay_ms(engine, config.translation.llm.debounce_ms)
                 };
-                debounce_delay_ms(engine, config.translation.llm.debounce_ms)
-            };
-            self.schedule_clipboard_translation(text, delay_ms);
+                self.schedule_clipboard_translation(text, delay_ms);
+            }
         }
     }
 
@@ -67,6 +91,7 @@ impl App {
         self.state.clipboard_debounce.submit(text);
         unsafe {
             let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
+            let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_READ_RETRY_TIMER);
         }
         if debounce_ms == 0 {
             self.handle_clipboard_debounce_timer();
@@ -93,6 +118,7 @@ impl App {
         use windows::Win32::UI::WindowsAndMessaging::KillTimer;
         unsafe {
             let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
+            let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_READ_RETRY_TIMER);
         }
         if let Some(text) = self.state.clipboard_debounce.take() {
             self.request_translation_async(&text);
@@ -103,6 +129,7 @@ impl App {
         use windows::Win32::UI::WindowsAndMessaging::KillTimer;
         unsafe {
             let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_DEBOUNCE_TIMER);
+            let _ = KillTimer(Some(self.hwnd), super::CLIPBOARD_READ_RETRY_TIMER);
         }
         self.state.clipboard_debounce.clear();
         self.state.pending_translation = None;
@@ -162,9 +189,9 @@ impl App {
         }
     }
 
-    /// 완료 message의 request ID와 정확히 일치하는 응답만 처리한다.
-    pub(super) fn handle_translation_complete(&mut self, req_id: u64) {
-        let Some(response) = take_response(req_id) else {
+    /// 대상별 완료 큐에서 원래 64-bit request ID와 응답을 함께 꺼낸다.
+    pub(super) fn handle_translation_complete(&mut self) {
+        let Some((req_id, response)) = take_response(self.hwnd) else {
             return;
         };
 

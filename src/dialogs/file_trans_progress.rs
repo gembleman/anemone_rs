@@ -51,6 +51,7 @@ struct ProgressState {
 }
 
 const PROGRESS_POLL_TIMER: usize = 1;
+const WM_PROGRESS_FINISH: u32 = WM_APP + 30;
 
 impl ProgressState {
     fn apply(&mut self, event: &ProgressEvent) {
@@ -64,7 +65,9 @@ impl ProgressState {
             ProgressEvent::FileLines(value) => self.list_size = *value,
             ProgressEvent::FileProgress(_) => {}
             ProgressEvent::TotalProgress(value) => self.current_line = *value,
-            ProgressEvent::Complete | ProgressEvent::Error(_) => self.terminal = true,
+            ProgressEvent::Complete | ProgressEvent::Cancelled | ProgressEvent::Error(_) => {
+                self.terminal = true;
+            }
             ProgressEvent::FileName(_) => {}
         }
     }
@@ -148,16 +151,31 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
     };
 
     if msg == WM_TIMER && wparam.0 == PROGRESS_POLL_TIMER {
+        let mut can_flush = false;
         if let Ok(mut dialog) = dialog.try_borrow_mut() {
             dialog.drain_progress_events();
+            can_flush = true;
+        } else {
+            unsafe {
+                super::helpers::defer_dialog_message(hwnd, msg, wparam, LPARAM(0));
+            }
+        }
+        if can_flush {
+            super::helpers::flush_deferred_dialog_messages(hwnd);
         }
         return 1;
     }
 
-    match msg {
+    let mut can_flush = false;
+    let result = match msg {
         WM_DPICHANGED => {
             if let Ok(mut dialog) = dialog.try_borrow_mut() {
                 dialog.handle_dpi_changed(wparam, lparam);
+                can_flush = true;
+            } else {
+                unsafe {
+                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
+                }
             }
             1
         }
@@ -167,6 +185,11 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
                 && let Ok(mut dialog) = dialog.try_borrow_mut()
             {
                 dialog.handle_cancel();
+                can_flush = true;
+            } else if id == ctrl_id::BTN_CANCEL || id == IDCANCEL.0 as u16 {
+                unsafe {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
+                }
             }
             1
         }
@@ -174,12 +197,21 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
         WM_CLOSE => {
             if let Ok(mut dialog) = dialog.try_borrow_mut() {
                 dialog.handle_cancel();
+                can_flush = true;
+            } else {
+                unsafe {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
+                }
             }
             1
         }
         WM_DESTROY => {
             if let Ok(dialog) = dialog.try_borrow() {
                 dialog.clear_taskbar_progress();
+                unsafe {
+                    let _ = EnableWindow(dialog.parent_hwnd, true);
+                    let _ = SetForegroundWindow(dialog.parent_hwnd);
+                }
             }
             unsafe {
                 let _ = KillTimer(Some(hwnd), PROGRESS_POLL_TIMER);
@@ -192,8 +224,18 @@ unsafe extern "system" fn file_trans_progress_dialog_proc(
             });
             1
         }
+        WM_PROGRESS_FINISH => {
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+            1
+        }
         _ => 0,
+    };
+    if can_flush {
+        super::helpers::flush_deferred_dialog_messages(hwnd);
     }
+    result
 }
 
 impl FileTransProgressDialog {
@@ -291,9 +333,26 @@ impl FileTransProgressDialog {
 
         unsafe {
             Self::center_on_parent(hwnd, parent);
+            let _ = EnableWindow(parent, false);
             show_dialog_window(hwnd);
         }
         Ok(hwnd)
+    }
+
+    /// 이미 진행 중인 작업이 있으면 그 진행창을 앞으로 가져온다.
+    pub(crate) fn activate_existing() -> bool {
+        let existing = PROGRESS_INSTANCE
+            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
+        if let Some(hwnd) = existing
+            && unsafe { IsWindow(Some(hwnd)).as_bool() }
+        {
+            unsafe {
+                let _ = SetForegroundWindow(hwnd);
+            }
+            true
+        } else {
+            false
+        }
     }
 
     fn initialize_controls(&mut self) -> Result<()> {
@@ -312,8 +371,12 @@ impl FileTransProgressDialog {
         self.index_text = get_control(ctrl_id::INDEX_TEXT as i32)?;
         self.total_text = get_control(ctrl_id::TOTAL_TEXT as i32)?;
         self.cancel_btn = get_control(ctrl_id::BTN_CANCEL as i32)?;
-        unsafe {
-            SetTimer(Some(self.hwnd), PROGRESS_POLL_TIMER, 50, None);
+        let timer = unsafe { SetTimer(Some(self.hwnd), PROGRESS_POLL_TIMER, 50, None) };
+        if timer == 0 {
+            return Err(Error::new(
+                E_FAIL,
+                "파일 번역 진행률 timer를 만들 수 없습니다",
+            ));
         }
         Ok(())
     }
@@ -477,7 +540,14 @@ impl FileTransProgressDialog {
                     );
 
                     // 창 닫기
-                    let _ = DestroyWindow(self.hwnd);
+                    let _ = PostMessageW(Some(self.hwnd), WM_PROGRESS_FINISH, WPARAM(0), LPARAM(0));
+                }
+                ProgressEvent::Cancelled => {
+                    let _ = set_window_text(self.name_text, "취소됨");
+                    let _ = set_window_text(self.progress_text, "번역을 취소했습니다");
+                    let _ = EnableWindow(self.cancel_btn, false);
+                    self.clear_taskbar_progress();
+                    let _ = PostMessageW(Some(self.hwnd), WM_PROGRESS_FINISH, WPARAM(0), LPARAM(0));
                 }
                 ProgressEvent::Error(error_msg) => {
                     let _ = set_window_text(self.name_text, "오류 발생");
@@ -498,7 +568,7 @@ impl FileTransProgressDialog {
                     );
 
                     self.clear_taskbar_progress();
-                    let _ = DestroyWindow(self.hwnd);
+                    let _ = PostMessageW(Some(self.hwnd), WM_PROGRESS_FINISH, WPARAM(0), LPARAM(0));
                 }
             }
         }

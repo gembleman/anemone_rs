@@ -73,9 +73,10 @@ impl SettingsDialog {
 
         match cmd {
             // SAFETY: self.hwnd is a valid window handle from dialog creation.
-            CLOSE => unsafe {
-                let _ = DestroyWindow(self.hwnd);
+            CLOSE if self.persist_pending_changes() => unsafe {
+                let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
             },
+            CLOSE => {}
 
             // 배경 색상
             BACKGROUND_COLOR => {
@@ -160,11 +161,6 @@ impl SettingsDialog {
             PRINT_TRANSTEXT => toggle_field!(self, BoolSetting::ShowTranslation),
             PRINT_ORGNAME => toggle_field!(self, BoolSetting::ShowName),
             SEPERATE_NAME => toggle_field!(self, BoolSetting::SeparateName),
-            REPEAT_TEXT => {
-                self.apply_settings_change(SettingsChange::CycleRepeatTextMode);
-                let new_mode = self.config.borrow().repeat_text_mode;
-                self.set_control_text(REPEAT_TEXT, &super::repeat_mode_label(new_mode));
-            }
 
             // 텍스트 정렬
             TEXTALIGN_LEFT => {
@@ -197,7 +193,6 @@ impl SettingsDialog {
                 }
             }
             MAGNETIC_MINIMIZE => toggle_field!(self, BoolSetting::MagneticMinimize),
-            HIDEWIN => toggle_field!(self, BoolSetting::TempWindowHide),
             CLIPBOARD_WATCH => {
                 toggle_field!(self, BoolSetting::ClipboardWatch);
             }
@@ -347,9 +342,11 @@ impl SettingsDialog {
     /// 글로서리 편집기 다이얼로그 열기
     fn open_glossary_editor(&mut self) {
         let config = self.config.clone();
-        let _ = crate::dialogs::glossary::GlossaryDialog::show(self.hwnd, config.clone());
-        // 다이얼로그가 닫힌 후 표시 라벨 갱신
-        let count = config.borrow().translation.llm.glossary.len();
+        let _ = crate::dialogs::glossary::GlossaryDialog::show(self.hwnd, config);
+    }
+
+    pub(super) fn refresh_glossary_count(&self) {
+        let count = self.config.borrow().translation.llm.glossary.len();
         self.set_control_text(
             ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
             &format!("사전 항목: {}", count),
@@ -757,12 +754,19 @@ impl SettingsDialog {
         }
     }
 
-    pub(super) fn persist_pending_changes(&self) {
+    pub(super) fn persist_pending_changes(&self) -> bool {
         if let Err(error) =
             persist_if_pending(&self.pending_disk_save, || self.config.borrow().save())
         {
             tracing::error!("설정 저장 실패: {error}");
+            crate::dialogs::helpers::show_error_message(
+                self.hwnd,
+                "설정 저장 오류",
+                &format!("설정을 디스크에 저장하지 못했습니다. 창을 닫지 않았습니다.\n\n{error}"),
+            );
+            return false;
         }
+        true
     }
 }
 

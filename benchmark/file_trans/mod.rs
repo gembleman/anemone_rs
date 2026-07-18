@@ -109,7 +109,7 @@ fn translates_japanese_translation_sample_with_eztrans() {
 #[ignore = "performance benchmark that uses the bundled EzTrans DLL"]
 fn measures_repeated_and_unique_sample_translation_performance() {
     assert!(
-        !cfg!(debug_assertions),
+        !std::hint::black_box(cfg!(debug_assertions)),
         "performance measurements must run with cargo test --release"
     );
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
