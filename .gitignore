@@ -1,4 +1,5 @@
 /target
+/eztrans_dll/
 /.claude
 *.env
 nul
