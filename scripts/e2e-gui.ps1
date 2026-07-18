@@ -317,24 +317,21 @@ function Wait-WindowClosed {
 
 $resolvedExe = (Resolve-Path -LiteralPath $ExePath).Path
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ("anemone-gui-e2e-" + [guid]::NewGuid())
-$install = Join-Path $root 'install'
-$localData = Join-Path $root 'local-data'
-$dataDir = Join-Path $localData 'Anemone'
-$installedExe = Join-Path $install 'anemone_rs.exe'
+$runtimeDir = Join-Path $root 'runtime'
+$dataDir = $runtimeDir
+$runtimeExe = Join-Path $runtimeDir 'anemone_rs.exe'
 $process = $null
 $mainWindow = [IntPtr]::Zero
 
 try {
-    # Copy the executable and isolate installed-mode data from the runner account.
-    New-Item -ItemType Directory -Path $install, $localData | Out-Null
-    Copy-Item -LiteralPath $resolvedExe -Destination $installedExe
+    # Copy the executable and keep all runtime data beside it.
+    New-Item -ItemType Directory -Path $runtimeDir | Out-Null
+    Copy-Item -LiteralPath $resolvedExe -Destination $runtimeExe
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $installedExe
-    $startInfo.WorkingDirectory = $install
+    $startInfo.FileName = $runtimeExe
+    $startInfo.WorkingDirectory = $runtimeDir
     $startInfo.UseShellExecute = $false
-    $startInfo.Environment['LOCALAPPDATA'] = $localData
-    $startInfo.Environment['APPDATA'] = $localData
     $process = [System.Diagnostics.Process]::Start($startInfo)
     if ($null -eq $process) {
         throw 'GUI 프로세스를 시작하지 못했습니다.'

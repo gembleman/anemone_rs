@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use windows::{
     Win32::{
-        Foundation::{COLORREF, E_FAIL, GetLastError, HMODULE, HWND},
+        Foundation::{COLORREF, GetLastError, HMODULE, HWND},
         Graphics::Gdi::{HBRUSH, UpdateWindow},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
@@ -142,8 +142,7 @@ impl App {
             tracing::info!("Direct2D renderer initialized");
 
             // 설정 로드 (파일이 없으면 기본값)
-            let config = Config::load_or_default()
-                .map_err(|error| Error::new(E_FAIL, format!("설정 로드 실패: {error}")))?;
+            let config = Config::load_or_default();
             let services = AppServices::new();
             let action_queue = Rc::new(RefCell::new(VecDeque::new()));
 

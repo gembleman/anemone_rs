@@ -21,8 +21,6 @@ jobs:
       - shell: pwsh
         run: ./scripts/verify-release.ps1
       - shell: pwsh
-        run: ./scripts/smoke-readonly-install.ps1
-      - shell: pwsh
         run: ./scripts/e2e-gui.ps1
       - run: cargo install cargo-audit --locked
       - run: cargo audit

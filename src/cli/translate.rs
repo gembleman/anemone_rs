@@ -37,7 +37,7 @@ pub(super) fn run(args: Args) -> Result<(), String> {
         return Err("빈 텍스트는 번역할 수 없습니다.".to_string());
     }
 
-    let config = Config::load_or_default().map_err(|error| format!("설정 로드 실패: {error}"))?;
+    let config = Config::load_or_default();
     let engine = resolve_engine(args.engine, &config)?;
     let (source_lang, target_lang) = resolve_languages(&args.source, &args.target, &config)?;
 

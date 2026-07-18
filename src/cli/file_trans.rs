@@ -49,7 +49,7 @@ pub(super) fn run(args: Args) -> Result<(), String> {
         no_trans_linefeed,
     } = args;
 
-    let config = Config::load_or_default().map_err(|error| format!("설정 로드 실패: {error}"))?;
+    let config = Config::load_or_default();
     let engine = resolve_engine(engine, &config)?;
     let (source_lang, target_lang) = resolve_languages(&source, &target, &config)?;
 

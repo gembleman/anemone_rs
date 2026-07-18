@@ -189,6 +189,29 @@ fn save_is_atomic_and_preserves_last_known_good_generation() {
 }
 
 #[test]
+fn credentials_are_saved_in_the_plaintext_config_without_a_secret_store() {
+    let root = unique_test_dir("plaintext-credentials");
+    let path = root.join("config.toml");
+    let mut config = Config::default();
+    config.translation.llm.api_key = "test-credential-value".to_string();
+
+    config.save_to_file(&path).unwrap();
+
+    let persisted = std::fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("test-credential-value"));
+    assert_eq!(
+        Config::load_from_file(&path)
+            .unwrap()
+            .translation
+            .llm
+            .api_key,
+        "test-credential-value"
+    );
+    assert!(!root.join("secrets.dat").exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn corrupt_config_is_quarantined_without_overwrite() {
     let root = unique_test_dir("corrupt");
     std::fs::create_dir_all(&root).unwrap();

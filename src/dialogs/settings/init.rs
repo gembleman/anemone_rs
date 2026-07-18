@@ -98,14 +98,6 @@ const TRANSLATION_IDS: &[u16] = &[
 impl SettingsDialog {
     /// 리소스에 정의된 컨트롤을 탭/엔진 그룹에 연결하고 설정값을 주입한다.
     pub(super) fn initialize_controls(&mut self) -> Result<()> {
-        if crate::runtime::is_portable() {
-            unsafe {
-                SetWindowTextW(
-                    self.hwnd,
-                    w!("설정 (Portable: API 키가 config.toml에 평문 저장됨)"),
-                )?;
-            }
-        }
         self.register_ids(TAB_APPEARANCE, ctrl_id::APPEARANCE_STATIC_IDS)?;
         self.register_ids(TAB_APPEARANCE, APPEARANCE_IDS)?;
         self.register_ids(TAB_DISPLAY, ctrl_id::DISPLAY_STATIC_IDS)?;

@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::{ColorType, TextAlign, TextStyle, TextType, TranslationConfig};
-use crate::secret_store::{ActiveSecretStore, ConfigSecrets, SecretStore, SecretStoreError};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
@@ -252,39 +251,9 @@ impl Config {
     }
 
     /// 기본 경로에서 설정 로드 (없거나 파싱 에러 시 기본값 사용)
-    pub(crate) fn load_or_default() -> Result<Self, ConfigStartupError> {
+    pub(crate) fn load_or_default() -> Self {
         let path = Self::default_config_path();
-        let mut config = Self::load_or_default_from(path);
-        let store = ActiveSecretStore::for_paths(crate::runtime::paths());
-        if !store.protects_config() {
-            tracing::warn!("portable 모드: API 비밀이 config.toml에 평문으로 저장됩니다");
-            return Ok(config);
-        }
-
-        match store.load()? {
-            Some(secrets) => secrets.apply_to(&mut config),
-            None => {
-                let secrets = ConfigSecrets::capture(&config);
-                if !secrets.is_empty() {
-                    store.save(&secrets)?;
-                    let mut redacted = config.clone();
-                    ConfigSecrets::redact(&mut redacted);
-                    redacted
-                        .save_to_file_impl(path, false)
-                        .map_err(ConfigStartupError::MigrationPersist)?;
-                    tracing::info!("기존 평문 API 비밀을 Windows DPAPI 저장소로 이전했습니다");
-                }
-            }
-        }
-        Self::redact_plaintext_residue(path)?;
-        Self::redact_plaintext_residue(&path.with_extension("toml.last-good"))?;
-        if let Some(legacy) = crate::runtime::paths().legacy_file("config.toml")
-            && legacy != *path
-        {
-            Self::redact_plaintext_residue(&legacy)?;
-            Self::redact_plaintext_residue(&legacy.with_extension("toml.last-good"))?;
-        }
-        Ok(config)
+        Self::load_or_default_from(path)
     }
 
     fn load_or_default_from(path: &std::path::Path) -> Self {
@@ -327,46 +296,13 @@ impl Config {
         }
     }
 
-    fn redact_plaintext_residue(path: &std::path::Path) -> Result<(), ConfigStartupError> {
-        if !path.is_file() {
-            return Ok(());
-        }
-        let Ok(mut persisted) = Self::load_from_file(path) else {
-            return Ok(());
-        };
-        if ConfigSecrets::capture(&persisted).is_empty() {
-            return Ok(());
-        }
-        ConfigSecrets::redact(&mut persisted);
-        persisted
-            .save_to_file_impl(path, false)
-            .map_err(ConfigStartupError::MigrationPersist)
-    }
-
     /// 기본 경로에 설정 저장
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::default_config_path();
-        let store = ActiveSecretStore::for_paths(crate::runtime::paths());
-        let secrets = ConfigSecrets::capture(self);
-        store.save(&secrets)?;
-        if store.protects_config() {
-            let mut redacted = self.clone();
-            ConfigSecrets::redact(&mut redacted);
-            redacted.save_to_file(path)?;
-        } else {
-            self.save_to_file(path)?;
-        }
+        self.save_to_file(path)?;
         tracing::debug!("설정 저장됨: {}", path.display());
         Ok(())
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum ConfigStartupError {
-    #[error(transparent)]
-    SecretStore(#[from] SecretStoreError),
-    #[error("비밀 이전 후 설정 파일 갱신 실패: {0}")]
-    MigrationPersist(Box<dyn std::error::Error>),
 }
 
 #[derive(Debug, thiserror::Error)]
