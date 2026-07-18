@@ -86,12 +86,9 @@ fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
         .changed
     );
     assert!(
-        TranslationSettingsEditor::apply(
-            &mut config,
-            TranslationSettingChange::RemoveDeepLKey(0)
-        )
-        .unwrap()
-        .changed
+        TranslationSettingsEditor::apply(&mut config, TranslationSettingChange::RemoveDeepLKey(0))
+            .unwrap()
+            .changed
     );
     assert!(config.deepl_keys.is_empty());
 }
