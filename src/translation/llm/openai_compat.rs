@@ -1,7 +1,7 @@
-//! OpenAI 호환 챗 컴플리션 백엔드
+//! OpenAI Responses API 및 호환 챗 컴플리션 백엔드
 //!
-//! OpenAI / xAI Grok / OpenRouter 가 동일한 `POST {base}/chat/completions` 형식을 공유한다.
-//! 본 모듈은 이 셋을 한 번에 처리한다.
+//! OpenAI는 `POST {base}/responses`, xAI Grok / OpenRouter는
+//! `POST {base}/chat/completions` 형식을 사용한다.
 
 use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
 use super::super::{Language, TranslationError, TranslationResult};
@@ -20,15 +20,28 @@ struct ChatRequest<'a> {
     messages: [ChatMessage<'a>; 2],
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_completion_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning_effort: Option<ReasoningEffort>,
+    max_tokens: u32,
 }
 
-fn request_payload<'a>(
+#[derive(Serialize)]
+struct ResponsesReasoning {
+    effort: ReasoningEffort,
+}
+
+#[derive(Serialize)]
+struct ResponsesRequest<'a> {
+    model: &'a str,
+    instructions: &'a str,
+    input: &'a str,
+    max_output_tokens: u32,
+    store: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ResponsesReasoning>,
+}
+
+fn chat_request_payload<'a>(
     params: &'a LlmCallParams,
     system: &'a str,
     text: &'a str,
@@ -45,17 +58,34 @@ fn request_payload<'a>(
                 content: text,
             },
         ],
-        // OpenAI reasoning 모델은 sampling temperature를 받지 않는 조합이
-        // 있으므로 서버 기본값을 사용한다.
-        temperature: (!uses_openai_reasoning_model(params)).then_some(params.temperature),
-        // OpenAI는 max_completion_tokens를 표준으로 사용한다. OpenAI 호환
-        // 제공자는 기존 호환성을 위해 max_tokens를 유지한다.
-        max_tokens: (params.provider != LlmProvider::OpenAi).then_some(params.max_tokens),
-        max_completion_tokens: (params.provider == LlmProvider::OpenAi)
-            .then_some(params.max_tokens),
-        reasoning_effort: uses_openai_reasoning_model(params)
-            .then_some(params.reasoning_effort)
-            .flatten(),
+        temperature: Some(params.temperature),
+        max_tokens: params.max_tokens,
+    }
+}
+
+fn responses_request_payload<'a>(
+    params: &'a LlmCallParams,
+    instructions: &'a str,
+    input: &'a str,
+) -> ResponsesRequest<'a> {
+    let uses_reasoning = uses_openai_reasoning_model(params);
+    let effort = params.reasoning_effort.or_else(|| {
+        // 비어 있는 모델은 앱의 저비용 기본 경로다. 기존 gpt-5.4-nano의
+        // effective effort(none)를 gpt-5.6-luna에서도 보존한다.
+        (params.model.is_empty() && uses_reasoning).then_some(ReasoningEffort::None)
+    });
+    ResponsesRequest {
+        model: params.effective_model(),
+        instructions,
+        input,
+        max_output_tokens: params.max_tokens,
+        // 단발 번역 요청은 서버 측 대화 상태를 사용하지 않는다.
+        store: false,
+        temperature: (!uses_reasoning).then_some(params.temperature),
+        reasoning: uses_reasoning
+            .then_some(effort)
+            .flatten()
+            .map(|effort| ResponsesReasoning { effort }),
     }
 }
 
@@ -70,7 +100,7 @@ fn uses_openai_reasoning_model(params: &LlmCallParams) -> bool {
             .any(|prefix| model == *prefix || model.starts_with(&format!("{prefix}-")))
 }
 
-/// OpenAI 호환 chat completions 요청
+/// OpenAI Responses API 또는 호환 chat completions 요청
 pub async fn translate_async_with_client(
     client: &reqwest::Client,
     text: &str,
@@ -90,29 +120,138 @@ pub async fn translate_async_with_client(
         target,
         &params.glossary,
     );
-    let payload = request_payload(params, &system, text);
+    match params.provider {
+        LlmProvider::OpenAi => {
+            let payload = responses_request_payload(params, &system, text);
+            let url = format!("{}/responses", params.effective_base_url());
+            let response = client
+                .post(&url)
+                .timeout(LLM_REQUEST_TIMEOUT)
+                .bearer_auth(&params.api_key)
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|e| TranslationError::Network(e.to_string()))?;
+            let body = send_and_read_body(response).await?;
+            parse_response(&body)
+        }
+        LlmProvider::Grok | LlmProvider::OpenRouter => {
+            let payload = chat_request_payload(params, &system, text);
+            let url = format!("{}/chat/completions", params.effective_base_url());
+            let mut req = client
+                .post(&url)
+                .timeout(LLM_REQUEST_TIMEOUT)
+                .bearer_auth(&params.api_key)
+                .json(&payload);
 
-    let url = format!("{}/chat/completions", params.effective_base_url());
-    let mut req = client
-        .post(&url)
-        .timeout(LLM_REQUEST_TIMEOUT)
-        .bearer_auth(&params.api_key)
-        .json(&payload);
+            // OpenRouter는 출처 헤더를 권장한다 (rate limit 우대 / 통계용)
+            if params.provider == LlmProvider::OpenRouter {
+                req = req
+                    .header("HTTP-Referer", "https://github.com/gembleman/anemone_rs")
+                    .header("X-Title", "Anemone");
+            }
 
-    // OpenRouter는 출처 헤더를 권장한다 (rate limit 우대 / 통계용)
-    if params.provider == LlmProvider::OpenRouter {
-        req = req
-            .header("HTTP-Referer", "https://github.com/gembleman/anemone_rs")
-            .header("X-Title", "Anemone");
+            let response = req
+                .send()
+                .await
+                .map_err(|e| TranslationError::Network(e.to_string()))?;
+            let body = send_and_read_body(response).await?;
+            parse_chat_completion(&body)
+        }
+        LlmProvider::Anthropic | LlmProvider::Gemini => Err(TranslationError::Engine(
+            "OpenAI 호환 백엔드에 지원하지 않는 제공자가 전달되었습니다.".to_string(),
+        )),
+    }
+}
+
+fn parse_response(json: &str) -> TranslationResult {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| TranslationError::Parse(e.to_string()))?;
+
+    if value.get("status").and_then(|status| status.as_str()) == Some("incomplete") {
+        let reason = value
+            .pointer("/incomplete_details/reason")
+            .and_then(|reason| reason.as_str())
+            .unwrap_or("status=incomplete");
+        return Err(TranslationError::OutputTruncated {
+            provider: "OpenAI API",
+            reason: reason.to_string(),
+        });
     }
 
-    let response = req
-        .send()
-        .await
-        .map_err(|e| TranslationError::Network(e.to_string()))?;
+    if let Some(refusal) = response_refusal(&value) {
+        return Err(TranslationError::Api {
+            code: 0,
+            message: format!("LLM 응답 거부됨: {refusal}"),
+            retry_after: None,
+        });
+    }
 
-    let body = send_and_read_body(response).await?;
-    parse_chat_completion(&body)
+    if let Some(err) = value.get("error").filter(|err| !err.is_null()) {
+        return Err(api_error(err));
+    }
+
+    let mut output_text = String::new();
+    if let Some(items) = value.get("output").and_then(|output| output.as_array()) {
+        for item in items {
+            if item.get("type").and_then(|kind| kind.as_str()) != Some("message") {
+                continue;
+            }
+            let Some(content) = item.get("content").and_then(|content| content.as_array()) else {
+                continue;
+            };
+            for part in content {
+                if part.get("type").and_then(|kind| kind.as_str()) == Some("output_text")
+                    && let Some(text) = part.get("text").and_then(|text| text.as_str())
+                {
+                    output_text.push_str(text);
+                }
+            }
+        }
+    }
+
+    let output_text = output_text.trim();
+    if !output_text.is_empty() {
+        return Ok(output_text.to_string());
+    }
+
+    Err(TranslationError::Parse(
+        "OpenAI 응답에서 번역 결과를 찾을 수 없습니다.".to_string(),
+    ))
+}
+
+fn response_refusal(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("output")?
+        .as_array()?
+        .iter()
+        .filter_map(|item| item.get("content").and_then(|content| content.as_array()))
+        .flatten()
+        .find(|part| part.get("type").and_then(|kind| kind.as_str()) == Some("refusal"))
+        .and_then(|part| part.get("refusal"))
+        .and_then(|refusal| refusal.as_str())
+        .filter(|refusal| !refusal.is_empty())
+}
+
+fn api_error(err: &serde_json::Value) -> TranslationError {
+    let message = err
+        .get("message")
+        .and_then(|message| message.as_str())
+        .unwrap_or("LLM 응답 에러")
+        .to_string();
+    let code = err
+        .get("code")
+        .and_then(|code| {
+            code.as_u64()
+                .map(|code| code as u16)
+                .or_else(|| code.as_str()?.parse().ok())
+        })
+        .unwrap_or(0);
+    TranslationError::Api {
+        code,
+        message,
+        retry_after: None,
+    }
 }
 
 fn parse_chat_completion(json: &str) -> TranslationResult {

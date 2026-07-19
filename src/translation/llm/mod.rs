@@ -85,7 +85,7 @@ impl LlmProvider {
     /// 모델 ID가 비어 있을 때 사용할 기본값
     pub fn default_model(self) -> &'static str {
         match self {
-            Self::OpenAi => "gpt-5.4-nano",
+            Self::OpenAi => "gpt-5.6-luna",
             Self::Anthropic => "claude-opus-4-7",
             Self::Gemini => "gemini-2.5-flash",
             Self::Grok => "grok-4.3",
@@ -109,7 +109,7 @@ impl LlmProvider {
     /// 모델 ID를 계속 허용한다.
     pub fn model_presets(self) -> &'static [&'static str] {
         match self {
-            Self::OpenAi => OPENAI_CHAT_COMPLETION_MODELS,
+            Self::OpenAi => OPENAI_MODEL_PRESETS,
             Self::Anthropic => ANTHROPIC_MESSAGES_MODELS,
             Self::Gemini => GEMINI_GENERATE_CONTENT_MODELS,
             Self::Grok => GROK_CHAT_COMPLETION_MODELS,
@@ -189,9 +189,11 @@ pub struct LlmCallParams {
     pub glossary: Vec<GlossaryEntry>,
 }
 
-/// OpenAI 공식 모델 카탈로그에서 Chat Completions 지원이 확인된 텍스트 모델.
-/// 날짜가 붙은 스냅샷 대신 자동으로 최신 스냅샷을 가리키는 안정 모델 ID를 쓴다.
-pub const OPENAI_CHAT_COMPLETION_MODELS: &[&str] = &[
+/// OpenAI 텍스트 모델 선택 UI에 표시할 프리셋.
+///
+/// 실제 허용 목록은 아니며, 각 모델의 Responses API 지원 여부와 계정 권한은
+/// OpenAI API가 최종 검증한다.
+pub const OPENAI_MODEL_PRESETS: &[&str] = &[
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",

@@ -392,6 +392,13 @@ fn read_request_body(stream: &mut TcpStream) -> String {
         };
         let header_end = header_end + 4;
         let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        assert!(
+            headers
+                .lines()
+                .next()
+                .is_some_and(|line| line == "POST /responses HTTP/1.1"),
+            "OpenAI request did not use the Responses API: {headers}"
+        );
         let content_length = headers
             .lines()
             .find_map(|line| {
@@ -403,19 +410,20 @@ fn read_request_body(stream: &mut TcpStream) -> String {
         if bytes.len() >= header_end + content_length {
             let body = String::from_utf8_lossy(&bytes[header_end..header_end + content_length]);
             let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-            return value["messages"][1]["content"]
-                .as_str()
-                .unwrap()
-                .to_string();
+            return value["input"].as_str().unwrap().to_string();
         }
     }
 }
 
 fn write_success(stream: &mut TcpStream, translated: &str) {
     let body = serde_json::json!({
-        "choices": [{
-            "message": { "content": translated },
-            "finish_reason": "stop"
+        "status": "completed",
+        "output": [{
+            "type": "message",
+            "content": [{
+                "type": "output_text",
+                "text": translated
+            }]
         }]
     })
     .to_string();
