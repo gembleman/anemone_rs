@@ -94,7 +94,7 @@ impl SettingsDialog {
             // 배경 색상
             BACKGROUND_COLOR => {
                 let initial = self.draft.borrow().background_color;
-                if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
+                if let Some(result) = ColorDialog::show_rgb(self.hwnd, initial) {
                     self.apply_settings_change(SettingsChange::BackgroundColor(result.argb));
                     self.invalidate_color_button(BACKGROUND_COLOR);
                 }

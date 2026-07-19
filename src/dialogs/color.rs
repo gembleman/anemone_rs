@@ -45,6 +45,8 @@ pub struct ColorDialogConfig {
     pub on_color_change: Option<ColorChangeCallback>,
     /// WS_EX_NOACTIVATE 스타일 적용 여부
     pub no_activate: bool,
+    /// 불투명도 조절 컨트롤 표시 여부
+    pub show_alpha: bool,
 }
 
 impl Default for ColorDialogConfig {
@@ -53,6 +55,7 @@ impl Default for ColorDialogConfig {
             initial_color: 0xFF000000, // 불투명 검정
             on_color_change: None,
             no_activate: true,
+            show_alpha: true,
         }
     }
 }
@@ -62,6 +65,7 @@ struct HookContext {
     alpha: i32,
     callback: Option<ColorChangeCallback>,
     no_activate: bool,
+    show_alpha: bool,
 }
 
 thread_local! {
@@ -86,6 +90,20 @@ impl ColorDialog {
                 initial_color: initial_argb,
                 on_color_change: None,
                 no_activate: false,
+                show_alpha: true,
+            },
+        )
+    }
+
+    /// 알파 채널을 유지한 채 RGB 색상만 선택한다.
+    pub fn show_rgb(hwnd: HWND, initial_argb: u32) -> Option<ColorResult> {
+        Self::show(
+            hwnd,
+            ColorDialogConfig {
+                initial_color: initial_argb,
+                on_color_change: None,
+                no_activate: false,
+                show_alpha: false,
             },
         )
     }
@@ -106,6 +124,7 @@ impl ColorDialog {
                         alpha,
                         callback: config.on_color_change,
                         no_activate: config.no_activate,
+                        show_alpha: config.show_alpha,
                     });
                 }
             });
@@ -168,14 +187,12 @@ impl ColorDialog {
         unsafe {
             let mut buf = [0u16; 32];
 
-            // 알파
-            GetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &mut buf);
-            let alpha_str = String::from_utf16_lossy(&buf);
-            let alpha: u32 = alpha_str
-                .trim_end_matches('\0')
-                .parse::<u32>()
-                .unwrap_or(255)
-                .min(255);
+            let alpha = HOOK_CONTEXT.with(|ctx| {
+                ctx.try_borrow()
+                    .ok()
+                    .and_then(|guard| guard.as_ref().map(|context| context.alpha as u32))
+                    .unwrap_or(255)
+            });
 
             // Red
             GetDlgItemTextW(hdlg, COLOR_RED_EDIT as i32, &mut buf);
@@ -207,6 +224,26 @@ impl ColorDialog {
         unsafe {
             match msg {
                 WM_INITDIALOG => {
+                    let (no_activate, show_alpha) = HOOK_CONTEXT.with(|ctx| {
+                        ctx.try_borrow()
+                            .ok()
+                            .and_then(|guard| {
+                                guard
+                                    .as_ref()
+                                    .map(|context| (context.no_activate, context.show_alpha))
+                            })
+                            .unwrap_or((true, true))
+                    });
+
+                    if no_activate {
+                        let ex_style = GetWindowLongW(hdlg, GWL_EXSTYLE);
+                        SetWindowLongW(hdlg, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE.0 as i32);
+                    }
+
+                    if !show_alpha {
+                        return 1; // TRUE
+                    }
+
                     // 다이얼로그 크기 확장 (알파 컨트롤 공간)
                     let mut rect: RECT = zeroed();
                     let _ = GetWindowRect(hdlg, &mut rect);
@@ -335,19 +372,6 @@ impl ColorDialog {
                             Some(WPARAM(hfont.0 as usize)),
                             Some(LPARAM(0)),
                         );
-                    }
-
-                    // WS_EX_NOACTIVATE 설정
-                    let no_activate = HOOK_CONTEXT.with(|ctx| {
-                        ctx.try_borrow()
-                            .ok()
-                            .and_then(|g| g.as_ref().map(|c| c.no_activate))
-                            .unwrap_or(true)
-                    });
-
-                    if no_activate {
-                        let ex_style = GetWindowLongW(hdlg, GWL_EXSTYLE);
-                        SetWindowLongW(hdlg, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE.0 as i32);
                     }
 
                     return 1; // TRUE
