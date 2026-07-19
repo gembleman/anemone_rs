@@ -20,6 +20,12 @@ struct ChatRequest<'a> {
     messages: [ChatMessage<'a>; 2],
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f32>,
     max_tokens: u32,
 }
 
@@ -59,6 +65,11 @@ fn chat_request_payload<'a>(
             },
         ],
         temperature: Some(params.temperature),
+        top_p: (params.provider == LlmProvider::OpenRouter).then_some(params.top_p),
+        frequency_penalty: (params.provider == LlmProvider::OpenRouter)
+            .then_some(params.frequency_penalty),
+        presence_penalty: (params.provider == LlmProvider::OpenRouter)
+            .then_some(params.presence_penalty),
         max_tokens: params.max_tokens,
     }
 }
@@ -109,6 +120,10 @@ pub async fn translate_async_with_client(
     params: &LlmCallParams,
 ) -> TranslationResult {
     validate_not_empty(text)?;
+
+    if params.provider == LlmProvider::OpenRouter && params.model.trim().is_empty() {
+        return Err(TranslationError::MissingModel);
+    }
 
     if params.api_key.is_empty() {
         return Err(TranslationError::MissingApiKey);

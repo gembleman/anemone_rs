@@ -89,7 +89,7 @@ impl LlmProvider {
             Self::Anthropic => "claude-opus-4-7",
             Self::Gemini => "gemini-2.5-flash",
             Self::Grok => "grok-4.3",
-            Self::OpenRouter => "openai/gpt-5",
+            Self::OpenRouter => "",
         }
     }
 
@@ -182,6 +182,9 @@ pub struct LlmCallParams {
     /// `{source}`, `{target}` 플레이스홀더가 치환됨
     pub system_prompt: String,
     pub temperature: f32,
+    pub top_p: f32,
+    pub frequency_penalty: f32,
+    pub presence_penalty: f32,
     pub max_tokens: u32,
     /// `None`이면 모델의 기본 추론 강도를 사용한다.
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -320,6 +323,9 @@ impl fmt::Debug for LlmCallParams {
             .field("base_url", &self.base_url)
             .field("system_prompt", &self.system_prompt)
             .field("temperature", &self.temperature)
+            .field("top_p", &self.top_p)
+            .field("frequency_penalty", &self.frequency_penalty)
+            .field("presence_penalty", &self.presence_penalty)
             .field("max_tokens", &self.max_tokens)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("glossary", &self.glossary)

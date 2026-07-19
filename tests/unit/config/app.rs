@@ -138,6 +138,9 @@ fn llm_limits_are_normalized_at_every_config_boundary() {
     raw.translation.llm.max_tokens = u32::MAX;
     raw.translation.llm.debounce_ms = u32::MAX;
     raw.translation.llm.temperature = f32::INFINITY;
+    raw.translation.llm.top_p = 3.0;
+    raw.translation.llm.frequency_penalty = -3.0;
+    raw.translation.llm.presence_penalty = f32::INFINITY;
 
     let toml = toml::to_string(&raw).unwrap();
     let normalized = Config::from_toml_str(&toml).unwrap();
@@ -145,6 +148,36 @@ fn llm_limits_are_normalized_at_every_config_boundary() {
     assert_eq!(normalized.translation.llm.max_tokens, 32_000);
     assert_eq!(normalized.translation.llm.debounce_ms, 10_000);
     assert_eq!(normalized.translation.llm.temperature, 0.3);
+    assert_eq!(normalized.translation.llm.top_p, 1.0);
+    assert_eq!(normalized.translation.llm.frequency_penalty, -2.0);
+    assert_eq!(normalized.translation.llm.presence_penalty, 0.0);
+}
+
+#[test]
+fn openrouter_sampling_options_are_loaded_and_saved_without_ui() {
+    let text = r#"
+[translation.llm]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-5"
+top_p = 0.8
+frequency_penalty = 0.4
+presence_penalty = -0.2
+"#;
+
+    let loaded = Config::from_toml_str(text).unwrap();
+    assert_eq!(loaded.translation.llm.top_p, 0.8);
+    assert_eq!(loaded.translation.llm.frequency_penalty, 0.4);
+    assert_eq!(loaded.translation.llm.presence_penalty, -0.2);
+    let params = loaded.translation.llm.to_call_params().unwrap();
+    assert_eq!(params.top_p, 0.8);
+    assert_eq!(params.frequency_penalty, 0.4);
+    assert_eq!(params.presence_penalty, -0.2);
+
+    let serialized = toml::to_string_pretty(&loaded).unwrap();
+    let reloaded = Config::from_toml_str(&serialized).unwrap();
+    assert_eq!(reloaded.translation.llm.top_p, 0.8);
+    assert_eq!(reloaded.translation.llm.frequency_penalty, 0.4);
+    assert_eq!(reloaded.translation.llm.presence_penalty, -0.2);
 }
 
 #[test]

@@ -9,6 +9,9 @@ fn serializes_responses_request_with_the_api_shape() {
         base_url: String::new(),
         system_prompt: String::new(),
         temperature: 0.25,
+        top_p: 1.0,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0,
         max_tokens: 123,
         reasoning_effort: None,
         glossary: Vec::new(),
@@ -34,6 +37,9 @@ fn serializes_chat_request_for_compatible_providers() {
         base_url: String::new(),
         system_prompt: String::new(),
         temperature: 0.25,
+        top_p: 0.8,
+        frequency_penalty: 0.4,
+        presence_penalty: -0.2,
         max_tokens: 123,
         reasoning_effort: None,
         glossary: Vec::new(),
@@ -43,7 +49,59 @@ fn serializes_chat_request_for_compatible_providers() {
     assert_eq!(value["messages"][1]["content"], "source");
     assert_eq!(value["max_tokens"], 123);
     assert_eq!(value["temperature"], 0.25);
+    assert!((value["top_p"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+    assert!((value["frequency_penalty"].as_f64().unwrap() - 0.4).abs() < 1e-6);
+    assert!((value["presence_penalty"].as_f64().unwrap() + 0.2).abs() < 1e-6);
     assert!(value.get("max_output_tokens").is_none());
+}
+
+#[test]
+fn omits_openrouter_sampling_options_for_grok() {
+    let params = LlmCallParams {
+        provider: LlmProvider::Grok,
+        model: "model".into(),
+        api_key: "key".into(),
+        base_url: String::new(),
+        system_prompt: String::new(),
+        temperature: 0.25,
+        top_p: 0.8,
+        frequency_penalty: 0.4,
+        presence_penalty: -0.2,
+        max_tokens: 123,
+        reasoning_effort: None,
+        glossary: Vec::new(),
+    };
+    let value = serde_json::to_value(chat_request_payload(&params, "system", "source")).unwrap();
+    assert!(value.get("top_p").is_none());
+    assert!(value.get("frequency_penalty").is_none());
+    assert!(value.get("presence_penalty").is_none());
+}
+
+#[tokio::test]
+async fn rejects_openrouter_without_an_explicit_model() {
+    let params = LlmCallParams {
+        provider: LlmProvider::OpenRouter,
+        model: "  ".into(),
+        api_key: "key".into(),
+        base_url: String::new(),
+        system_prompt: String::new(),
+        temperature: 0.25,
+        top_p: 1.0,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0,
+        max_tokens: 123,
+        reasoning_effort: None,
+        glossary: Vec::new(),
+    };
+    let result = translate_async_with_client(
+        &crate::translation::http_common::create_client(),
+        "source",
+        Language::Eng,
+        Language::Kor,
+        &params,
+    )
+    .await;
+    assert!(matches!(result, Err(TranslationError::MissingModel)));
 }
 
 #[test]
@@ -56,6 +114,9 @@ fn omits_temperature_for_openai_reasoning_models() {
             base_url: String::new(),
             system_prompt: String::new(),
             temperature: 0.25,
+            top_p: 1.0,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
             max_tokens: 123,
             reasoning_effort: None,
             glossary: Vec::new(),
@@ -75,6 +136,9 @@ fn serializes_reasoning_effort_only_for_openai_reasoning_models() {
         base_url: String::new(),
         system_prompt: String::new(),
         temperature: 0.25,
+        top_p: 1.0,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0,
         max_tokens: 123,
         reasoning_effort: Some(ReasoningEffort::Xhigh),
         glossary: Vec::new(),
@@ -106,6 +170,9 @@ fn preserves_none_reasoning_for_the_blank_nano_default() {
         base_url: String::new(),
         system_prompt: String::new(),
         temperature: 0.25,
+        top_p: 1.0,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0,
         max_tokens: 123,
         reasoning_effort: None,
         glossary: Vec::new(),

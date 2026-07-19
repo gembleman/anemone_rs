@@ -34,6 +34,15 @@ pub struct LlmConfig {
     /// 샘플링 온도
     #[serde(default = "default_llm_temperature")]
     pub temperature: f32,
+    /// OpenRouter nucleus sampling 비율. 설정 UI에는 노출하지 않는다.
+    #[serde(default = "default_llm_top_p")]
+    pub top_p: f32,
+    /// OpenRouter 토큰 빈도 페널티. 설정 UI에는 노출하지 않는다.
+    #[serde(default = "default_llm_penalty")]
+    pub frequency_penalty: f32,
+    /// OpenRouter 토큰 출현 페널티. 설정 UI에는 노출하지 않는다.
+    #[serde(default = "default_llm_penalty")]
+    pub presence_penalty: f32,
     /// 응답 최대 토큰
     #[serde(default = "default_llm_max_tokens")]
     pub max_tokens: u32,
@@ -73,6 +82,14 @@ fn default_llm_temperature() -> f32 {
     0.3
 }
 
+fn default_llm_top_p() -> f32 {
+    1.0
+}
+
+fn default_llm_penalty() -> f32 {
+    0.0
+}
+
 fn default_llm_max_tokens() -> u32 {
     1024
 }
@@ -90,6 +107,9 @@ impl Default for LlmConfig {
             base_url: String::new(),
             system_prompt: default_llm_system_prompt(),
             temperature: default_llm_temperature(),
+            top_p: default_llm_top_p(),
+            frequency_penalty: default_llm_penalty(),
+            presence_penalty: default_llm_penalty(),
             max_tokens: default_llm_max_tokens(),
             reasoning_effort: None,
             glossary: Vec::new(),
@@ -120,6 +140,9 @@ impl LlmConfig {
             base_url: self.base_url.clone(),
             system_prompt: self.system_prompt.clone(),
             temperature: self.temperature,
+            top_p: self.top_p,
+            frequency_penalty: self.frequency_penalty,
+            presence_penalty: self.presence_penalty,
             max_tokens: self.max_tokens,
             reasoning_effort: self.reasoning_effort,
             glossary: self

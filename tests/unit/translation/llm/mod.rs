@@ -63,6 +63,12 @@ fn openai_default_model_stays_gpt_5_4_nano() {
 }
 
 #[test]
+fn openrouter_has_no_default_model() {
+    assert_eq!(LlmProvider::OpenRouter.default_model(), "");
+    assert_eq!(LlmProvider::OpenRouter.model_or_default(""), "");
+}
+
+#[test]
 fn provider_model_presets_include_current_models_and_default() {
     let cases = [
         (

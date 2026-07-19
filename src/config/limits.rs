@@ -20,6 +20,12 @@ pub const LLM_DEBOUNCE_MS_MAX: u32 = 10_000;
 pub const LLM_TEMPERATURE_MIN: f32 = 0.0;
 pub const LLM_TEMPERATURE_MAX: f32 = 2.0;
 pub const LLM_TEMPERATURE_DEFAULT: f32 = 0.3;
+pub const LLM_TOP_P_MIN: f32 = 0.0;
+pub const LLM_TOP_P_MAX: f32 = 1.0;
+pub const LLM_TOP_P_DEFAULT: f32 = 1.0;
+pub const LLM_PENALTY_MIN: f32 = -2.0;
+pub const LLM_PENALTY_MAX: f32 = 2.0;
+pub const LLM_PENALTY_DEFAULT: f32 = 0.0;
 pub const LLM_TEMPERATURE_SLIDER_MIN: i32 = 0;
 pub const LLM_TEMPERATURE_SLIDER_MAX: i32 = 200;
 
@@ -72,4 +78,20 @@ pub fn llm_temperature(value: f32) -> f32 {
 
 pub fn llm_temperature_slider(value: i32) -> f32 {
     llm_temperature(value as f32 / 100.0)
+}
+
+pub fn llm_top_p(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(LLM_TOP_P_MIN, LLM_TOP_P_MAX)
+    } else {
+        LLM_TOP_P_DEFAULT
+    }
+}
+
+pub fn llm_penalty(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(LLM_PENALTY_MIN, LLM_PENALTY_MAX)
+    } else {
+        LLM_PENALTY_DEFAULT
+    }
 }

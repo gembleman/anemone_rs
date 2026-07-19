@@ -22,6 +22,9 @@ pub enum TranslationError {
     #[error("API 키가 설정되지 않았습니다.")]
     MissingApiKey,
 
+    #[error("모델이 설정되지 않았습니다.")]
+    MissingModel,
+
     #[error("네트워크 오류: {0}")]
     Network(String),
 
@@ -88,6 +91,7 @@ impl TranslationError {
             Self::UnsupportedLanguagePair => "unsupported_language_pair",
             Self::UnsupportedLanguage { .. } => "unsupported_language",
             Self::MissingApiKey => "missing_api_key",
+            Self::MissingModel => "missing_model",
             Self::Network(_) => "network",
             Self::ResponseTooLarge { .. } => "response_too_large",
             Self::RequestTooLarge { .. } => "request_too_large",
