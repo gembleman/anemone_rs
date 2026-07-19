@@ -124,17 +124,20 @@ fn command_reducer_mutates_model_and_returns_platform_effects() {
 }
 
 #[test]
-fn committed_settings_update_runtime_and_request_persistence() {
+fn settings_draft_distinguishes_preview_from_commit_effects() {
     let mut model = app_model();
     let mut changed = model.config.clone();
     changed.window_topmost = !changed.window_topmost;
 
-    let effects = model.update(AppAction::CommitSettings(SettingsDraft::new(
+    let effects = model.update(AppAction::PreviewSettings(SettingsDraft::new(
         changed.clone(),
     )));
     assert_eq!(model.config.window_topmost, changed.window_topmost);
     assert!(effects.contains(&Effect::SyncWindowState));
     assert!(effects.contains(&Effect::Repaint));
+    assert!(!effects.contains(&Effect::SaveConfig));
+
+    let effects = model.update(AppAction::CommitSettings(SettingsDraft::new(changed)));
     assert!(effects.contains(&Effect::SaveConfig));
 }
 

@@ -38,6 +38,10 @@ impl AppActionSender {
         self.send(AppAction::CommitSettings(draft));
     }
 
+    pub(crate) fn preview_settings(&self, draft: SettingsDraft) {
+        self.send(AppAction::PreviewSettings(draft));
+    }
+
     pub(crate) fn clear_backlog(&self) {
         self.send(AppAction::ClearBacklog);
     }

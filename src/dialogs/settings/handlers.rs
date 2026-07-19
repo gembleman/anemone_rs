@@ -543,6 +543,9 @@ impl SettingsDialog {
     }
 
     fn finish_settings_change(&self, result: SettingsChangeResult) {
+        if result.preview_refresh_required {
+            self.notify_preview();
+        }
         if result.save_required {
             self.has_unapplied_changes.set(true);
         }
@@ -559,6 +562,12 @@ impl SettingsDialog {
     }
 
     fn finish_translation_change(&self, result: SettingsApplyResult) {
+        if result.runtime_sync_required {
+            self.sync_translation_manager();
+        }
+        if result.preview_refresh_required {
+            self.notify_preview();
+        }
         if result.save_required {
             self.has_unapplied_changes.set(true);
         }
@@ -682,9 +691,16 @@ impl SettingsDialog {
         self.set_control_text(ctrl_id::TEXTSIZE_TEXT, &format!("크기: {}", size));
     }
 
+    fn notify_preview(&self) {
+        if let Some(actions) = &self.actions {
+            actions.preview_settings(self.draft.borrow().clone());
+        }
+    }
+
     pub(super) fn glossary_applied(&self) {
         self.refresh_glossary_count();
         self.has_unapplied_changes.set(true);
+        self.notify_preview();
     }
 
     fn apply_changes(&self) {
