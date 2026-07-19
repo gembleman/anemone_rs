@@ -1,6 +1,7 @@
 use super::{
     AppAction, AppCommand, AppModel, AppState, ClientSize, ClipboardDebounce, Effect,
     MagneticAction, PendingTranslation, correlate_translation, magnetic_action,
+    should_watch_clipboard,
 };
 use crate::backlog::{BacklogFilter, BacklogStore, LogEntry};
 use crate::config::Config;
@@ -15,6 +16,27 @@ fn clipboard_debounce_keeps_only_the_last_submission() {
     }
     assert_eq!(debounce.take().as_deref(), Some("text-19"));
     assert!(debounce.take().is_none());
+}
+
+#[test]
+fn manual_translation_dialog_temporarily_suspends_clipboard_capture() {
+    assert!(should_watch_clipboard(true, false));
+    assert!(!should_watch_clipboard(true, true));
+    assert!(!should_watch_clipboard(false, false));
+    assert!(!should_watch_clipboard(false, true));
+}
+
+#[test]
+fn translate_dialog_close_is_forwarded_as_a_platform_effect() {
+    let mut model = app_model();
+    assert_eq!(
+        model.update(AppAction::TranslateDialogClosed(17)),
+        vec![Effect::TranslateDialogClosed(17)]
+    );
+    assert_eq!(
+        model.update(AppAction::FileTransDialogClosed(23)),
+        vec![Effect::FileTransDialogClosed(23)]
+    );
 }
 
 #[test]

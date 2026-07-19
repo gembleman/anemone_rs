@@ -58,14 +58,106 @@ impl App {
         });
     }
 
+    fn clipboard_capture_paused(&self) -> bool {
+        self.translate_dialog_session.is_some() || self.file_trans_dialog_session.is_some()
+    }
+
+    fn next_clipboard_pause_session(&mut self) -> u64 {
+        let session = self.next_clipboard_pause_session;
+        self.next_clipboard_pause_session = self.next_clipboard_pause_session.wrapping_add(1);
+        if self.next_clipboard_pause_session == 0 {
+            self.next_clipboard_pause_session = 1;
+        }
+        session
+    }
+
+    fn pause_clipboard_for_translation_dialog(&mut self, dialog_title: &str) -> bool {
+        if self.clipboard.is_watching()
+            && let Err(error) = self.clipboard.stop()
+        {
+            tracing::error!("Failed to pause clipboard listener for {dialog_title}: {error}");
+            crate::dialogs::helpers::show_error_message(
+                self.hwnd,
+                "클립보드 감시 오류",
+                &format!(
+                    "{dialog_title}을(를) 여는 동안 클립보드 감시를 중지하지 못했습니다.\n\n{error}"
+                ),
+            );
+            return false;
+        }
+        self.cancel_clipboard_translation();
+        true
+    }
+
     /// 번역 대화상자 열기
     pub(super) fn open_translate_dialog(&mut self) {
+        if let Some(session) = TranslateDialog::current_session() {
+            self.translate_dialog_session = Some(session);
+            if !self.pause_clipboard_for_translation_dialog("번역 창") {
+                return;
+            }
+            let main_hwnd = self.hwnd;
+            let config = self.model.config.clone();
+            let translation = self.services.translation_ui.clone();
+            let actions = self.action_sender();
+            Self::open_dialog_generic("translate", || {
+                TranslateDialog::show(main_hwnd, config, translation, actions, session)
+            });
+            return;
+        }
+        // 파괴 알림 action보다 재열기 명령이 먼저 도착한 경우 이전 session을 폐기한다.
+        self.translate_dialog_session = None;
+
+        // 창 생성보다 먼저 listener와 이미 예약된 자동 번역을 멈춰, 초기화 중 발생한
+        // clipboard 변경도 수동 번역 경로로만 소비되게 한다.
+        if !self.pause_clipboard_for_translation_dialog("번역 창") {
+            return;
+        }
+
+        let session = self.next_clipboard_pause_session();
+        self.translate_dialog_session = Some(session);
+
         let main_hwnd = self.hwnd;
         let config = self.model.config.clone();
         let translation = self.services.translation_ui.clone();
-        Self::open_dialog_generic("translate", || {
-            TranslateDialog::show(main_hwnd, config, translation)
-        });
+        let actions = self.action_sender();
+        if let Err(error) = TranslateDialog::show(main_hwnd, config, translation, actions, session)
+        {
+            self.translate_dialog_session = None;
+            tracing::error!("Failed to open translate dialog: {error}");
+            self.resume_clipboard_after_translation_dialogs();
+        }
+    }
+
+    pub(super) fn handle_translate_dialog_closed(&mut self, session: u64) {
+        if self.translate_dialog_session != Some(session) {
+            return;
+        }
+        self.translate_dialog_session = None;
+        self.resume_clipboard_after_translation_dialogs();
+    }
+
+    fn resume_clipboard_after_translation_dialogs(&mut self) {
+        if self.clipboard_capture_paused()
+            || !self.model.config.clipboard_watch
+            || self.clipboard.is_watching()
+        {
+            return;
+        }
+        if let Err(error) = self.clipboard.start() {
+            self.model.config.clipboard_watch = false;
+            tracing::error!(
+                "Failed to resume clipboard listener after translation dialog: {error}"
+            );
+            crate::dialogs::helpers::show_error_message(
+                self.hwnd,
+                "클립보드 감시 오류",
+                &format!("번역 창을 닫은 뒤 클립보드 감시를 재개하지 못했습니다.\n\n{error}"),
+            );
+        }
+        if let Some(hwnd) = SettingsDialog::current_hwnd() {
+            SettingsDialog::set_clipboard_checked(hwnd, self.model.config.clipboard_watch);
+        }
     }
 
     /// 백로그 대화상자 열기
@@ -78,12 +170,45 @@ impl App {
 
     /// 파일 번역 대화상자 열기
     pub(super) fn open_file_trans_dialog(&mut self) {
+        if let Some(session) = FileTransDialog::current_session() {
+            self.file_trans_dialog_session = Some(session);
+            if !self.pause_clipboard_for_translation_dialog("파일 번역 창") {
+                return;
+            }
+            let main_hwnd = self.hwnd;
+            let config = self.model.config.clone();
+            let supervisor = self.services.file_translation.clone();
+            let actions = self.action_sender();
+            Self::open_dialog_generic("file_trans", || {
+                FileTransDialog::show(main_hwnd, config, supervisor, actions, session)
+            });
+            return;
+        }
+        self.file_trans_dialog_session = None;
+
+        if !self.pause_clipboard_for_translation_dialog("파일 번역 창") {
+            return;
+        }
+        let session = self.next_clipboard_pause_session();
+        self.file_trans_dialog_session = Some(session);
+
         let main_hwnd = self.hwnd;
         let config = self.model.config.clone();
         let supervisor = self.services.file_translation.clone();
-        Self::open_dialog_generic("file_trans", || {
-            FileTransDialog::show(main_hwnd, config, supervisor)
-        });
+        let actions = self.action_sender();
+        if let Err(error) = FileTransDialog::show(main_hwnd, config, supervisor, actions, session) {
+            self.file_trans_dialog_session = None;
+            tracing::error!("Failed to open file_trans dialog: {error}");
+            self.resume_clipboard_after_translation_dialogs();
+        }
+    }
+
+    pub(super) fn handle_file_trans_dialog_closed(&mut self, session: u64) {
+        if self.file_trans_dialog_session != Some(session) {
+            return;
+        }
+        self.file_trans_dialog_session = None;
+        self.resume_clipboard_after_translation_dialogs();
     }
 
     /// Config 기반 magnetic, click-through, topmost, visibility, clipboard 정책을 적용한다.
@@ -92,7 +217,8 @@ impl App {
         let click_through = cfg.click_through;
         let topmost = cfg.window_topmost;
         let visible = cfg.window_visible;
-        let watch = cfg.clipboard_watch;
+        let watch =
+            state::should_watch_clipboard(cfg.clipboard_watch, self.clipboard_capture_paused());
         let magnetic_enabled = cfg.magnetic_mode;
         // Magnetic 연결 실패 시 저장값과 checkbox를 모두 비활성화한다.
         let active_before = self.magnetic.is_some();
@@ -146,7 +272,8 @@ impl App {
     }
 
     pub(super) fn apply_clipboard_watch(&mut self, enabled: bool) {
-        let result = if enabled {
+        let should_watch = state::should_watch_clipboard(enabled, self.clipboard_capture_paused());
+        let result = if should_watch {
             self.clipboard.start()
         } else {
             self.clipboard.stop()

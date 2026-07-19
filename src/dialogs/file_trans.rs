@@ -24,6 +24,7 @@ use super::helpers::{
     center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
     set_window_text, show_dialog_window, unregister_resource_dialog,
 };
+use crate::app::action::AppActionSender;
 use crate::config::Config;
 use crate::define_dialog_instance;
 use crate::file_trans::{
@@ -64,6 +65,8 @@ pub struct FileTransDialog {
     output_files: Vec<PathBuf>,
     write_type: WriteType,
     no_trans_linefeed: bool,
+    actions: AppActionSender,
+    session: u64,
 }
 
 define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
@@ -71,6 +74,8 @@ define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
 struct PendingFileTrans {
     config: Config,
     supervisor: Rc<FileTranslationSupervisor>,
+    actions: AppActionSender,
+    session: u64,
 }
 
 thread_local! {
@@ -88,14 +93,22 @@ unsafe extern "system" fn file_trans_dialog_proc(
     unsafe {
         if msg == WM_INITDIALOG {
             let pending = FILE_TRANS_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(PendingFileTrans { config, supervisor }) = pending else {
+            let Some(PendingFileTrans {
+                config,
+                supervisor,
+                actions,
+                session,
+            }) = pending
+            else {
                 FILE_TRANS_INIT_ERROR.with(|slot| {
                     *slot.borrow_mut() = Some("파일 번역 창 초기화 인자가 없습니다".into());
                 });
                 return 0;
             };
 
-            let dialog = Rc::new(RefCell::new(FileTransDialog::new(hwnd, config, supervisor)));
+            let dialog = Rc::new(RefCell::new(FileTransDialog::new(
+                hwnd, config, supervisor, actions, session,
+            )));
             FILE_TRANS_INSTANCE.with(|slot| {
                 *slot.borrow_mut() = Some(dialog.clone());
             });
@@ -152,6 +165,11 @@ unsafe extern "system" fn file_trans_dialog_proc(
                 1
             }
             WM_DESTROY => {
+                let (actions, session) = {
+                    let dialog = dialog.borrow();
+                    (dialog.actions.clone(), dialog.session)
+                };
+                actions.file_trans_dialog_closed(session);
                 unregister_resource_dialog(hwnd);
                 FILE_TRANS_INSTANCE.with(|slot| {
                     if let Ok(mut guard) = slot.try_borrow_mut() {
@@ -170,7 +188,13 @@ unsafe extern "system" fn file_trans_dialog_proc(
 }
 
 impl FileTransDialog {
-    fn new(hwnd: HWND, config: Config, supervisor: Rc<FileTranslationSupervisor>) -> Self {
+    fn new(
+        hwnd: HWND,
+        config: Config,
+        supervisor: Rc<FileTranslationSupervisor>,
+        actions: AppActionSender,
+        session: u64,
+    ) -> Self {
         Self {
             hwnd,
             config,
@@ -185,6 +209,8 @@ impl FileTransDialog {
             output_files: Vec::new(),
             write_type: WriteType::TranslationOnly,
             no_trans_linefeed: false,
+            actions,
+            session,
         }
     }
 
@@ -193,6 +219,8 @@ impl FileTransDialog {
         parent: HWND,
         config: Config,
         supervisor: Rc<FileTranslationSupervisor>,
+        actions: AppActionSender,
+        session: u64,
     ) -> Result<HWND> {
         let existing = FILE_TRANS_INSTANCE
             .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
@@ -210,7 +238,12 @@ impl FileTransDialog {
             slot.borrow_mut().take();
         });
         FILE_TRANS_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingFileTrans { config, supervisor });
+            *slot.borrow_mut() = Some(PendingFileTrans {
+                config,
+                supervisor,
+                actions,
+                session,
+            });
         });
 
         let result = unsafe {
@@ -248,6 +281,15 @@ impl FileTransDialog {
             show_dialog_window(hwnd);
         }
         Ok(hwnd)
+    }
+
+    pub(crate) fn current_session() -> Option<u64> {
+        let (hwnd, session) = FILE_TRANS_INSTANCE.with(|slot| {
+            let dialog = slot.borrow();
+            let dialog = dialog.as_ref()?.try_borrow().ok()?;
+            Some((dialog.hwnd, dialog.session))
+        })?;
+        unsafe { IsWindow(Some(hwnd)).as_bool().then_some(session) }
     }
 
     fn initialize_controls(&mut self) -> Result<()> {

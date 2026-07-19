@@ -45,6 +45,14 @@ impl AppActionSender {
     pub(crate) fn clear_backlog(&self) {
         self.send(AppAction::ClearBacklog);
     }
+
+    pub(crate) fn translate_dialog_closed(&self, session: u64) {
+        self.send(AppAction::TranslateDialogClosed(session));
+    }
+
+    pub(crate) fn file_trans_dialog_closed(&self, session: u64) {
+        self.send(AppAction::FileTransDialogClosed(session));
+    }
 }
 
 impl App {
@@ -97,6 +105,12 @@ impl App {
                     DialogKind::Backlog => self.open_backlog_dialog(),
                     DialogKind::FileTranslation => self.open_file_trans_dialog(),
                 },
+                Effect::TranslateDialogClosed(session) => {
+                    self.handle_translate_dialog_closed(session);
+                }
+                Effect::FileTransDialogClosed(session) => {
+                    self.handle_file_trans_dialog_closed(session);
+                }
                 Effect::Close => {
                     // DestroyWindow의 동기 재진입을 피하고 현재 reducer turn 뒤에 닫는다.
                     if let Err(error) =

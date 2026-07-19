@@ -62,6 +62,14 @@ pub(super) fn correlate_translation<T, E>(
     })
 }
 
+/// 사용자가 감시를 켰더라도 수동 번역 창이 열려 있는 동안에는 clipboard를 캡처하지 않는다.
+pub(super) const fn should_watch_clipboard(
+    configured: bool,
+    translate_dialog_active: bool,
+) -> bool {
+    configured && !translate_dialog_active
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MagneticAction {
     Noop,
@@ -136,6 +144,8 @@ pub(super) enum AppAction {
     PreviewSettings(SettingsDraft),
     CommitSettings(SettingsDraft),
     ClearBacklog,
+    TranslateDialogClosed(u64),
+    FileTransDialogClosed(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +158,8 @@ pub(super) enum Effect {
     SetClipboardWatch(bool),
     SetMagnetic(bool),
     OpenDialog(DialogKind),
+    TranslateDialogClosed(u64),
+    FileTransDialogClosed(u64),
     Close,
 }
 
@@ -175,6 +187,12 @@ impl AppModel {
             AppAction::ClearBacklog => {
                 self.backlog.clear();
                 Vec::new()
+            }
+            AppAction::TranslateDialogClosed(session) => {
+                vec![Effect::TranslateDialogClosed(session)]
+            }
+            AppAction::FileTransDialogClosed(session) => {
+                vec![Effect::FileTransDialogClosed(session)]
             }
         }
     }

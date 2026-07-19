@@ -46,6 +46,10 @@ pub struct App {
     menu: ContextMenu,
     hotkey: Option<HotkeyManager>,
     clipboard: ClipboardWatcher,
+    /// 수동/파일 번역 창이 살아 있는 동안 clipboard listener를 일시 정지한다.
+    translate_dialog_session: Option<u64>,
+    file_trans_dialog_session: Option<u64>,
+    next_clipboard_pause_session: u64,
     taskbar_created_msg: u32,
     magnetic: Option<MagneticManager>,
     d2d_renderer: Option<D2DRenderer>,

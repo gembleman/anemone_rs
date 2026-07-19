@@ -24,6 +24,7 @@ use super::helpers::{
     rescale_dialog_children_for_dpi, set_window_text, show_dialog_window,
     unregister_resource_dialog,
 };
+use crate::app::action::AppActionSender;
 use crate::define_dialog_instance;
 use crate::util::to_wide;
 
@@ -94,6 +95,8 @@ pub struct TranslateDialog {
     /// 현재 최신 요청 ID. 새 자동 요청이 들어오면 워커가 이전 요청을 취소한다.
     in_flight_id: Option<u64>,
     last_submitted_source: String,
+    actions: AppActionSender,
+    session: u64,
 }
 
 define_dialog_instance!(TRANSLATE_INSTANCE: TranslateDialog);
@@ -101,6 +104,8 @@ define_dialog_instance!(TRANSLATE_INSTANCE: TranslateDialog);
 struct PendingTranslate {
     config: Config,
     translation_service: Rc<GuiTranslationHost>,
+    actions: AppActionSender,
+    session: u64,
 }
 
 thread_local! {
@@ -121,6 +126,8 @@ unsafe extern "system" fn translate_dialog_proc(
             let Some(PendingTranslate {
                 config,
                 translation_service,
+                actions,
+                session,
             }) = pending
             else {
                 TRANSLATE_INIT_ERROR.with(|slot| {
@@ -133,6 +140,8 @@ unsafe extern "system" fn translate_dialog_proc(
                 hwnd,
                 config,
                 translation_service,
+                actions,
+                session,
             )));
             TRANSLATE_INSTANCE.with(|slot| {
                 *slot.borrow_mut() = Some(dialog.clone());
@@ -217,6 +226,11 @@ unsafe extern "system" fn translate_dialog_proc(
             WM_DESTROY => {
                 let _ = KillTimer(Some(hwnd), AUTO_TRANSLATE_TIMER);
                 dialog.borrow().translation_service.unregister(hwnd);
+                let (actions, session) = {
+                    let dialog = dialog.borrow();
+                    (dialog.actions.clone(), dialog.session)
+                };
+                actions.translate_dialog_closed(session);
                 unregister_resource_dialog(hwnd);
                 TRANSLATE_INSTANCE.with(|slot| {
                     if let Ok(mut guard) = slot.try_borrow_mut() {
@@ -235,7 +249,13 @@ unsafe extern "system" fn translate_dialog_proc(
 }
 
 impl TranslateDialog {
-    fn new(hwnd: HWND, config: Config, translation_service: Rc<GuiTranslationHost>) -> Self {
+    fn new(
+        hwnd: HWND,
+        config: Config,
+        translation_service: Rc<GuiTranslationHost>,
+        actions: AppActionSender,
+        session: u64,
+    ) -> Self {
         Self {
             hwnd,
             config,
@@ -257,6 +277,8 @@ impl TranslateDialog {
             manual_options: ManualTranslationOptions::default(),
             in_flight_id: None,
             last_submitted_source: String::new(),
+            actions,
+            session,
         }
     }
 
@@ -265,6 +287,8 @@ impl TranslateDialog {
         parent: HWND,
         config: Config,
         translation_service: Rc<GuiTranslationHost>,
+        actions: AppActionSender,
+        session: u64,
     ) -> Result<HWND> {
         let existing = TRANSLATE_INSTANCE
             .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
@@ -285,6 +309,8 @@ impl TranslateDialog {
             *slot.borrow_mut() = Some(PendingTranslate {
                 config,
                 translation_service,
+                actions,
+                session,
             });
         });
 
@@ -323,6 +349,15 @@ impl TranslateDialog {
             show_dialog_window(hwnd);
         }
         Ok(hwnd)
+    }
+
+    pub(crate) fn current_session() -> Option<u64> {
+        let (hwnd, session) = TRANSLATE_INSTANCE.with(|slot| {
+            let dialog = slot.borrow();
+            let dialog = dialog.as_ref()?.try_borrow().ok()?;
+            Some((dialog.hwnd, dialog.session))
+        })?;
+        unsafe { IsWindow(Some(hwnd)).as_bool().then_some(session) }
     }
 
     fn initialize_controls(&mut self) -> Result<()> {
