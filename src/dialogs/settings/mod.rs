@@ -104,6 +104,14 @@ unsafe extern "system" fn settings_dialog_proc(
     lparam: LPARAM,
 ) -> isize {
     unsafe {
+        if msg == WM_CTLCOLORSTATIC {
+            // SetWindowTextW가 정적 컨트롤을 동기적으로 다시 그릴 때도 설정 상태의
+            // RefCell 대여 여부와 무관하게 탭 본문 배경색을 유지한다.
+            let hdc = HDC(wparam.0 as *mut _);
+            let _ = SetBkMode(hdc, TRANSPARENT);
+            return GetSysColorBrush(COLOR_WINDOW).0 as isize;
+        }
+
         if msg == WM_INITDIALOG {
             let pending = SETTINGS_PENDING.with(|slot| slot.borrow_mut().take());
             let Some(PendingSettings { draft, actions }) = pending else {
@@ -956,16 +964,6 @@ impl SettingsDialog {
                     self.layout_for_current_size();
                 }
                 Some(LRESULT(1))
-            }
-            WM_CTLCOLORSTATIC => {
-                // Tab 본문과 child control 배경을 모두 COLOR_WINDOW로 맞춘다.
-                // SAFETY: wparam은 OS가 전달한 유효 HDC다.
-                unsafe {
-                    let hdc = HDC(wparam.0 as *mut _);
-                    let _ = SetBkMode(hdc, TRANSPARENT);
-                    let brush = GetSysColorBrush(COLOR_WINDOW);
-                    Some(LRESULT(brush.0 as isize))
-                }
             }
             WM_DRAWITEM => {
                 // SAFETY: lparam points to a valid DRAWITEMSTRUCT from the system.

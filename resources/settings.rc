@@ -134,7 +134,7 @@ BEGIN
     EDITTEXT        1282, 46, 66, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
     LTEXT           "시스템 프롬프트:", 2235, 17, 83, 57, 10
     EDITTEXT        1284, 17, 94, 249, 59, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Temperature:", 2236, 17, 158, 51, 10
+    LTEXT           "temp:", 2236, 17, 158, 51, 10
     CONTROL         "", 1287, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 69, 157, 103, 12
     LTEXT           "0.00", 1288, 174, 159, 29, 10
     LTEXT           "Max:", 2237, 206, 159, 24, 10
@@ -145,8 +145,6 @@ BEGIN
     EDITTEXT        1289, 192, 174, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
     LTEXT           "사전 항목: 0", 1298, 17, 191, 69, 10
     PUSHBUTTON      "사전 편집...", 1297, 91, 190, 71, 12
-    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 207, 249, 10
-
     LTEXT           "등록 이름:", 2241, 17, 51, 46, 10
     COMBOBOX        1310, 66, 50, 197, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     LTEXT           "상세 설정은 구성 파일에서 관리합니다.", 2242, 17, 66, 246, 9
