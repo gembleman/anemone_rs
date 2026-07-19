@@ -37,9 +37,6 @@ pub struct TranslationConfig {
     /// DeepL 보조 API 키 목록 (멀티 키 폴백). 비어 있지 않으면 `deepl_api_key`보다 우선.
     #[serde(default)]
     pub deepl_keys: Vec<String>,
-    /// `deepl_keys`와 같은 순서의 API 플랜 (`free` | `pro`). 이전 설정은 키 접미사로 보완한다.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deepl_key_tiers: Vec<String>,
     /// DeepL 다중 키 전략: "failover" | "round-robin"
     #[serde(default = "default_deepl_strategy")]
     pub deepl_strategy: String,
@@ -263,62 +260,6 @@ impl TranslationConfig {
         }
         keys
     }
-
-    pub(crate) fn deepl_key_tier(&self, index: usize) -> crate::translation::DeepLApiTier {
-        self.deepl_key_tiers
-            .get(index)
-            .and_then(|tier| crate::translation::DeepLApiTier::from_config_value(tier))
-            .unwrap_or_else(|| {
-                crate::translation::DeepLApiTier::from_api_key(&self.deepl_keys[index])
-            })
-    }
-
-    pub(crate) fn deepl_effective_keys_with_tiers(
-        &self,
-    ) -> Vec<(String, crate::translation::DeepLApiTier)> {
-        let keys = self
-            .deepl_keys
-            .iter()
-            .enumerate()
-            .filter(|(_, key)| !key.is_empty())
-            .map(|(index, key)| (key.clone(), self.deepl_key_tier(index)))
-            .collect::<Vec<_>>();
-        if !keys.is_empty() {
-            return keys;
-        }
-
-        let key = self.deepl_api_key.clone();
-        if key.is_empty() {
-            Vec::new()
-        } else {
-            let tier = crate::translation::DeepLApiTier::from_api_key(&key);
-            vec![(key, tier)]
-        }
-    }
-
-    pub(crate) fn push_deepl_key(&mut self, key: String, tier: crate::translation::DeepLApiTier) {
-        self.normalize_deepl_key_tiers();
-        self.deepl_keys.push(key);
-        self.deepl_key_tiers.push(tier.config_value().to_string());
-    }
-
-    pub(crate) fn remove_deepl_key(&mut self, index: usize) {
-        self.normalize_deepl_key_tiers();
-        self.deepl_keys.remove(index);
-        self.deepl_key_tiers.remove(index);
-    }
-
-    fn normalize_deepl_key_tiers(&mut self) {
-        self.deepl_key_tiers.truncate(self.deepl_keys.len());
-        for index in self.deepl_key_tiers.len()..self.deepl_keys.len() {
-            let tier = crate::translation::DeepLApiTier::from_api_key(&self.deepl_keys[index]);
-            self.deepl_key_tiers.push(tier.config_value().to_string());
-        }
-        for index in 0..self.deepl_key_tiers.len() {
-            let tier = self.deepl_key_tier(index);
-            self.deepl_key_tiers[index] = tier.config_value().to_string();
-        }
-    }
 }
 
 fn deserialize_engine<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -371,7 +312,6 @@ impl Default for TranslationConfig {
             eztrans_process_count: default_eztrans_process_count(),
             deepl_api_key: String::new(),
             deepl_keys: Vec::new(),
-            deepl_key_tiers: Vec::new(),
             deepl_strategy: default_deepl_strategy(),
             papago_client_id: String::new(),
             papago_client_secret: String::new(),

@@ -43,17 +43,13 @@ fn builds_deepl_credentials_from_the_effective_key_list() {
     let config = TranslationConfig {
         engine: "deepl".into(),
         deepl_keys: vec!["first".into(), "second".into()],
-        deepl_key_tiers: vec!["free".into(), "pro".into()],
         ..TranslationConfig::default()
     };
     let spec = PreparedJob::from_config(&config).unwrap();
     assert_eq!(spec.engine().engine(), TranslationEngine::DeepL);
     assert!(
         matches!(spec.engine().kind(), PreparedEngineKind::DeepL { keys, .. }
-        if keys.iter().map(|(key, tier)| (key.as_str(), *tier)).eq([
-            ("first", DeepLApiTier::Free),
-            ("second", DeepLApiTier::Pro),
-        ]))
+            if keys.iter().map(String::as_str).eq(["first", "second"]))
     );
 }
 

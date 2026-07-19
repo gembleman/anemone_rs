@@ -297,9 +297,8 @@ impl SettingsDialog {
         )?;
         self.initialize_combo(ctrl_id::DEEPL_KEY_TIER_COMBO, &["무료", "유료"], 0)?;
         let key_list = self.control(ctrl_id::DEEPL_KEYS_LIST)?;
-        for (index, key) in config.translation.deepl_keys.iter().enumerate() {
-            let tier = config.translation.deepl_key_tier(index);
-            let wide = to_wide(&format_deepl_key(key, tier));
+        for key in &config.translation.deepl_keys {
+            let wide = to_wide(&format_deepl_key(key));
             unsafe {
                 let _ = SendMessageW(
                     key_list,

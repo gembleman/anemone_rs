@@ -5,9 +5,7 @@ use std::sync::Arc;
 use crate::config::TranslationConfig;
 use crate::translation::custom::CustomApiCallParams;
 use crate::translation::llm::LlmCallParams;
-use crate::translation::{
-    DeepLApiTier, EzTransProcessConfig, Language, TranslationEngine, prepare_eztrans,
-};
+use crate::translation::{EzTransProcessConfig, Language, TranslationEngine, prepare_eztrans};
 
 /// DeepL 다중 키 폴백 전략.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -43,7 +41,7 @@ pub(crate) enum PreparedEngineKind {
     EzTrans(EzTransProcessConfig),
     Google,
     DeepL {
-        keys: Vec<(String, DeepLApiTier)>,
+        keys: Vec<String>,
         strategy: DeepLStrategy,
     },
     Papago {
@@ -187,9 +185,9 @@ impl PreparedJob {
                 TranslationEngine::Google => PreparedEngineKind::Google,
                 TranslationEngine::DeepL => {
                     let keys = config
-                        .deepl_effective_keys_with_tiers()
+                        .deepl_effective_keys()
                         .into_iter()
-                        .filter(|(key, _)| !key.trim().is_empty())
+                        .filter(|key| !key.trim().is_empty())
                         .collect::<Vec<_>>();
                     if keys.is_empty() {
                         return Err(TranslationConfigError::MissingCredential("DeepL API 키"));

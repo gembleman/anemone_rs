@@ -319,7 +319,7 @@ impl SettingsDialog {
                 Ok(h) if !h.is_invalid() => h,
                 _ => return,
             };
-            let key_wide = to_wide(&format_deepl_key(&key, tier));
+            let key_wide = to_wide(&format_deepl_key(&key));
             let _ = SendMessageW(
                 listbox,
                 LB_ADDSTRING,

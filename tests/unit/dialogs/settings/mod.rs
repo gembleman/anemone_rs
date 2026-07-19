@@ -1,5 +1,5 @@
 use super::{EngineGroup, SettingsDialog, format_deepl_key, mask_secret};
-use crate::translation::{DeepLApiTier, TranslationEngine};
+use crate::translation::TranslationEngine;
 
 #[test]
 fn secret_mask_never_contains_the_complete_secret() {
@@ -11,14 +11,8 @@ fn secret_mask_never_contains_the_complete_secret() {
 
 #[test]
 fn deepl_key_labels_show_the_detected_api_tier() {
-    assert_eq!(
-        format_deepl_key("free-secret:fx", DeepLApiTier::Free),
-        "[무료] ••••t:fx"
-    );
-    assert_eq!(
-        format_deepl_key("pro-secret:fx", DeepLApiTier::Pro),
-        "[유료] ••••t:fx"
-    );
+    assert_eq!(format_deepl_key("free-secret:fx"), "[무료] ••••t:fx");
+    assert_eq!(format_deepl_key("pro-secret"), "[유료] ••••cret");
 }
 
 #[test]

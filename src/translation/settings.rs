@@ -47,6 +47,8 @@ pub enum TranslationSettingsError {
     InvalidCurrentConfig(String),
     #[error("DeepL API Free 키는 ':fx'로 끝나야 합니다.")]
     InvalidDeepLFreeKey,
+    #[error("':fx'로 끝나는 키는 DeepL API Free 유형으로 추가해야 합니다.")]
+    InvalidDeepLProKey,
 }
 
 pub struct TranslationSettingsEditor;
@@ -164,16 +166,16 @@ impl TranslationSettingsEditor {
             ),
             TranslationSettingChange::AddDeepLKey { tier, key } => {
                 let value = key.trim();
-                if !value.is_empty()
-                    && tier == DeepLApiTier::Free
-                    && DeepLApiTier::from_api_key(value) != DeepLApiTier::Free
-                {
-                    return Err(TranslationSettingsError::InvalidDeepLFreeKey);
+                if !value.is_empty() && DeepLApiTier::from_api_key(value) != tier {
+                    return Err(match tier {
+                        DeepLApiTier::Free => TranslationSettingsError::InvalidDeepLFreeKey,
+                        DeepLApiTier::Pro => TranslationSettingsError::InvalidDeepLProKey,
+                    });
                 }
                 if value.is_empty() || config.deepl_keys.iter().any(|key| key == value) {
                     false
                 } else {
-                    config.push_deepl_key(value.to_string(), tier);
+                    config.deepl_keys.push(value.to_string());
                     true
                 }
             }
@@ -181,7 +183,7 @@ impl TranslationSettingsEditor {
                 if index >= config.deepl_keys.len() {
                     false
                 } else {
-                    config.remove_deepl_key(index);
+                    config.deepl_keys.remove(index);
                     true
                 }
             }
