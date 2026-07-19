@@ -568,7 +568,7 @@ impl SettingsDialog {
         self.layout_for_current_size();
     }
 
-    /// 사용자가 테두리를 끌어 바꾼 client 크기에 tab, 닫기 button, scrollbar를 맞춘다.
+    /// 사용자가 테두리를 끌어 바꾼 client 크기에 tab, 하단 button, scrollbar를 맞춘다.
     fn layout_for_current_size(&mut self) {
         // SAFETY: self.hwnd와 자식 컨트롤은 설정창 수명 동안 유효하다.
         unsafe {
@@ -610,25 +610,31 @@ impl SettingsDialog {
             }
 
             // 내용이 모두 보이면 하단에 고정하고, 스크롤 중이면 기존처럼 내용 끝에 둔다.
-            if let Ok(close_hwnd) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
-                let mut close_rect = RECT::default();
-                if GetWindowRect(close_hwnd, &mut close_rect).is_ok() {
-                    let close_width = close_rect.right - close_rect.left;
-                    let close_height = close_rect.bottom - close_rect.top;
-                    let close_y = if scroll_max == 0 {
-                        height - s(65)
-                    } else {
-                        content_height - s(65) - new_scroll_pos
-                    };
+            let button_y = if scroll_max == 0 {
+                height - s(65)
+            } else {
+                content_height - s(65) - new_scroll_pos
+            };
+            let mut button_right = width - s(15);
+            for id in [ctrl_id::CLOSE, ctrl_id::APPLY] {
+                if let Ok(button) = GetDlgItem(Some(self.hwnd), id as i32) {
+                    let mut button_rect = RECT::default();
+                    if GetWindowRect(button, &mut button_rect).is_err() {
+                        continue;
+                    }
+                    let button_width = button_rect.right - button_rect.left;
+                    let button_height = button_rect.bottom - button_rect.top;
+                    button_right -= button_width;
                     let _ = SetWindowPos(
-                        close_hwnd,
+                        button,
                         None,
-                        width - s(15) - close_width,
-                        close_y,
-                        close_width,
-                        close_height,
+                        button_right,
+                        button_y,
+                        button_width,
+                        button_height,
                         SWP_NOZORDER | SWP_NOACTIVATE,
                     );
+                    button_right -= s(5);
                 }
             }
 
@@ -701,8 +707,10 @@ impl SettingsDialog {
             for &child in self.tab_controls.iter().flatten() {
                 offset(self.hwnd, child, delta);
             }
-            if let Ok(close) = GetDlgItem(Some(self.hwnd), ctrl_id::CLOSE as i32) {
-                offset(self.hwnd, close, delta);
+            for id in [ctrl_id::APPLY, ctrl_id::CLOSE] {
+                if let Ok(button) = GetDlgItem(Some(self.hwnd), id as i32) {
+                    offset(self.hwnd, button, delta);
+                }
             }
         }
     }

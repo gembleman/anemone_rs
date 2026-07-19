@@ -69,6 +69,9 @@ namespace AnemoneE2E
         private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
 
         [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll")]
@@ -133,6 +136,26 @@ namespace AnemoneE2E
                     "Control not found: " + controlId + "; child IDs: " + ids);
             }
             return control;
+        }
+
+        public static void AssertControlVisibleInWindow(IntPtr window, IntPtr control, int controlId)
+        {
+            RECT windowRect;
+            RECT controlRect;
+            if (!IsWindowVisible(control))
+                throw new InvalidOperationException("Control is hidden: " + controlId);
+            if (!GetWindowRect(window, out windowRect) || !GetWindowRect(control, out controlRect))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "GetWindowRect failed");
+            if (controlRect.Left < windowRect.Left || controlRect.Top < windowRect.Top ||
+                controlRect.Right > windowRect.Right || controlRect.Bottom > windowRect.Bottom)
+            {
+                throw new InvalidOperationException(
+                    "Control is outside its window: " + controlId +
+                    "; control=(" + controlRect.Left + "," + controlRect.Top + "," +
+                    controlRect.Right + "," + controlRect.Bottom + ")" +
+                    "; window=(" + windowRect.Left + "," + windowRect.Top + "," +
+                    windowRect.Right + "," + windowRect.Bottom + ")");
+            }
         }
 
         public static void SelectCombo(IntPtr combo, int index)
@@ -364,6 +387,7 @@ try {
 
     # Settings are persisted only when Apply is clicked.
     $applyButton = [AnemoneE2E.NativeMethods]::RequireControl($settingsWindow, 1301)
+    [AnemoneE2E.NativeMethods]::AssertControlVisibleInWindow($settingsWindow, $applyButton, 1301)
     [AnemoneE2E.NativeMethods]::SendCommand($settingsWindow, 1301, 0, $applyButton)
     $closeButton = [AnemoneE2E.NativeMethods]::RequireControl($settingsWindow, 1300)
     [AnemoneE2E.NativeMethods]::SendCommand($settingsWindow, 1300, 0, $closeButton)

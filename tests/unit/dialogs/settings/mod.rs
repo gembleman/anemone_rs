@@ -16,7 +16,8 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         CB_GETCURSEL, CB_SETCURSEL, DestroyWindow, GWL_STYLE, GetDesktopWindow, GetDlgItem,
-        GetWindowLongPtrW, IsWindow, SendMessageW, SetWindowTextW, WM_COMMAND, WS_THICKFRAME,
+        GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible, SendMessageW, SetWindowTextW,
+        WM_COMMAND, WS_THICKFRAME,
     };
     use windows::core::w;
 
@@ -92,6 +93,18 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         0,
         "settings dialog must expose the standard resize border"
     );
+    let apply = control(hwnd, ctrl_id::APPLY);
+    let mut dialog_rect = Default::default();
+    let mut apply_rect = Default::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut dialog_rect).unwrap();
+        GetWindowRect(apply, &mut apply_rect).unwrap();
+    }
+    assert!(unsafe { IsWindowVisible(apply).as_bool() });
+    assert!(apply_rect.left >= dialog_rect.left);
+    assert!(apply_rect.top >= dialog_rect.top);
+    assert!(apply_rect.right <= dialog_rect.right);
+    assert!(apply_rect.bottom <= dialog_rect.bottom);
 
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_SOURCE_LANG), 2);
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_TARGET_LANG), 5);
