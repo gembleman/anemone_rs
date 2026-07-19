@@ -127,27 +127,25 @@ BEGIN
     LTEXT           "Secret:", 2222, 17, 118, 46, 10
     EDITTEXT        1271, 66, 117, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
 
-    GROUPBOX        "LLM 번역", 2230, 9, 93, 263, 184
+    GROUPBOX        "LLM 번역", 2230, 9, 93, 263, 168
     LTEXT           "제공자:", 2231, 17, 106, 29, 10
     COMBOBOX        1280, 46, 105, 57, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     LTEXT           "모델:", 2232, 111, 106, 23, 10
     EDITTEXT        1281, 134, 105, 131, 12, ES_AUTOHSCROLL | WS_TABSTOP
     LTEXT           "API 키:", 2233, 17, 122, 29, 10
     EDITTEXT        1282, 46, 121, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    LTEXT           "Base URL:", 2234, 17, 138, 34, 10
-    EDITTEXT        1283, 54, 137, 211, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "시스템 프롬프트:", 2235, 17, 154, 57, 10
-    EDITTEXT        1284, 17, 165, 249, 59, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Temperature:", 2236, 17, 229, 51, 10
-    CONTROL         "", 1287, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 69, 228, 103, 12
-    LTEXT           "0.00", 1288, 174, 230, 29, 10
-    LTEXT           "Max:", 2237, 206, 230, 24, 10
-    EDITTEXT        1286, 231, 229, 34, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "디바운스(ms):", 2238, 17, 246, 51, 10
-    EDITTEXT        1289, 69, 245, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "사전 항목: 0", 1298, 120, 246, 69, 10
-    PUSHBUTTON      "사전 편집...", 1297, 194, 245, 71, 12
-    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 261, 249, 10
+    LTEXT           "시스템 프롬프트:", 2235, 17, 138, 57, 10
+    EDITTEXT        1284, 17, 149, 249, 59, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Temperature:", 2236, 17, 213, 51, 10
+    CONTROL         "", 1287, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 69, 212, 103, 12
+    LTEXT           "0.00", 1288, 174, 214, 29, 10
+    LTEXT           "Max:", 2237, 206, 214, 24, 10
+    EDITTEXT        1286, 231, 213, 34, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "디바운스(ms):", 2238, 17, 230, 51, 10
+    EDITTEXT        1289, 69, 229, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "사전 항목: 0", 1298, 120, 230, 69, 10
+    PUSHBUTTON      "사전 편집...", 1297, 194, 229, 71, 12
+    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 245, 249, 10
 
     GROUPBOX        "커스텀 API", 2240, 9, 93, 263, 42
     LTEXT           "등록 이름:", 2241, 17, 107, 46, 10

@@ -24,7 +24,8 @@ pub struct LlmConfig {
     /// API 키 (Anthropic은 x-api-key, 그 외는 Bearer)
     #[serde(default)]
     pub api_key: String,
-    /// Base URL (비우면 제공자 기본값 사용; OpenRouter 자체 호스팅 등에 사용)
+    /// API 기본 URL. 설정 UI에는 노출하지 않으며 `config.toml`에서만 변경한다.
+    /// 비우면 제공자의 공식 기본 URL을 사용한다.
     #[serde(default)]
     pub base_url: String,
     /// 시스템 프롬프트 (`{source}`, `{target}` 치환)

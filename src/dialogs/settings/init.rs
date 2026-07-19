@@ -78,7 +78,6 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::LLM_PROVIDER,
     ctrl_id::LLM_MODEL_EDIT,
     ctrl_id::LLM_API_KEY_EDIT,
-    ctrl_id::LLM_BASE_URL_EDIT,
     ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
     ctrl_id::LLM_MAX_TOKENS_EDIT,
     ctrl_id::LLM_TEMPERATURE_TRACKBAR,
@@ -158,7 +157,6 @@ impl SettingsDialog {
                 ctrl_id::LLM_PROVIDER,
                 ctrl_id::LLM_MODEL_EDIT,
                 ctrl_id::LLM_API_KEY_EDIT,
-                ctrl_id::LLM_BASE_URL_EDIT,
                 ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
                 ctrl_id::LLM_MAX_TOKENS_EDIT,
                 ctrl_id::LLM_TEMPERATURE_TRACKBAR,
@@ -331,7 +329,6 @@ impl SettingsDialog {
         )?;
         self.set_text(ctrl_id::LLM_MODEL_EDIT, &config.translation.llm.model)?;
         self.set_text(ctrl_id::LLM_API_KEY_EDIT, &config.translation.llm.api_key)?;
-        self.set_text(ctrl_id::LLM_BASE_URL_EDIT, &config.translation.llm.base_url)?;
         self.set_text(
             ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
             &config.translation.llm.system_prompt,

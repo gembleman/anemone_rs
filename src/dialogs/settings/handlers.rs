@@ -648,7 +648,6 @@ impl SettingsDialog {
             EZTRANS_DAT_EDIT => TranslationSettingChange::EzTransDatPath(text),
             LLM_MODEL_EDIT => TranslationSettingChange::LlmModel(text),
             LLM_API_KEY_EDIT => TranslationSettingChange::LlmApiKey(text),
-            LLM_BASE_URL_EDIT => TranslationSettingChange::LlmBaseUrl(text),
             LLM_SYSTEM_PROMPT_EDIT => TranslationSettingChange::LlmSystemPrompt(text),
             LLM_MAX_TOKENS_EDIT => TranslationSettingChange::LlmMaxTokensText(text),
             LLM_DEBOUNCE_EDIT => TranslationSettingChange::LlmDebounceText(text),

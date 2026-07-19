@@ -148,6 +148,24 @@ fn llm_limits_are_normalized_at_every_config_boundary() {
 }
 
 #[test]
+fn llm_base_url_is_loaded_from_and_saved_to_toml() {
+    let text = r#"
+[translation.llm]
+base_url = "http://127.0.0.1:1234/v1"
+"#;
+
+    let loaded = Config::from_toml_str(text).unwrap();
+    assert_eq!(loaded.translation.llm.base_url, "http://127.0.0.1:1234/v1");
+
+    let serialized = toml::to_string_pretty(&loaded).unwrap();
+    let reloaded = Config::from_toml_str(&serialized).unwrap();
+    assert_eq!(
+        reloaded.translation.llm.base_url,
+        "http://127.0.0.1:1234/v1"
+    );
+}
+
+#[test]
 fn eztrans_process_count_defaults_and_is_clamped() {
     let partial = Config::from_toml_str("[translation]\nengine = \"eztrans\"\n").unwrap();
     assert_eq!(partial.translation.eztrans_process_count, 2);

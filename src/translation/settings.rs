@@ -19,7 +19,6 @@ pub enum TranslationSettingChange {
     EzTransDatPath(String),
     LlmModel(String),
     LlmApiKey(String),
-    LlmBaseUrl(String),
     LlmSystemPrompt(String),
     LlmMaxTokensText(String),
     LlmDebounceText(String),
@@ -199,9 +198,6 @@ impl TranslationSettingsEditor {
             }
             TranslationSettingChange::LlmApiKey(value) => {
                 set_if_changed(&mut config.llm.api_key, value)
-            }
-            TranslationSettingChange::LlmBaseUrl(value) => {
-                set_if_changed(&mut config.llm.base_url, value)
             }
             TranslationSettingChange::LlmSystemPrompt(value) => {
                 set_if_changed(&mut config.llm.system_prompt, value)

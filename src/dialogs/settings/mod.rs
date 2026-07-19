@@ -517,7 +517,7 @@ impl SettingsDialog {
             TranslationEngine::Papago => 325,
             TranslationEngine::DeepL => 410,
             TranslationEngine::Custom => 330,
-            TranslationEngine::Llm => 600,
+            TranslationEngine::Llm => 570,
         }
     }
 
