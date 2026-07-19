@@ -37,6 +37,9 @@ pub struct LlmConfig {
     /// 응답 최대 토큰
     #[serde(default = "default_llm_max_tokens")]
     pub max_tokens: u32,
+    /// OpenAI 추론 모델의 추론 강도. 비어 있으면 모델 기본값을 사용한다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<crate::translation::llm::ReasoningEffort>,
     /// 고정 번역 사전 (캐릭터 이름·고유명사 등)
     #[serde(default)]
     pub glossary: Vec<LlmGlossaryEntry>,
@@ -88,6 +91,7 @@ impl Default for LlmConfig {
             system_prompt: default_llm_system_prompt(),
             temperature: default_llm_temperature(),
             max_tokens: default_llm_max_tokens(),
+            reasoning_effort: None,
             glossary: Vec::new(),
             debounce_ms: default_llm_debounce_ms(),
         }
@@ -117,6 +121,7 @@ impl LlmConfig {
             system_prompt: self.system_prompt.clone(),
             temperature: self.temperature,
             max_tokens: self.max_tokens,
+            reasoning_effort: self.reasoning_effort,
             glossary: self
                 .glossary
                 .iter()

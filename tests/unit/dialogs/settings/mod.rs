@@ -48,7 +48,7 @@ fn translation_panel_and_height_follow_the_selected_engine() {
     );
     assert_eq!(
         SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL),
-        335
+        365
     );
     assert!(
         SettingsDialog::translation_group_height_for_engine(TranslationEngine::Papago)
@@ -253,6 +253,21 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
 
     select_combo(hwnd, ctrl_id::TRANS_ENGINE, TranslationEngine::Llm as usize);
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)).as_bool() });
+    assert_eq!(combo_index(hwnd, ctrl_id::LLM_REASONING_EFFORT), 0);
+    select_combo(hwnd, ctrl_id::LLM_REASONING_EFFORT, 5);
+    super::SETTINGS_INSTANCE.with(|slot| {
+        let instance = slot.borrow().as_ref().expect("settings instance").clone();
+        assert_eq!(
+            instance
+                .borrow()
+                .draft
+                .borrow()
+                .translation
+                .llm
+                .reasoning_effort,
+            Some(crate::translation::llm::ReasoningEffort::High)
+        );
+    });
     let mut llm_group_rect = Default::default();
     let mut llm_last_control_rect = Default::default();
     unsafe {

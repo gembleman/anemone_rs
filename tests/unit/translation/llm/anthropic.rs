@@ -10,6 +10,7 @@ fn serializes_cache_control_and_borrowed_messages() {
         system_prompt: String::new(),
         temperature: 0.5,
         max_tokens: 321,
+        reasoning_effort: None,
         glossary: Vec::new(),
     };
     let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
@@ -30,6 +31,7 @@ fn omits_temperature_for_opus_4_7() {
         system_prompt: String::new(),
         temperature: 0.3,
         max_tokens: 321,
+        reasoning_effort: None,
         glossary: Vec::new(),
     };
 

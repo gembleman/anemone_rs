@@ -2,6 +2,7 @@
 
 use crate::config::TranslationConfig;
 use crate::config::limits;
+use crate::translation::llm::ReasoningEffort;
 use crate::translation::{DeepLApiTier, Language, LlmProvider, PreparedJob, TranslationEngine};
 
 pub enum TranslationSettingChange {
@@ -22,6 +23,7 @@ pub enum TranslationSettingChange {
     LlmMaxTokensText(String),
     LlmDebounceText(String),
     LlmTemperatureSlider(i32),
+    LlmReasoningEffort(Option<ReasoningEffort>),
     SelectCustomApi(String),
 }
 
@@ -220,6 +222,9 @@ impl TranslationSettingsEditor {
                 &mut config.llm.temperature,
                 limits::llm_temperature_slider(value),
             ),
+            TranslationSettingChange::LlmReasoningEffort(value) => {
+                set_if_changed(&mut config.llm.reasoning_effort, value)
+            }
             TranslationSettingChange::SelectCustomApi(value) => {
                 config.select_custom_api(&value).map_err(|error| {
                     TranslationSettingsError::InvalidCurrentConfig(error.to_string())

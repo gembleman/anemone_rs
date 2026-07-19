@@ -166,6 +166,46 @@ base_url = "http://127.0.0.1:1234/v1"
 }
 
 #[test]
+fn arbitrary_llm_model_is_loaded_from_and_saved_to_toml() {
+    let text = r#"
+[translation.llm]
+provider = "openai"
+model = "future-or-private-model-id"
+"#;
+
+    let loaded = Config::from_toml_str(text).unwrap();
+    assert_eq!(loaded.translation.llm.model, "future-or-private-model-id");
+
+    let serialized = toml::to_string_pretty(&loaded).unwrap();
+    let reloaded = Config::from_toml_str(&serialized).unwrap();
+    assert_eq!(reloaded.translation.llm.model, "future-or-private-model-id");
+}
+
+#[test]
+fn llm_reasoning_effort_is_optional_and_round_trips() {
+    use crate::translation::llm::ReasoningEffort;
+
+    let default_config = Config::from_toml_str("[translation.llm]\n").unwrap();
+    assert_eq!(default_config.translation.llm.reasoning_effort, None);
+
+    let configured = Config::from_toml_str(
+        "[translation.llm]\nprovider = \"openai\"\nreasoning_effort = \"xhigh\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        configured.translation.llm.reasoning_effort,
+        Some(ReasoningEffort::Xhigh)
+    );
+
+    let serialized = toml::to_string_pretty(&configured).unwrap();
+    let reloaded = Config::from_toml_str(&serialized).unwrap();
+    assert_eq!(
+        reloaded.translation.llm.reasoning_effort,
+        Some(ReasoningEffort::Xhigh)
+    );
+}
+
+#[test]
 fn eztrans_process_count_defaults_and_is_clamped() {
     let partial = Config::from_toml_str("[translation]\nengine = \"eztrans\"\n").unwrap();
     assert_eq!(partial.translation.eztrans_process_count, 2);

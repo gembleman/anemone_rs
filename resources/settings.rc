@@ -129,7 +129,7 @@ BEGIN
     LTEXT           "제공자:", 2231, 17, 51, 29, 10
     COMBOBOX        1280, 46, 50, 57, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     LTEXT           "모델:", 2232, 111, 51, 23, 10
-    EDITTEXT        1281, 134, 50, 131, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    COMBOBOX        1281, 134, 50, 131, 100, CBS_DROPDOWN | CBS_AUTOHSCROLL | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     LTEXT           "API 키:", 2233, 17, 67, 29, 10
     EDITTEXT        1282, 46, 66, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
     LTEXT           "시스템 프롬프트:", 2235, 17, 83, 57, 10
@@ -139,11 +139,13 @@ BEGIN
     LTEXT           "0.00", 1288, 174, 159, 29, 10
     LTEXT           "Max:", 2237, 206, 159, 24, 10
     EDITTEXT        1286, 231, 158, 34, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "디바운스(ms):", 2238, 17, 175, 51, 10
-    EDITTEXT        1289, 69, 174, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "사전 항목: 0", 1298, 120, 175, 69, 10
-    PUSHBUTTON      "사전 편집...", 1297, 194, 174, 71, 12
-    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 190, 249, 10
+    LTEXT           "추론 강도:", 2240, 17, 175, 46, 10
+    COMBOBOX        1283, 63, 174, 64, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "디바운스(ms):", 2238, 140, 175, 51, 10
+    EDITTEXT        1289, 192, 174, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "사전 항목: 0", 1298, 17, 191, 69, 10
+    PUSHBUTTON      "사전 편집...", 1297, 91, 190, 71, 12
+    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 207, 249, 10
 
     LTEXT           "등록 이름:", 2241, 17, 51, 46, 10
     COMBOBOX        1310, 66, 50, 197, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP

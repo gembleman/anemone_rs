@@ -10,6 +10,7 @@ fn serializes_camel_case_generation_config_and_borrowed_parts() {
         system_prompt: String::new(),
         temperature: 0.75,
         max_tokens: 456,
+        reasoning_effort: None,
         glossary: Vec::new(),
     };
     let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();

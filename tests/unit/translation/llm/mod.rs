@@ -41,3 +41,18 @@ fn prompt_expands_repeated_placeholders_and_skips_blank_glossary_entries() {
     assert!(prompt.contains("Alice → 앨리스"));
     assert!(!prompt.contains("ignored"));
 }
+
+#[test]
+fn openai_model_presets_include_current_families_and_default() {
+    let presets = LlmProvider::OpenAi.model_presets();
+    assert!(presets.contains(&LlmProvider::OpenAi.default_model()));
+    for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+        assert!(
+            presets.contains(&model),
+            "missing OpenAI model preset: {model}"
+        );
+    }
+
+    let unique: std::collections::HashSet<_> = presets.iter().collect();
+    assert_eq!(unique.len(), presets.len());
+}

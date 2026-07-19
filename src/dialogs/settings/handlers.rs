@@ -69,6 +69,12 @@ macro_rules! toggle_field {
 impl SettingsDialog {
     /// 명령 처리
     pub(super) fn handle_command(&mut self, cmd: u16, notify_code: u32) {
+        // 편집 가능한 모델 콤보의 직접 입력은 포커스를 잃을 때 확정한다.
+        if cmd == ctrl_id::LLM_MODEL_EDIT && notify_code == CBN_KILLFOCUS {
+            self.handle_edit_killfocus(cmd);
+            return;
+        }
+
         // ComboBox 선택 변경은 별도 처리
         if notify_code == CBN_SELCHANGE {
             self.handle_combobox(cmd);
@@ -563,6 +569,23 @@ impl SettingsDialog {
                     };
                     let _ = self
                         .apply_translation_change(TranslationSettingChange::LlmProvider(provider));
+                    let configured_model = self.get_control_text(LLM_MODEL_EDIT);
+                    let _ = self.populate_llm_model_combo(provider, &configured_model);
+                }
+                LLM_MODEL_EDIT => {
+                    let model = self.get_control_text(LLM_MODEL_EDIT);
+                    let _ =
+                        self.apply_translation_change(TranslationSettingChange::LlmModel(model));
+                }
+                LLM_REASONING_EFFORT => {
+                    let effort = sel.checked_sub(1).and_then(|index| {
+                        crate::translation::llm::ReasoningEffort::ALL
+                            .get(index)
+                            .copied()
+                    });
+                    let _ = self.apply_translation_change(
+                        TranslationSettingChange::LlmReasoningEffort(effort),
+                    );
                 }
                 DEEPL_STRATEGY_COMBO => {
                     let _ = self.apply_translation_change(

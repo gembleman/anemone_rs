@@ -10,13 +10,79 @@ fn serializes_borrowed_request_with_the_api_shape() {
         system_prompt: String::new(),
         temperature: 0.25,
         max_tokens: 123,
+        reasoning_effort: None,
         glossary: Vec::new(),
     };
     let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
     assert_eq!(value["model"], "model");
     assert_eq!(value["messages"][0]["content"], "system");
     assert_eq!(value["messages"][1]["content"], "source");
+    assert_eq!(value["max_completion_tokens"], 123);
+    assert!(value.get("max_tokens").is_none());
+}
+
+#[test]
+fn keeps_max_tokens_for_non_openai_compatible_providers() {
+    let params = LlmCallParams {
+        provider: LlmProvider::OpenRouter,
+        model: "model".into(),
+        api_key: "key".into(),
+        base_url: String::new(),
+        system_prompt: String::new(),
+        temperature: 0.25,
+        max_tokens: 123,
+        reasoning_effort: None,
+        glossary: Vec::new(),
+    };
+    let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
     assert_eq!(value["max_tokens"], 123);
+    assert!(value.get("max_completion_tokens").is_none());
+}
+
+#[test]
+fn omits_temperature_for_openai_reasoning_models() {
+    for model in ["gpt-5.6", "o3", "o4-mini"] {
+        let params = LlmCallParams {
+            provider: LlmProvider::OpenAi,
+            model: model.into(),
+            api_key: "key".into(),
+            base_url: String::new(),
+            system_prompt: String::new(),
+            temperature: 0.25,
+            max_tokens: 123,
+            reasoning_effort: None,
+            glossary: Vec::new(),
+        };
+        let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
+        assert!(value.get("temperature").is_none(), "model: {model}");
+    }
+}
+
+#[test]
+fn serializes_reasoning_effort_only_for_openai_reasoning_models() {
+    let mut params = LlmCallParams {
+        provider: LlmProvider::OpenAi,
+        model: "gpt-5.6".into(),
+        api_key: "key".into(),
+        base_url: String::new(),
+        system_prompt: String::new(),
+        temperature: 0.25,
+        max_tokens: 123,
+        reasoning_effort: Some(ReasoningEffort::Xhigh),
+        glossary: Vec::new(),
+    };
+
+    let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
+    assert_eq!(value["reasoning_effort"], "xhigh");
+
+    params.model = "gpt-4o".into();
+    let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
+    assert!(value.get("reasoning_effort").is_none());
+
+    params.provider = LlmProvider::OpenRouter;
+    params.model = "openai/gpt-5.6".into();
+    let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
+    assert!(value.get("reasoning_effort").is_none());
 }
 
 #[test]

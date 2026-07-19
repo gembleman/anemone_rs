@@ -78,6 +78,7 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::LLM_PROVIDER,
     ctrl_id::LLM_MODEL_EDIT,
     ctrl_id::LLM_API_KEY_EDIT,
+    ctrl_id::LLM_REASONING_EFFORT,
     ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
     ctrl_id::LLM_MAX_TOKENS_EDIT,
     ctrl_id::LLM_TEMPERATURE_TRACKBAR,
@@ -157,6 +158,7 @@ impl SettingsDialog {
                 ctrl_id::LLM_PROVIDER,
                 ctrl_id::LLM_MODEL_EDIT,
                 ctrl_id::LLM_API_KEY_EDIT,
+                ctrl_id::LLM_REASONING_EFFORT,
                 ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
                 ctrl_id::LLM_MAX_TOKENS_EDIT,
                 ctrl_id::LLM_TEMPERATURE_TRACKBAR,
@@ -317,21 +319,17 @@ impl SettingsDialog {
             &config.translation.papago_client_secret,
         )?;
 
+        let provider = config
+            .translation
+            .llm
+            .get_provider()
+            .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
         let providers: Vec<&str> = crate::translation::LlmProvider::ALL
             .iter()
             .map(|provider| provider.display_name())
             .collect();
-        self.initialize_combo(
-            ctrl_id::LLM_PROVIDER,
-            &providers,
-            config
-                .translation
-                .llm
-                .get_provider()
-                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))? as u8
-                as usize,
-        )?;
-        self.set_text(ctrl_id::LLM_MODEL_EDIT, &config.translation.llm.model)?;
+        self.initialize_combo(ctrl_id::LLM_PROVIDER, &providers, provider as u8 as usize)?;
+        self.populate_llm_model_combo(provider, &config.translation.llm.model)?;
         self.set_text(ctrl_id::LLM_API_KEY_EDIT, &config.translation.llm.api_key)?;
         self.set_text(
             ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
@@ -348,6 +346,27 @@ impl SettingsDialog {
         self.set_text(
             ctrl_id::LLM_MAX_TOKENS_EDIT,
             &config.translation.llm.max_tokens.to_string(),
+        )?;
+        let mut reasoning_efforts = vec!["기본값"];
+        reasoning_efforts.extend(
+            crate::translation::llm::ReasoningEffort::ALL
+                .iter()
+                .map(|effort| effort.to_str()),
+        );
+        let reasoning_effort_index = config
+            .translation
+            .llm
+            .reasoning_effort
+            .and_then(|configured| {
+                crate::translation::llm::ReasoningEffort::ALL
+                    .iter()
+                    .position(|&effort| effort == configured)
+            })
+            .map_or(0, |index| index + 1);
+        self.initialize_combo(
+            ctrl_id::LLM_REASONING_EFFORT,
+            &reasoning_efforts,
+            reasoning_effort_index,
         )?;
         self.set_text(
             ctrl_id::LLM_DEBOUNCE_EDIT,
@@ -421,6 +440,30 @@ impl SettingsDialog {
             let _ = SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(selected)), Some(LPARAM(0)));
         }
         Ok(())
+    }
+
+    /// 제공자별 모델 프리셋을 채우되 목록 밖의 직접 입력값도 그대로 보존한다.
+    pub(super) fn populate_llm_model_combo(
+        &self,
+        provider: crate::translation::LlmProvider,
+        configured_model: &str,
+    ) -> Result<()> {
+        let combo = self.control(ctrl_id::LLM_MODEL_EDIT)?;
+        unsafe {
+            let _ = SendMessageW(combo, CB_RESETCONTENT, Some(WPARAM(0)), Some(LPARAM(0)));
+        }
+        for model in provider.model_presets() {
+            let wide = to_wide(model);
+            unsafe {
+                let _ = SendMessageW(
+                    combo,
+                    CB_ADDSTRING,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(wide.as_ptr() as isize)),
+                );
+            }
+        }
+        self.set_text(ctrl_id::LLM_MODEL_EDIT, configured_model)
     }
 
     fn initialize_trackbar(&self, id: u16, min: i32, max: i32, value: i32) -> Result<()> {

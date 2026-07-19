@@ -103,6 +103,28 @@ fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
 }
 
 #[test]
+fn reasoning_effort_selection_updates_llm_config() {
+    use crate::translation::llm::ReasoningEffort;
+
+    let mut config = TranslationConfig::default();
+    let result = TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::LlmReasoningEffort(Some(ReasoningEffort::High)),
+    )
+    .unwrap();
+    assert!(result.changed);
+    assert_eq!(config.llm.reasoning_effort, Some(ReasoningEffort::High));
+
+    let result = TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::LlmReasoningEffort(None),
+    )
+    .unwrap();
+    assert!(result.changed);
+    assert_eq!(config.llm.reasoning_effort, None);
+}
+
+#[test]
 fn deepl_key_type_must_match_the_key_suffix() {
     let mut config = TranslationConfig::default();
     assert_eq!(

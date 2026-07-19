@@ -5,7 +5,7 @@
 
 use super::super::http_common::{LLM_REQUEST_TIMEOUT, send_and_read_body, validate_not_empty};
 use super::super::{Language, TranslationError, TranslationResult};
-use super::{LlmCallParams, LlmProvider, build_system_prompt_with_glossary};
+use super::{LlmCallParams, LlmProvider, ReasoningEffort, build_system_prompt_with_glossary};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -18,8 +18,14 @@ struct ChatMessage<'a> {
 struct ChatRequest<'a> {
     model: &'a str,
     messages: [ChatMessage<'a>; 2],
-    temperature: f32,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 fn request_payload<'a>(
@@ -39,9 +45,29 @@ fn request_payload<'a>(
                 content: text,
             },
         ],
-        temperature: params.temperature,
-        max_tokens: params.max_tokens,
+        // OpenAI reasoning 모델은 sampling temperature를 받지 않는 조합이
+        // 있으므로 서버 기본값을 사용한다.
+        temperature: (!uses_openai_reasoning_model(params)).then_some(params.temperature),
+        // OpenAI는 max_completion_tokens를 표준으로 사용한다. OpenAI 호환
+        // 제공자는 기존 호환성을 위해 max_tokens를 유지한다.
+        max_tokens: (params.provider != LlmProvider::OpenAi).then_some(params.max_tokens),
+        max_completion_tokens: (params.provider == LlmProvider::OpenAi)
+            .then_some(params.max_tokens),
+        reasoning_effort: uses_openai_reasoning_model(params)
+            .then_some(params.reasoning_effort)
+            .flatten(),
     }
+}
+
+fn uses_openai_reasoning_model(params: &LlmCallParams) -> bool {
+    if params.provider != LlmProvider::OpenAi {
+        return false;
+    }
+    let model = params.effective_model().to_ascii_lowercase();
+    model.starts_with("gpt-5")
+        || ["o1", "o3", "o4"]
+            .iter()
+            .any(|prefix| model == *prefix || model.starts_with(&format!("{prefix}-")))
 }
 
 /// OpenAI 호환 chat completions 요청

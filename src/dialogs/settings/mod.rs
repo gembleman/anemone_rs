@@ -528,7 +528,7 @@ impl SettingsDialog {
             | TranslationEngine::Papago
             | TranslationEngine::Custom => 245,
             TranslationEngine::DeepL => 365,
-            TranslationEngine::Llm => 460,
+            TranslationEngine::Llm => 490,
         }
     }
 
@@ -536,7 +536,7 @@ impl SettingsDialog {
     fn translation_group_height_for_engine(engine: TranslationEngine) -> i32 {
         match engine {
             TranslationEngine::DeepL => 136,
-            TranslationEngine::Llm => 187,
+            TranslationEngine::Llm => 204,
             TranslationEngine::Google
             | TranslationEngine::EzTrans
             | TranslationEngine::Papago

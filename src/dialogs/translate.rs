@@ -482,6 +482,10 @@ impl TranslateDialog {
             )
         };
 
+        let provider = LlmProvider::from_u8(provider_index as u8)
+            .ok_or_else(|| Error::new(E_INVALIDARG, "잘못된 LLM 제공자 설정"))?;
+        self.populate_llm_model_combo(provider);
+
         unsafe {
             let _ = SendMessageW(
                 self.engine_combo,
@@ -604,7 +608,7 @@ impl TranslateDialog {
                 self.invalidate_translation_route();
                 self.apply_llm_provider();
             }
-            EDIT_LLM_MODEL if notify_code == EN_CHANGE => {
+            EDIT_LLM_MODEL if notify_code == CBN_SELCHANGE || notify_code == CBN_EDITCHANGE => {
                 self.invalidate_translation_route();
                 self.apply_llm_model();
             }
@@ -679,6 +683,7 @@ impl TranslateDialog {
             return;
         };
         self.config.translation.llm.set_provider(provider);
+        self.populate_llm_model_combo(provider);
     }
 
     fn apply_llm_model(&mut self) {
@@ -691,6 +696,18 @@ impl TranslateDialog {
         // SAFETY: edit 핸들은 리소스 템플릿에서 얻은 유효한 핸들.
         let text = get_window_text(self.llm_api_key_edit);
         self.config.translation.llm.api_key = text;
+    }
+
+    /// 제공자별 모델 프리셋을 다시 채우고 현재 직접 입력값을 유지한다.
+    fn populate_llm_model_combo(&self, provider: LlmProvider) {
+        let configured_model = get_window_text(self.llm_model_edit);
+        unsafe {
+            let _ = SendMessageW(self.llm_model_edit, CB_RESETCONTENT, None, None);
+        }
+        for model in provider.model_presets() {
+            self.add_combobox_item(self.llm_model_edit, model);
+        }
+        let _ = set_window_text(self.llm_model_edit, &configured_model);
     }
 
     fn add_combobox_item(&self, combo: HWND, text: &str) {
