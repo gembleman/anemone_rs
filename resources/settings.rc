@@ -149,22 +149,10 @@ BEGIN
     PUSHBUTTON      "사전 편집...", 1297, 194, 245, 71, 12
     LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 261, 249, 10
 
-    GROUPBOX        "커스텀 API (JSON POST)", 2240, 9, 93, 263, 177
-    LTEXT           "URL:", 2241, 17, 107, 29, 10
-    EDITTEXT        1310, 46, 106, 220, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "API 키:", 2242, 17, 123, 29, 10
-    EDITTEXT        1311, 46, 122, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    LTEXT           "인증 헤더:", 2243, 17, 139, 40, 10
-    EDITTEXT        1312, 59, 138, 94, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "스킴:", 2244, 159, 139, 23, 10
-    EDITTEXT        1313, 183, 138, 83, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "추가 헤더:", 2248, 17, 155, 40, 10
-    EDITTEXT        1316, 59, 154, 207, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "응답 경로:", 2245, 17, 171, 40, 10
-    EDITTEXT        1315, 59, 170, 207, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "요청 JSON 템플릿:", 2246, 17, 187, 69, 10
-    EDITTEXT        1314, 17, 198, 249, 51, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "변수: {text}, {source}, {target}, {api_key} · 응답 경로를 비우면 본문 전체 사용", 2247, 17, 253, 249, 10
+    GROUPBOX        "커스텀 API", 2240, 9, 93, 263, 42
+    LTEXT           "등록 이름:", 2241, 17, 107, 46, 10
+    COMBOBOX        1310, 66, 106, 197, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "상세 설정은 구성 파일에서 관리합니다.", 2242, 17, 122, 246, 9
 
     PUSHBUTTON      "적용", 1301, 149, 598, 57, 16
     DEFPUSHBUTTON   "닫기", 1300, 211, 598, 57, 16

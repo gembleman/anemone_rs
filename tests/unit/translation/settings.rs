@@ -177,20 +177,7 @@ fn identical_engine_language_and_string_changes_have_no_follow_up_policy() {
 }
 
 #[test]
-fn custom_api_fields_are_applied_without_runtime_reinitialization() {
-    let mut config = TranslationConfig::default();
-    let result = TranslationSettingsEditor::apply(
-        &mut config,
-        TranslationSettingChange::CustomRequestTemplate(r#"{"q":"{text}"}"#.into()),
-    )
-    .unwrap();
-    assert_eq!(config.custom.request_template, r#"{"q":"{text}"}"#);
-    assert!(result.changed);
-    assert!(!result.runtime_sync_required);
-}
-
-#[test]
-fn custom_api_fields_update_only_the_selected_named_entry() {
+fn custom_api_selection_changes_only_the_registered_name() {
     let first = crate::config::CustomApiConfig {
         name: "first".into(),
         ..Default::default()
@@ -205,20 +192,15 @@ fn custom_api_fields_update_only_the_selected_named_entry() {
         ..TranslationConfig::default()
     };
 
-    TranslationSettingsEditor::apply(
+    let result = TranslationSettingsEditor::apply(
         &mut config,
         TranslationSettingChange::SelectCustomApi("second".into()),
     )
     .unwrap();
-    TranslationSettingsEditor::apply(
-        &mut config,
-        TranslationSettingChange::CustomUrl("https://second.example/translate".into()),
-    )
-    .unwrap();
 
-    assert!(config.custom_apis[0].url.is_empty());
-    assert_eq!(
-        config.custom_apis[1].url,
-        "https://second.example/translate"
-    );
+    assert_eq!(config.custom_api, "second");
+    assert_eq!(config.custom_apis[0].name, "first");
+    assert_eq!(config.custom_apis[1].name, "second");
+    assert!(result.changed);
+    assert!(!result.runtime_sync_required);
 }

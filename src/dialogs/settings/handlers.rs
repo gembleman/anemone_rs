@@ -477,38 +477,8 @@ impl SettingsDialog {
             match id {
                 TRANS_ENGINE => {
                     use crate::translation::TranslationEngine;
-                    let custom_start = TranslationEngine::Custom as usize;
-                    let engine = if sel >= custom_start {
-                        let custom_name = {
-                            let config = self.draft.borrow();
-                            if config.translation.custom_apis.is_empty() {
-                                (sel == custom_start)
-                                    .then(|| config.translation.custom.name.clone())
-                            } else {
-                                config
-                                    .translation
-                                    .custom_apis
-                                    .get(sel - custom_start)
-                                    .map(|api| api.name.clone())
-                            }
-                        };
-                        let Some(custom_name) = custom_name else {
-                            return;
-                        };
-                        if self
-                            .apply_translation_change(TranslationSettingChange::SelectCustomApi(
-                                custom_name,
-                            ))
-                            .is_err()
-                        {
-                            return;
-                        }
-                        TranslationEngine::Custom
-                    } else {
-                        let Some(engine) = TranslationEngine::from_u8(sel as u8) else {
-                            return;
-                        };
-                        engine
+                    let Some(engine) = TranslationEngine::from_u8(sel as u8) else {
+                        return;
                     };
                     if self
                         .apply_translation_change(TranslationSettingChange::Engine(engine))
@@ -518,9 +488,26 @@ impl SettingsDialog {
                     }
                     // 엔진 변경 시 해당 그룹만 활성화하고 언어 콤보 항목 재구성
                     self.apply_engine_state(engine);
-                    if engine == TranslationEngine::Custom {
-                        self.refresh_custom_api_controls();
-                    }
+                }
+                CUSTOM_API_SELECT => {
+                    let custom_name = {
+                        let config = self.draft.borrow();
+                        if config.translation.custom_apis.is_empty() {
+                            None
+                        } else {
+                            config
+                                .translation
+                                .custom_apis
+                                .get(sel)
+                                .map(|api| api.name.clone())
+                        }
+                    };
+                    let Some(custom_name) = custom_name else {
+                        return;
+                    };
+                    let _ = self.apply_translation_change(
+                        TranslationSettingChange::SelectCustomApi(custom_name),
+                    );
                 }
                 TRANS_SOURCE_LANG => {
                     let Ok(engine) = self.draft.borrow().translation.get_engine() else {
@@ -566,29 +553,6 @@ impl SettingsDialog {
                 _ => {}
             }
         }
-    }
-
-    fn refresh_custom_api_controls(&self) {
-        let custom = {
-            let config = self.draft.borrow();
-            match config.translation.active_custom_api() {
-                Ok(custom) => custom.clone(),
-                Err(error) => {
-                    tracing::warn!("Custom API 설정을 표시할 수 없습니다: {error}");
-                    return;
-                }
-            }
-        };
-        self.set_control_text(ctrl_id::CUSTOM_URL_EDIT, &custom.url);
-        self.set_control_text(ctrl_id::CUSTOM_API_KEY_EDIT, &custom.api_key);
-        self.set_control_text(ctrl_id::CUSTOM_AUTH_HEADER_EDIT, &custom.auth_header);
-        self.set_control_text(ctrl_id::CUSTOM_AUTH_SCHEME_EDIT, &custom.auth_scheme);
-        self.set_control_text(ctrl_id::CUSTOM_HEADERS_EDIT, &custom.headers);
-        self.set_control_text(
-            ctrl_id::CUSTOM_REQUEST_TEMPLATE_EDIT,
-            &custom.request_template,
-        );
-        self.set_control_text(ctrl_id::CUSTOM_RESPONSE_PATH_EDIT, &custom.response_path);
     }
 
     /// EzTrans 초기화 동기화 (다른 엔진은 워커가 매번 자격증명을 받아 stateless)
@@ -688,13 +652,6 @@ impl SettingsDialog {
             LLM_SYSTEM_PROMPT_EDIT => TranslationSettingChange::LlmSystemPrompt(text),
             LLM_MAX_TOKENS_EDIT => TranslationSettingChange::LlmMaxTokensText(text),
             LLM_DEBOUNCE_EDIT => TranslationSettingChange::LlmDebounceText(text),
-            CUSTOM_URL_EDIT => TranslationSettingChange::CustomUrl(text),
-            CUSTOM_API_KEY_EDIT => TranslationSettingChange::CustomApiKey(text),
-            CUSTOM_AUTH_HEADER_EDIT => TranslationSettingChange::CustomAuthHeader(text),
-            CUSTOM_AUTH_SCHEME_EDIT => TranslationSettingChange::CustomAuthScheme(text),
-            CUSTOM_HEADERS_EDIT => TranslationSettingChange::CustomHeaders(text),
-            CUSTOM_REQUEST_TEMPLATE_EDIT => TranslationSettingChange::CustomRequestTemplate(text),
-            CUSTOM_RESPONSE_PATH_EDIT => TranslationSettingChange::CustomResponsePath(text),
             _ => return,
         };
         if let Err(error) = self.apply_translation_change(change) {

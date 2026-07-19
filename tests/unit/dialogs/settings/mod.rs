@@ -32,6 +32,10 @@ fn translation_panel_and_height_follow_the_selected_engine() {
         SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL)
             < SettingsDialog::translation_height_for_engine(TranslationEngine::Llm)
     );
+    assert_eq!(
+        SettingsDialog::translation_height_for_engine(TranslationEngine::Custom),
+        330
+    );
 }
 
 #[test]

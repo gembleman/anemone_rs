@@ -86,13 +86,7 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::LLM_DEBOUNCE_EDIT,
     ctrl_id::LLM_GLOSSARY_EDIT_BTN,
     ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
-    ctrl_id::CUSTOM_URL_EDIT,
-    ctrl_id::CUSTOM_API_KEY_EDIT,
-    ctrl_id::CUSTOM_AUTH_HEADER_EDIT,
-    ctrl_id::CUSTOM_AUTH_SCHEME_EDIT,
-    ctrl_id::CUSTOM_REQUEST_TEMPLATE_EDIT,
-    ctrl_id::CUSTOM_RESPONSE_PATH_EDIT,
-    ctrl_id::CUSTOM_HEADERS_EDIT,
+    ctrl_id::CUSTOM_API_SELECT,
 ];
 
 impl SettingsDialog {
@@ -175,18 +169,7 @@ impl SettingsDialog {
             ],
         )?;
         self.register_engine_ids(EngineGroup::Custom, ctrl_id::CUSTOM_STATIC_IDS)?;
-        self.register_engine_ids(
-            EngineGroup::Custom,
-            &[
-                ctrl_id::CUSTOM_URL_EDIT,
-                ctrl_id::CUSTOM_API_KEY_EDIT,
-                ctrl_id::CUSTOM_AUTH_HEADER_EDIT,
-                ctrl_id::CUSTOM_AUTH_SCHEME_EDIT,
-                ctrl_id::CUSTOM_REQUEST_TEMPLATE_EDIT,
-                ctrl_id::CUSTOM_RESPONSE_PATH_EDIT,
-                ctrl_id::CUSTOM_HEADERS_EDIT,
-            ],
-        )
+        self.register_engine_ids(EngineGroup::Custom, &[ctrl_id::CUSTOM_API_SELECT])
     }
 
     fn initialize_values(&self) -> Result<()> {
@@ -257,32 +240,31 @@ impl SettingsDialog {
         self.set_checked(ctrl_id::CLIPBOARD_WATCH, config.clipboard_watch)?;
         self.set_checked(ctrl_id::WNDCLICK_THROUGH, config.click_through)?;
 
-        let mut engine_names = vec!["EzTrans", "Google", "DeepL", "Papago", "LLM"];
-        if config.translation.custom_apis.is_empty() {
-            engine_names.push(&config.translation.custom.name);
-        } else {
-            engine_names.extend(
-                config
-                    .translation
-                    .custom_apis
-                    .iter()
-                    .map(|api| api.name.as_str()),
-            );
-        }
+        let engine_names = ["EzTrans", "Google", "DeepL", "Papago", "LLM", "Custom API"];
         let engine = config
             .translation
             .get_engine()
             .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
-        let engine_index = if engine == crate::translation::TranslationEngine::Custom {
-            crate::translation::TranslationEngine::Custom as usize
-                + config
-                    .translation
-                    .active_custom_api_index()
-                    .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?
+        self.initialize_combo(ctrl_id::TRANS_ENGINE, &engine_names, engine as usize)?;
+        let custom_names: Vec<&str> = if config.translation.custom_apis.is_empty() {
+            vec!["없음"]
         } else {
-            engine as usize
+            config
+                .translation
+                .custom_apis
+                .iter()
+                .map(|api| api.name.as_str())
+                .collect()
         };
-        self.initialize_combo(ctrl_id::TRANS_ENGINE, &engine_names, engine_index)?;
+        let custom_index = if config.translation.custom_apis.is_empty() {
+            0
+        } else {
+            config
+                .translation
+                .active_custom_api_index()
+                .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?
+        };
+        self.initialize_combo(ctrl_id::CUSTOM_API_SELECT, &custom_names, custom_index)?;
         unsafe {
             let _ = SendMessageW(
                 self.control(ctrl_id::TRANS_ENGINE)?,
@@ -374,20 +356,7 @@ impl SettingsDialog {
             ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
             &format!("사전 항목: {}", config.translation.llm.glossary.len()),
         )?;
-        let custom = config
-            .translation
-            .active_custom_api()
-            .map_err(|error| Error::new(E_INVALIDARG, error.to_string()))?;
-        self.set_text(ctrl_id::CUSTOM_URL_EDIT, &custom.url)?;
-        self.set_text(ctrl_id::CUSTOM_API_KEY_EDIT, &custom.api_key)?;
-        self.set_text(ctrl_id::CUSTOM_AUTH_HEADER_EDIT, &custom.auth_header)?;
-        self.set_text(ctrl_id::CUSTOM_AUTH_SCHEME_EDIT, &custom.auth_scheme)?;
-        self.set_text(
-            ctrl_id::CUSTOM_REQUEST_TEMPLATE_EDIT,
-            &custom.request_template,
-        )?;
-        self.set_text(ctrl_id::CUSTOM_RESPONSE_PATH_EDIT, &custom.response_path)?;
-        self.set_text(ctrl_id::CUSTOM_HEADERS_EDIT, &custom.headers)
+        Ok(())
     }
 
     fn control(&self, id: u16) -> Result<HWND> {

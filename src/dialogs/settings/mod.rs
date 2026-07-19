@@ -515,7 +515,7 @@ impl SettingsDialog {
             TranslationEngine::Google | TranslationEngine::EzTrans => 245,
             TranslationEngine::Papago => 325,
             TranslationEngine::DeepL => 410,
-            TranslationEngine::Custom => 580,
+            TranslationEngine::Custom => 330,
             TranslationEngine::Llm => 600,
         }
     }
