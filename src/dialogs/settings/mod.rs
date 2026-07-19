@@ -224,8 +224,9 @@ unsafe extern "system" fn settings_dialog_proc(
 }
 
 impl SettingsDialog {
-    // 리소스의 96 DPI 디자인 폭. 높이는 선택한 탭에 따라 동적으로 바뀐다.
-    const WIDTH: i32 = 485;
+    // 리소스 컨트롤의 좌우 여백을 같게 맞춘 96 DPI 디자인 폭.
+    // 높이는 선택한 탭에 따라 동적으로 바뀐다.
+    const WIDTH: i32 = 492;
     // 가로 컨트롤은 고정 배치이므로 잘리지 않는 최소 client 폭을 유지한다.
     const MIN_HEIGHT: i32 = 180;
 
