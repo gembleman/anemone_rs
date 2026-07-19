@@ -71,7 +71,10 @@ fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
     assert!(
         TranslationSettingsEditor::apply(
             &mut config,
-            TranslationSettingChange::AddDeepLKey(" key ".into())
+            TranslationSettingChange::AddDeepLKey {
+                tier: DeepLApiTier::Pro,
+                key: " key ".into(),
+            }
         )
         .unwrap()
         .changed
@@ -80,7 +83,10 @@ fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
     assert!(
         !TranslationSettingsEditor::apply(
             &mut config,
-            TranslationSettingChange::AddDeepLKey("key".into())
+            TranslationSettingChange::AddDeepLKey {
+                tier: DeepLApiTier::Pro,
+                key: "key".into(),
+            }
         )
         .unwrap()
         .changed
@@ -89,6 +95,32 @@ fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
         TranslationSettingsEditor::apply(&mut config, TranslationSettingChange::RemoveDeepLKey(0))
             .unwrap()
             .changed
+    );
+    assert!(config.deepl_keys.is_empty());
+}
+
+#[test]
+fn deepl_key_type_must_match_the_key_suffix() {
+    let mut config = TranslationConfig::default();
+    assert_eq!(
+        TranslationSettingsEditor::apply(
+            &mut config,
+            TranslationSettingChange::AddDeepLKey {
+                tier: DeepLApiTier::Free,
+                key: "pro-key".into(),
+            }
+        ),
+        Err(TranslationSettingsError::InvalidDeepLFreeKey)
+    );
+    assert_eq!(
+        TranslationSettingsEditor::apply(
+            &mut config,
+            TranslationSettingChange::AddDeepLKey {
+                tier: DeepLApiTier::Pro,
+                key: "free-key:fx".into(),
+            }
+        ),
+        Err(TranslationSettingsError::InvalidDeepLProKey)
     );
     assert!(config.deepl_keys.is_empty());
 }

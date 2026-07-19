@@ -73,6 +73,7 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::DEEPL_KEY_ADD_BTN,
     ctrl_id::DEEPL_KEY_REMOVE_BTN,
     ctrl_id::DEEPL_STRATEGY_COMBO,
+    ctrl_id::DEEPL_KEY_TIER_COMBO,
     ctrl_id::PAPAGO_ID_EDIT,
     ctrl_id::PAPAGO_SECRET_EDIT,
     ctrl_id::LLM_PROVIDER,
@@ -143,6 +144,7 @@ impl SettingsDialog {
                 ctrl_id::DEEPL_KEY_ADD_BTN,
                 ctrl_id::DEEPL_KEY_REMOVE_BTN,
                 ctrl_id::DEEPL_STRATEGY_COMBO,
+                ctrl_id::DEEPL_KEY_TIER_COMBO,
             ],
         )?;
         self.register_engine_ids(EngineGroup::Papago, ctrl_id::PAPAGO_STATIC_IDS)?;
@@ -299,9 +301,10 @@ impl SettingsDialog {
             &["failover", "round-robin"],
             strategy,
         )?;
+        self.initialize_combo(ctrl_id::DEEPL_KEY_TIER_COMBO, &["무료", "유료"], 0)?;
         let key_list = self.control(ctrl_id::DEEPL_KEYS_LIST)?;
         for key in &config.translation.deepl_keys {
-            let wide = to_wide(&mask_secret(key));
+            let wide = to_wide(&format_deepl_key(key));
             unsafe {
                 let _ = SendMessageW(
                     key_list,

@@ -112,13 +112,15 @@ BEGIN
     LTEXT           "API 키 (단일):", 2211, 17, 51, 46, 10
     EDITTEXT        1268, 66, 50, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
     LTEXT           "* 보조 키 목록이 비어있을 때만 단일 키를 사용합니다.", 2212, 17, 64, 246, 9
-    LTEXT           "보조 키 목록:", 2213, 17, 75, 57, 10
-    LTEXT           "전략:", 2214, 183, 75, 29, 10
-    COMBOBOX        1276, 206, 74, 57, 64, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LISTBOX         1272, 17, 86, 163, 29, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
-    EDITTEXT        1273, 183, 86, 80, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    PUSHBUTTON      "추가", 1274, 183, 101, 37, 12
-    PUSHBUTTON      "삭제", 1275, 226, 101, 37, 12
+    LTEXT           "보조 키 목록:", 2213, 17, 76, 57, 10
+    LTEXT           "전략:", 2214, 183, 76, 29, 10
+    COMBOBOX        1276, 206, 75, 57, 64, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LISTBOX         1272, 17, 87, 163, 44, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "추가 유형:", 2215, 183, 88, 37, 10
+    COMBOBOX        1277, 220, 86, 43, 48, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        1273, 183, 101, 80, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    PUSHBUTTON      "추가", 1274, 183, 116, 37, 12
+    PUSHBUTTON      "삭제", 1275, 226, 116, 37, 12
 
     // Papago 자격 증명은 EzTrans 경로와 같은 번역 설정 내부 슬롯을 사용한다.
     LTEXT           "Client ID:", 2221, 17, 51, 46, 10

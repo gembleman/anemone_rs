@@ -61,6 +61,11 @@ pub(super) fn mask_secret(secret: &str) -> String {
     format!("••••{suffix}")
 }
 
+pub(super) fn format_deepl_key(secret: &str) -> String {
+    let tier = crate::translation::DeepLApiTier::from_api_key(secret);
+    format!("[{}] {}", tier.display_name(), mask_secret(secret))
+}
+
 /// 설정 대화상자
 pub struct SettingsDialog {
     hwnd: HWND,
@@ -522,7 +527,7 @@ impl SettingsDialog {
             | TranslationEngine::EzTrans
             | TranslationEngine::Papago
             | TranslationEngine::Custom => 245,
-            TranslationEngine::DeepL => 300,
+            TranslationEngine::DeepL => 325,
             TranslationEngine::Llm => 460,
         }
     }
@@ -530,7 +535,7 @@ impl SettingsDialog {
     /// 선택된 엔진의 전용 입력을 감싸도록 번역 설정 그룹박스 높이를 반환한다.
     fn translation_group_height_for_engine(engine: TranslationEngine) -> i32 {
         match engine {
-            TranslationEngine::DeepL => 101,
+            TranslationEngine::DeepL => 126,
             TranslationEngine::Llm => 187,
             TranslationEngine::Google
             | TranslationEngine::EzTrans

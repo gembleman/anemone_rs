@@ -1,4 +1,4 @@
-use super::{EngineGroup, SettingsDialog, mask_secret};
+use super::{EngineGroup, SettingsDialog, format_deepl_key, mask_secret};
 use crate::translation::TranslationEngine;
 
 #[test]
@@ -7,6 +7,12 @@ fn secret_mask_never_contains_the_complete_secret() {
     assert_eq!(masked, "••••1234");
     assert!(!masked.contains("super-secret"));
     assert_eq!(mask_secret("abc"), "••••");
+}
+
+#[test]
+fn deepl_key_labels_show_the_detected_api_tier() {
+    assert_eq!(format_deepl_key("free-secret:fx"), "[무료] ••••t:fx");
+    assert_eq!(format_deepl_key("pro-secret"), "[유료] ••••cret");
 }
 
 #[test]
@@ -159,6 +165,8 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         instance.borrow_mut().switch_tab(super::TAB_TRANSLATION);
     });
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_API_KEY_EDIT)).as_bool() });
+    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_KEY_TIER_COMBO)).as_bool() });
+    assert_eq!(combo_index(hwnd, ctrl_id::DEEPL_KEY_TIER_COMBO), 0);
     assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::PAPAGO_ID_EDIT)).as_bool() });
     assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)).as_bool() });
     let mut deepl_rect = Default::default();
@@ -185,6 +193,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         TranslationEngine::Papago as usize,
     );
     assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_API_KEY_EDIT)).as_bool() });
+    assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_KEY_TIER_COMBO)).as_bool() });
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::PAPAGO_ID_EDIT)).as_bool() });
     let mut papago_rect = Default::default();
     let mut papago_group_rect = Default::default();

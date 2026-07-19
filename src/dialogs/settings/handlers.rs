@@ -6,7 +6,7 @@ use windows::{
 };
 
 use super::ctrl_id;
-use super::{SettingsDialog, mask_secret};
+use super::{SettingsDialog, format_deepl_key};
 use crate::config::{ColorType, TextAlign, TextType};
 use crate::dialogs::color::{ColorDialog, ColorDialogConfig};
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
@@ -288,11 +288,30 @@ impl SettingsDialog {
         if key.is_empty() {
             return;
         }
-        if !self
-            .apply_translation_change(TranslationSettingChange::AddDeepLKey(key.clone()))
-            .is_ok_and(|result| result.changed)
-        {
-            return;
+        let tier = unsafe {
+            let Ok(combo) = GetDlgItem(Some(self.hwnd), ctrl_id::DEEPL_KEY_TIER_COMBO as i32)
+            else {
+                return;
+            };
+            match SendMessageW(combo, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 {
+                1 => crate::translation::DeepLApiTier::Pro,
+                _ => crate::translation::DeepLApiTier::Free,
+            }
+        };
+        match self.apply_translation_change(TranslationSettingChange::AddDeepLKey {
+            tier,
+            key: key.clone(),
+        }) {
+            Ok(result) if result.changed => {}
+            Ok(_) => return,
+            Err(error) => {
+                crate::dialogs::helpers::show_error_message(
+                    self.hwnd,
+                    "DeepL 키 유형 오류",
+                    &error.to_string(),
+                );
+                return;
+            }
         }
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox.
         unsafe {
@@ -300,7 +319,7 @@ impl SettingsDialog {
                 Ok(h) if !h.is_invalid() => h,
                 _ => return,
             };
-            let key_wide = to_wide(&mask_secret(&key));
+            let key_wide = to_wide(&format_deepl_key(&key));
             let _ = SendMessageW(
                 listbox,
                 LB_ADDSTRING,

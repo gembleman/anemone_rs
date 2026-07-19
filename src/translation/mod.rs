@@ -17,6 +17,7 @@ mod service;
 pub(crate) mod settings;
 pub(crate) mod worker;
 
+pub(crate) use deepl::DeepLApiTier;
 pub use error::{TranslationError, TranslationResult};
 pub(crate) use eztrans::EzTransTranslator;
 pub(crate) use eztrans_actor::{prepare_eztrans, translate_with_eztrans};
