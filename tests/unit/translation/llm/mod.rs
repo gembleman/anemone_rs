@@ -58,6 +58,11 @@ fn openai_model_presets_include_current_families_and_default() {
 }
 
 #[test]
+fn openai_default_model_stays_gpt_5_4_nano() {
+    assert_eq!(LlmProvider::OpenAi.default_model(), "gpt-5.4-nano");
+}
+
+#[test]
 fn provider_model_presets_include_current_models_and_default() {
     let cases = [
         (

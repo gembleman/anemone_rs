@@ -85,7 +85,7 @@ impl LlmProvider {
     /// 모델 ID가 비어 있을 때 사용할 기본값
     pub fn default_model(self) -> &'static str {
         match self {
-            Self::OpenAi => "gpt-5.6-luna",
+            Self::OpenAi => "gpt-5.4-nano",
             Self::Anthropic => "claude-opus-4-7",
             Self::Gemini => "gemini-2.5-flash",
             Self::Grok => "grok-4.3",

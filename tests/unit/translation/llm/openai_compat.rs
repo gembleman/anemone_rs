@@ -98,7 +98,7 @@ fn serializes_reasoning_effort_only_for_openai_reasoning_models() {
 }
 
 #[test]
-fn preserves_none_reasoning_for_the_blank_luna_default() {
+fn preserves_none_reasoning_for_the_blank_nano_default() {
     let params = LlmCallParams {
         provider: LlmProvider::OpenAi,
         model: String::new(),
@@ -113,7 +113,7 @@ fn preserves_none_reasoning_for_the_blank_luna_default() {
 
     let value =
         serde_json::to_value(responses_request_payload(&params, "system", "source")).unwrap();
-    assert_eq!(value["model"], "gpt-5.6-luna");
+    assert_eq!(value["model"], "gpt-5.4-nano");
     assert_eq!(value["reasoning"]["effort"], "none");
 }
 

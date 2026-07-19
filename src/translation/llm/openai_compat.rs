@@ -70,8 +70,8 @@ fn responses_request_payload<'a>(
 ) -> ResponsesRequest<'a> {
     let uses_reasoning = uses_openai_reasoning_model(params);
     let effort = params.reasoning_effort.or_else(|| {
-        // 비어 있는 모델은 앱의 저비용 기본 경로다. 기존 gpt-5.4-nano의
-        // effective effort(none)를 gpt-5.6-luna에서도 보존한다.
+        // 비어 있는 모델은 앱의 저비용 기본 경로다. gpt-5.4-nano의
+        // effective effort(none)를 보존한다.
         (params.model.is_empty() && uses_reasoning).then_some(ReasoningEffort::None)
     });
     ResponsesRequest {
@@ -138,18 +138,11 @@ pub async fn translate_async_with_client(
         LlmProvider::Grok | LlmProvider::OpenRouter => {
             let payload = chat_request_payload(params, &system, text);
             let url = format!("{}/chat/completions", params.effective_base_url());
-            let mut req = client
+            let req = client
                 .post(&url)
                 .timeout(LLM_REQUEST_TIMEOUT)
                 .bearer_auth(&params.api_key)
                 .json(&payload);
-
-            // OpenRouter는 출처 헤더를 권장한다 (rate limit 우대 / 통계용)
-            if params.provider == LlmProvider::OpenRouter {
-                req = req
-                    .header("HTTP-Referer", "https://github.com/gembleman/anemone_rs")
-                    .header("X-Title", "Anemone");
-            }
 
             let response = req
                 .send()
