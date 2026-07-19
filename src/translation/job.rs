@@ -175,8 +175,8 @@ impl PreparedJob {
                         return Err(TranslationConfigError::MissingEzTransPath);
                     }
                     PreparedEngineKind::EzTrans(EzTransProcessConfig {
-                        dll_path: config.eztrans_dll_path.clone(),
-                        dat_path: config.eztrans_dat_path.clone(),
+                        dll_path: resolve_configured_eztrans_path(&config.eztrans_dll_path),
+                        dat_path: resolve_configured_eztrans_path(&config.eztrans_dat_path),
                         process_count: crate::config::limits::eztrans_process_count(
                             config.eztrans_process_count,
                         ) as usize,
@@ -274,6 +274,20 @@ impl PreparedJob {
     pub fn languages(&self) -> LanguagePair {
         self.languages
     }
+}
+
+/// 설정의 상대 EzTrans 경로는 프로세스의 현재 작업 폴더가 아니라 실행 파일과
+/// `config.toml`이 놓인 데이터 폴더를 기준으로 해석한다. 설정값 자체는 변경하지
+/// 않으므로 다음 저장에서도 사용자가 입력한 상대 경로가 유지된다.
+fn resolve_configured_eztrans_path(configured: &str) -> String {
+    let path = std::path::Path::new(configured);
+    if path.is_absolute() {
+        return configured.to_string();
+    }
+    crate::runtime::data_dir()
+        .join(path)
+        .to_string_lossy()
+        .into_owned()
 }
 
 impl std::fmt::Debug for PreparedJob {

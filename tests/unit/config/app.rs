@@ -181,6 +181,106 @@ fn eztrans_process_count_defaults_and_is_clamped() {
 }
 
 #[test]
+fn stale_bundled_eztrans_paths_follow_the_config_location() {
+    let root = unique_test_dir("relocate-eztrans");
+    let path = root.join("config.toml");
+    let bundled = root.join("eztrans_dll");
+    std::fs::create_dir_all(bundled.join("Dat")).unwrap();
+    std::fs::write(bundled.join("J2KEngine.dll"), b"test").unwrap();
+
+    let mut config = Config::default();
+    let stale = root.join("old-worktree").join("eztrans_dll");
+    config.translation.eztrans_dll_path =
+        stale.join("J2KEngine.dll").to_string_lossy().into_owned();
+    config.translation.eztrans_dat_path = stale.join("Dat").to_string_lossy().into_owned();
+    config.save_to_file(&path).unwrap();
+
+    let loaded = Config::load_or_default_from(&path);
+
+    assert_eq!(
+        loaded.translation.eztrans_dll_path,
+        bundled.join("J2KEngine.dll").to_string_lossy()
+    );
+    assert_eq!(
+        loaded.translation.eztrans_dat_path,
+        bundled.join("Dat").to_string_lossy()
+    );
+    let persisted = Config::load_from_file(&path).unwrap();
+    assert_eq!(
+        persisted.translation.eztrans_dll_path,
+        loaded.translation.eztrans_dll_path
+    );
+    assert_eq!(
+        persisted.translation.eztrans_dat_path,
+        loaded.translation.eztrans_dat_path
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn missing_custom_eztrans_paths_are_not_rewritten() {
+    let root = unique_test_dir("keep-custom-eztrans");
+    let path = root.join("config.toml");
+    let bundled = root.join("eztrans_dll");
+    std::fs::create_dir_all(bundled.join("Dat")).unwrap();
+    std::fs::write(bundled.join("J2KEngine.dll"), b"test").unwrap();
+
+    let mut config = Config::default();
+    config.translation.eztrans_dll_path = root
+        .join("custom")
+        .join("engine.dll")
+        .to_string_lossy()
+        .into_owned();
+    config.translation.eztrans_dat_path = root
+        .join("custom")
+        .join("data")
+        .to_string_lossy()
+        .into_owned();
+    config.save_to_file(&path).unwrap();
+
+    let loaded = Config::load_or_default_from(&path);
+
+    assert_eq!(
+        loaded.translation.eztrans_dll_path,
+        config.translation.eztrans_dll_path
+    );
+    assert_eq!(
+        loaded.translation.eztrans_dat_path,
+        config.translation.eztrans_dat_path
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn relative_bundled_eztrans_paths_are_preserved_when_loading() {
+    let root = unique_test_dir("keep-relative-eztrans");
+    let path = root.join("config.toml");
+    let bundled = root.join("eztrans_dll");
+    std::fs::create_dir_all(bundled.join("Dat")).unwrap();
+    std::fs::write(bundled.join("J2KEngine.dll"), b"test").unwrap();
+
+    let mut config = Config::default();
+    config.translation.eztrans_dll_path = r"eztrans_dll\J2KEngine.dll".into();
+    config.translation.eztrans_dat_path = r"eztrans_dll\Dat".into();
+    config.save_to_file(&path).unwrap();
+
+    let loaded = Config::load_or_default_from(&path);
+
+    assert_eq!(
+        loaded.translation.eztrans_dll_path,
+        r"eztrans_dll\J2KEngine.dll"
+    );
+    assert_eq!(loaded.translation.eztrans_dat_path, r"eztrans_dll\Dat");
+    let persisted = Config::load_from_file(&path).unwrap();
+    assert_eq!(
+        persisted.translation.eztrans_dll_path,
+        r"eztrans_dll\J2KEngine.dll"
+    );
+    assert_eq!(persisted.translation.eztrans_dat_path, r"eztrans_dll\Dat");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn save_is_atomic_and_preserves_last_known_good_generation() {
     let root = unique_test_dir("save");
     let path = root.join("config.toml");

@@ -105,6 +105,17 @@ impl ClipboardWatcher {
         Ok(())
     }
 
+    /// 창이 파괴되는 동안 listener를 해제한다.
+    ///
+    /// `WM_DESTROY` 이후에는 `hwnd`가 더 이상 유효하지 않으므로, Win32 해제 호출의
+    /// 성공 여부와 관계없이 watcher를 종료 상태로 만든다. 창 파괴 자체가 남은 listener
+    /// 등록을 무효화하므로 `Drop`에서 죽은 handle로 다시 해제할 필요가 없다.
+    pub fn stop_for_window_destroy(&mut self) -> Result<()> {
+        let result = self.stop();
+        self.watching = false;
+        result
+    }
+
     pub fn is_watching(&self) -> bool {
         self.watching
     }

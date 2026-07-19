@@ -119,6 +119,33 @@ fn file_job_carries_normalized_eztrans_process_configuration() {
 }
 
 #[test]
+fn relative_eztrans_paths_resolve_from_the_executable_data_directory() {
+    let config = TranslationConfig {
+        eztrans_dll_path: r"eztrans_dll\J2KEngine.dll".into(),
+        eztrans_dat_path: r"eztrans_dll\Dat".into(),
+        ..TranslationConfig::default()
+    };
+
+    let job = PreparedJob::from_config(&config).unwrap();
+    let process = job.engine().eztrans_process().unwrap();
+
+    assert_eq!(
+        process.dll_path,
+        crate::runtime::data_dir()
+            .join(r"eztrans_dll\J2KEngine.dll")
+            .to_string_lossy()
+    );
+    assert_eq!(
+        process.dat_path,
+        crate::runtime::data_dir()
+            .join(r"eztrans_dll\Dat")
+            .to_string_lossy()
+    );
+    assert_eq!(config.eztrans_dll_path, r"eztrans_dll\J2KEngine.dll");
+    assert_eq!(config.eztrans_dat_path, r"eztrans_dll\Dat");
+}
+
+#[test]
 fn builds_and_validates_custom_api_credentials() {
     let mut config = TranslationConfig {
         engine: "custom".into(),

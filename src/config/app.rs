@@ -267,7 +267,16 @@ impl Config {
         }
 
         match Self::load_from_file(path) {
-            Ok(config) => {
+            Ok(mut config) => {
+                if relocate_missing_bundled_eztrans_paths(&mut config, path) {
+                    tracing::info!(
+                        "실행 파일 위치에 맞춰 EzTrans 번들 경로를 갱신했습니다: {}",
+                        path.display()
+                    );
+                    if let Err(error) = config.save_to_file(path) {
+                        tracing::warn!("갱신한 EzTrans 번들 경로 저장 실패: {error}");
+                    }
+                }
                 tracing::info!("설정 로드됨: {}", path.display());
                 config
             }
@@ -303,6 +312,51 @@ impl Config {
         tracing::debug!("설정 저장됨: {}", path.display());
         Ok(())
     }
+}
+
+/// 다른 설치 폴더나 worktree에서 가져온 설정이 더 이상 존재하지 않는 번들 경로를
+/// 가리키면 현재 실행 파일 옆에 배치된 번들로 연결한다. 명시적인 사용자 경로는
+/// `eztrans_dll/J2KEngine.dll` + `eztrans_dll/Dat` 형태일 때만 보정한다.
+fn relocate_missing_bundled_eztrans_paths(
+    config: &mut Config,
+    config_path: &std::path::Path,
+) -> bool {
+    let dll_path = std::path::Path::new(&config.translation.eztrans_dll_path);
+    let dat_path = std::path::Path::new(&config.translation.eztrans_dat_path);
+    if !dll_path.is_absolute() || !dat_path.is_absolute() {
+        return false;
+    }
+    if dll_path.is_file() && dat_path.is_dir() {
+        return false;
+    }
+    if !is_bundled_eztrans_path(dll_path, "J2KEngine.dll")
+        || !is_bundled_eztrans_path(dat_path, "Dat")
+    {
+        return false;
+    }
+
+    let Some(config_dir) = config_path.parent() else {
+        return false;
+    };
+    let bundled_dir = config_dir.join("eztrans_dll");
+    let bundled_dll = bundled_dir.join("J2KEngine.dll");
+    let bundled_dat = bundled_dir.join("Dat");
+    if !bundled_dll.is_file() || !bundled_dat.is_dir() {
+        return false;
+    }
+
+    config.translation.eztrans_dll_path = bundled_dll.to_string_lossy().into_owned();
+    config.translation.eztrans_dat_path = bundled_dat.to_string_lossy().into_owned();
+    true
+}
+
+fn is_bundled_eztrans_path(path: &std::path::Path, leaf: &str) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(leaf))
+        && path
+            .parent()
+            .and_then(std::path::Path::file_name)
+            .is_some_and(|name| name.eq_ignore_ascii_case("eztrans_dll"))
 }
 
 #[derive(Debug, thiserror::Error)]

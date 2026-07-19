@@ -95,6 +95,13 @@ impl App {
                     DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().clear());
                     // 죽은 hwnd로 완료 message를 보내지 않도록 routing을 먼저 해제한다.
                     self.services.translation_ui.unregister(hwnd);
+                    // HWND가 유효한 마지막 lifecycle 구간에서 listener를 해제한다.
+                    // App은 window보다 늦게 drop되므로 여기서 상태도 종료해야 한다.
+                    if let Err(error) = self.clipboard.stop_for_window_destroy() {
+                        tracing::warn!(
+                            "Failed to stop clipboard listener during window destruction: {error}"
+                        );
+                    }
                     PostQuitMessage(0);
                     Some(LRESULT(0))
                 }
