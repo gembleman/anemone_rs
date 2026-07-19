@@ -12,10 +12,13 @@ use windows::{
     core::*,
 };
 
+use crate::constants::WM_APP_MAGNETIC_TARGET_SELECTED;
+
 /// 자석 상태 (thread_local 보관)
 struct MagneticState {
     main_hwnd: HWND,
     target_hwnd: HWND,
+    selection_pending: bool,
     is_minimized: bool,
     offset_x: i32,
     offset_y: i32,
@@ -58,27 +61,20 @@ impl MagneticManager {
         });
     }
 
-    /// 자석 모드 시작
+    /// 자석 대상 선택을 기다리기 시작한다.
     pub fn start(&mut self) -> Result<()> {
         if !self.event_hook.0.is_null() {
             return Ok(());
         }
 
-        let Some(target) = find_external_target_window() else {
-            return Err(Error::from_hresult(HRESULT::from_win32(
-                ERROR_INVALID_WINDOW_HANDLE.0,
-            )));
-        };
-
-        let (offset_x, offset_y) = self.calculate_offset(target)?;
-
         MAGNETIC_INSTANCE.with(|cell| {
             *cell.borrow_mut() = Some(MagneticState {
                 main_hwnd: self.main_hwnd,
-                target_hwnd: target,
+                target_hwnd: HWND::default(),
+                selection_pending: false,
                 is_minimized: false,
-                offset_x,
-                offset_y,
+                offset_x: 0,
+                offset_y: 0,
                 minimize_with_target: self.minimize_with_target,
                 window_visible: self.window_visible,
             });
@@ -87,7 +83,7 @@ impl MagneticManager {
         // SAFETY: event 범위와 callback이 유효하며 callback은 등록 thread에서 실행된다.
         unsafe {
             self.event_hook = SetWinEventHook(
-                EVENT_SYSTEM_MINIMIZESTART,
+                EVENT_SYSTEM_FOREGROUND,
                 EVENT_OBJECT_LOCATIONCHANGE,
                 None,
                 Some(Self::win_event_proc),
@@ -106,6 +102,28 @@ impl MagneticManager {
         }
 
         Ok(())
+    }
+
+    /// 사용자가 활성화한 외부 창을 실제 자석 대상으로 연결한다.
+    pub fn attach(&mut self, target: HWND) -> Result<()> {
+        if !is_external_target_window(target) {
+            return Err(Error::from_hresult(HRESULT::from_win32(
+                ERROR_INVALID_WINDOW_HANDLE.0,
+            )));
+        }
+        let (offset_x, offset_y) = self.calculate_offset(target)?;
+        MAGNETIC_INSTANCE.with(|cell| {
+            let mut state = cell.borrow_mut();
+            let state = state.as_mut().ok_or_else(|| {
+                Error::from_hresult(HRESULT::from_win32(ERROR_INVALID_WINDOW_HANDLE.0))
+            })?;
+            state.target_hwnd = target;
+            state.selection_pending = false;
+            state.is_minimized = false;
+            state.offset_x = offset_x;
+            state.offset_y = offset_y;
+            Ok(())
+        })
     }
 
     /// 자석 모드 중지
@@ -170,6 +188,28 @@ impl MagneticManager {
             };
 
             match event {
+                EVENT_SYSTEM_FOREGROUND
+                    if state.target_hwnd.is_invalid()
+                        && !state.selection_pending
+                        && is_external_target_window(hwnd) =>
+                {
+                    state.selection_pending = true;
+                    // SAFETY: main HWND는 manager가 소유하고 target HWND 값은 message에
+                    // 복사되어 UI thread에서 검증 후 사용된다.
+                    if unsafe {
+                        PostMessageW(
+                            Some(state.main_hwnd),
+                            WM_APP_MAGNETIC_TARGET_SELECTED,
+                            WPARAM(hwnd.0 as usize),
+                            LPARAM(0),
+                        )
+                    }
+                    .is_err()
+                    {
+                        state.selection_pending = false;
+                    }
+                }
+
                 EVENT_OBJECT_LOCATIONCHANGE if hwnd == state.target_hwnd && !state.is_minimized => {
                     let mut target_rect = RECT::default();
                     // SAFETY: Called within unsafe extern "system" fn
@@ -236,29 +276,52 @@ impl MagneticManager {
     }
 }
 
-/// 현재 foreground가 앱 자신의 메뉴/대화상자여도 z-order 아래의 첫 외부 top-level
-/// 창을 찾는다. 메뉴와 설정창이 foreground를 가져간 뒤 자석 모드를 켜는 경로를 함께 지원한다.
-fn find_external_target_window() -> Option<HWND> {
+fn is_external_target_window(candidate: HWND) -> bool {
     unsafe {
-        let own_pid = GetCurrentProcessId();
-        let mut candidate = GetForegroundWindow();
-        while !candidate.is_invalid() {
-            let mut candidate_pid = 0;
-            GetWindowThreadProcessId(candidate, Some(&mut candidate_pid));
-            if candidate_pid != 0
-                && candidate_pid != own_pid
-                && IsWindowVisible(candidate).as_bool()
-            {
-                return Some(candidate);
-            }
-            candidate = GetWindow(candidate, GW_HWNDNEXT).ok()?;
+        if candidate.is_invalid() {
+            return false;
         }
-        None
+        let own_pid = GetCurrentProcessId();
+        let shell_hwnd = GetShellWindow();
+        let mut candidate_pid = 0;
+        GetWindowThreadProcessId(candidate, Some(&mut candidate_pid));
+        candidate_pid != 0
+            && candidate_pid != own_pid
+            && IsWindowVisible(candidate).as_bool()
+            && candidate != shell_hwnd
+            && is_targetable_extended_style(GetWindowLongW(candidate, GWL_EXSTYLE) as u32)
+            && has_window_area(candidate)
+    }
+}
+
+fn is_targetable_extended_style(style: u32) -> bool {
+    style & (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) == 0
+}
+
+fn has_window_area(hwnd: HWND) -> bool {
+    let mut rect = RECT::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut rect).is_ok() && rect.right > rect.left && rect.bottom > rect.top
     }
 }
 
 impl Drop for MagneticManager {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_style_rejects_shell_and_nonactivating_windows() {
+        assert!(is_targetable_extended_style(0));
+        assert!(!is_targetable_extended_style(WS_EX_TOOLWINDOW.0));
+        assert!(!is_targetable_extended_style(WS_EX_NOACTIVATE.0));
+        assert!(!is_targetable_extended_style(
+            WS_EX_TOPMOST.0 | WS_EX_TOOLWINDOW.0
+        ));
     }
 }

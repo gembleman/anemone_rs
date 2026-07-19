@@ -58,3 +58,18 @@ fn render_blocks_use_each_text_style_and_name_margin() {
     );
     assert!(blocks[1].top >= blocks[0].top + blocks[0].height + 17.0);
 }
+
+#[test]
+fn overlay_notice_ignores_translation_visibility() {
+    let config = crate::config::Config {
+        show_name: false,
+        show_original: false,
+        show_translation: false,
+        ..Default::default()
+    };
+
+    let blocks = build_notice_render_blocks(&config, "따라다닐 창을 선택해주세요.");
+
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].text, "따라다닐 창을 선택해주세요.");
+}

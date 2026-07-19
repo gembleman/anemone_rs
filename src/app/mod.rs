@@ -36,6 +36,8 @@ const WINDOW_TITLE: PCWSTR = w!("아네모네");
 pub(super) const COMPOSITION_RETRY_TIMER: usize = 0xD2D0;
 pub(super) const CLIPBOARD_DEBOUNCE_TIMER: usize = 0xD2D1;
 pub(super) const CLIPBOARD_READ_RETRY_TIMER: usize = 0xD2D2;
+pub(super) const MAGNETIC_NOTICE_TIMER: usize = 0xD2D3;
+pub(super) const MAGNETIC_NOTICE_DURATION_MS: u32 = 2_000;
 
 pub struct App {
     hwnd: HWND,
@@ -49,6 +51,8 @@ pub struct App {
     /// 수동/파일 번역 창이 살아 있는 동안 clipboard listener를 일시 정지한다.
     translate_dialog_session: Option<u64>,
     file_trans_dialog_session: Option<u64>,
+    settings_dialog_active: bool,
+    context_menu_active: bool,
     next_clipboard_pause_session: u64,
     taskbar_created_msg: u32,
     magnetic: Option<MagneticManager>,

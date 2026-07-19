@@ -2,14 +2,14 @@ use std::mem::zeroed;
 
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, POINT},
+        Foundation::{E_FAIL, HWND, LPARAM, POINT},
         Graphics::Gdi::ClientToScreen,
-        UI::WindowsAndMessaging::{GetCursorPos, WM_LBUTTONUP, WM_RBUTTONUP},
+        UI::WindowsAndMessaging::{GetCursorPos, KillTimer, SetTimer, WM_LBUTTONUP, WM_RBUTTONUP},
     },
-    core::Result,
+    core::{Error, Result},
 };
 
-use super::{App, state};
+use super::{App, MAGNETIC_NOTICE_DURATION_MS, MAGNETIC_NOTICE_TIMER, state, state::OverlayNotice};
 use crate::dialogs::{BacklogDialog, FileTransDialog, SettingsDialog, TranslateDialog};
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
@@ -17,11 +17,21 @@ use crate::window;
 
 impl App {
     fn show_context_menu(&mut self, x: i32, y: i32) -> Result<()> {
-        self.menu.build(&self.model.config)?;
-        if let Some(command) = self.menu.show(self.hwnd, x, y)? {
-            self.handle_menu_command(command)?;
+        self.context_menu_active = true;
+        if !self.pause_clipboard_capture("컨텍스트 메뉴") {
+            self.context_menu_active = false;
+            return Ok(());
         }
-        Ok(())
+        let result = (|| {
+            self.menu.build(&self.model.config)?;
+            if let Some(command) = self.menu.show(self.hwnd, x, y)? {
+                self.handle_menu_command(command)?;
+            }
+            Ok(())
+        })();
+        self.context_menu_active = false;
+        self.resume_clipboard_capture();
+        result
     }
 
     pub(super) fn handle_menu_command(&mut self, cmd: u16) -> Result<()> {
@@ -50,16 +60,34 @@ impl App {
 
     /// 설정 대화상자 열기
     pub(super) fn open_settings_dialog(&mut self) {
+        self.settings_dialog_active = true;
+        if !self.pause_clipboard_capture("설정 창") {
+            self.settings_dialog_active = false;
+            return;
+        }
         let main_hwnd = self.hwnd;
         let config = self.model.config.clone();
         let actions = self.action_sender();
-        Self::open_dialog_generic("settings", || {
-            SettingsDialog::show(main_hwnd, config, Some(actions))
-        });
+        if let Err(error) = SettingsDialog::show(main_hwnd, config, Some(actions)) {
+            self.settings_dialog_active = false;
+            tracing::error!("Failed to open settings dialog: {error}");
+            self.resume_clipboard_capture();
+        }
+    }
+
+    pub(super) fn handle_settings_dialog_closed(&mut self) {
+        self.settings_dialog_active = false;
+        self.resume_clipboard_capture();
     }
 
     fn clipboard_capture_paused(&self) -> bool {
-        self.translate_dialog_session.is_some() || self.file_trans_dialog_session.is_some()
+        state::clipboard_capture_is_paused(
+            self.translate_dialog_session.is_some(),
+            self.file_trans_dialog_session.is_some(),
+            self.settings_dialog_active,
+            self.context_menu_active,
+            self.model.runtime.overlay_notice.is_some(),
+        )
     }
 
     fn next_clipboard_pause_session(&mut self) -> u64 {
@@ -71,17 +99,15 @@ impl App {
         session
     }
 
-    fn pause_clipboard_for_translation_dialog(&mut self, dialog_title: &str) -> bool {
+    fn pause_clipboard_capture(&mut self, reason: &str) -> bool {
         if self.clipboard.is_watching()
             && let Err(error) = self.clipboard.stop()
         {
-            tracing::error!("Failed to pause clipboard listener for {dialog_title}: {error}");
+            tracing::error!("Failed to pause clipboard listener for {reason}: {error}");
             crate::dialogs::helpers::show_error_message(
                 self.hwnd,
                 "클립보드 감시 오류",
-                &format!(
-                    "{dialog_title}을(를) 여는 동안 클립보드 감시를 중지하지 못했습니다.\n\n{error}"
-                ),
+                &format!("{reason} 사용 중 클립보드 감시를 중지하지 못했습니다.\n\n{error}"),
             );
             return false;
         }
@@ -93,7 +119,7 @@ impl App {
     pub(super) fn open_translate_dialog(&mut self) {
         if let Some(session) = TranslateDialog::current_session() {
             self.translate_dialog_session = Some(session);
-            if !self.pause_clipboard_for_translation_dialog("번역 창") {
+            if !self.pause_clipboard_capture("번역 창") {
                 return;
             }
             let main_hwnd = self.hwnd;
@@ -110,7 +136,7 @@ impl App {
 
         // 창 생성보다 먼저 listener와 이미 예약된 자동 번역을 멈춰, 초기화 중 발생한
         // clipboard 변경도 수동 번역 경로로만 소비되게 한다.
-        if !self.pause_clipboard_for_translation_dialog("번역 창") {
+        if !self.pause_clipboard_capture("번역 창") {
             return;
         }
 
@@ -125,7 +151,7 @@ impl App {
         {
             self.translate_dialog_session = None;
             tracing::error!("Failed to open translate dialog: {error}");
-            self.resume_clipboard_after_translation_dialogs();
+            self.resume_clipboard_capture();
         }
     }
 
@@ -134,10 +160,10 @@ impl App {
             return;
         }
         self.translate_dialog_session = None;
-        self.resume_clipboard_after_translation_dialogs();
+        self.resume_clipboard_capture();
     }
 
-    fn resume_clipboard_after_translation_dialogs(&mut self) {
+    fn resume_clipboard_capture(&mut self) {
         if self.clipboard_capture_paused()
             || !self.model.config.clipboard_watch
             || self.clipboard.is_watching()
@@ -146,13 +172,11 @@ impl App {
         }
         if let Err(error) = self.clipboard.start() {
             self.model.config.clipboard_watch = false;
-            tracing::error!(
-                "Failed to resume clipboard listener after translation dialog: {error}"
-            );
+            tracing::error!("Failed to resume clipboard listener after temporary pause: {error}");
             crate::dialogs::helpers::show_error_message(
                 self.hwnd,
                 "클립보드 감시 오류",
-                &format!("번역 창을 닫은 뒤 클립보드 감시를 재개하지 못했습니다.\n\n{error}"),
+                &format!("클립보드 감시를 재개하지 못했습니다.\n\n{error}"),
             );
         }
         if let Some(hwnd) = SettingsDialog::current_hwnd() {
@@ -172,7 +196,7 @@ impl App {
     pub(super) fn open_file_trans_dialog(&mut self) {
         if let Some(session) = FileTransDialog::current_session() {
             self.file_trans_dialog_session = Some(session);
-            if !self.pause_clipboard_for_translation_dialog("파일 번역 창") {
+            if !self.pause_clipboard_capture("파일 번역 창") {
                 return;
             }
             let main_hwnd = self.hwnd;
@@ -186,7 +210,7 @@ impl App {
         }
         self.file_trans_dialog_session = None;
 
-        if !self.pause_clipboard_for_translation_dialog("파일 번역 창") {
+        if !self.pause_clipboard_capture("파일 번역 창") {
             return;
         }
         let session = self.next_clipboard_pause_session();
@@ -199,7 +223,7 @@ impl App {
         if let Err(error) = FileTransDialog::show(main_hwnd, config, supervisor, actions, session) {
             self.file_trans_dialog_session = None;
             tracing::error!("Failed to open file_trans dialog: {error}");
-            self.resume_clipboard_after_translation_dialogs();
+            self.resume_clipboard_capture();
         }
     }
 
@@ -208,7 +232,7 @@ impl App {
             return;
         }
         self.file_trans_dialog_session = None;
-        self.resume_clipboard_after_translation_dialogs();
+        self.resume_clipboard_capture();
     }
 
     /// Config 기반 magnetic, click-through, topmost, visibility, clipboard 정책을 적용한다.
@@ -216,9 +240,7 @@ impl App {
         let cfg = &self.model.config;
         let click_through = cfg.click_through;
         let topmost = cfg.window_topmost;
-        let visible = cfg.window_visible;
-        let watch =
-            state::should_watch_clipboard(cfg.clipboard_watch, self.clipboard_capture_paused());
+        let configured_visible = cfg.window_visible;
         let magnetic_enabled = cfg.magnetic_mode;
         // Magnetic 연결 실패 시 저장값과 checkbox를 모두 비활성화한다.
         let active_before = self.magnetic.is_some();
@@ -237,6 +259,12 @@ impl App {
         if magnetic_changed && let Err(error) = self.model.config.save() {
             tracing::error!("Failed to persist magnetic mode synchronization: {error}");
         }
+
+        let visible = configured_visible || self.model.runtime.overlay_notice.is_some();
+        let watch = state::should_watch_clipboard(
+            self.model.config.clipboard_watch,
+            self.clipboard_capture_paused(),
+        );
 
         window::set_click_through(self.hwnd, click_through);
         window::set_topmost(self.hwnd, topmost);
@@ -318,12 +346,23 @@ impl App {
                 }
                 self.magnetic = Some(magnetic);
                 self.model.config.magnetic_mode = true;
+                if !self.show_overlay_notice(OverlayNotice::SelectMagneticTarget) {
+                    if let Some(mut magnetic) = self.magnetic.take() {
+                        magnetic.stop();
+                    }
+                    self.model.config.magnetic_mode = false;
+                    return Err(Error::new(
+                        E_FAIL,
+                        "클립보드 감시를 일시 정지할 수 없습니다",
+                    ));
+                }
             }
             state::MagneticAction::Stop => {
                 if let Some(mut magnetic) = self.magnetic.take() {
                     magnetic.stop();
                 }
                 self.model.config.magnetic_mode = false;
+                self.clear_overlay_notice();
             }
         }
         Ok(())
@@ -337,6 +376,84 @@ impl App {
         if let Err(error) = self.model.config.save() {
             tracing::error!("Failed to persist magnetic mode: {error}");
         }
+    }
+
+    pub(super) fn handle_magnetic_target_selected(&mut self, target: HWND) {
+        if !self.model.config.magnetic_mode {
+            return;
+        }
+        let result = self
+            .magnetic
+            .as_mut()
+            .ok_or_else(|| Error::new(E_FAIL, "자석 선택기가 실행 중이 아닙니다"))
+            .and_then(|magnetic| magnetic.attach(target));
+        if let Err(error) = result {
+            tracing::error!("Failed to attach magnetic target: {error}");
+            if let Some(mut magnetic) = self.magnetic.take() {
+                magnetic.stop();
+            }
+            self.model.config.magnetic_mode = false;
+            self.clear_overlay_notice();
+        } else if !self.show_overlay_notice(OverlayNotice::MagneticTargetAttached) {
+            if let Some(mut magnetic) = self.magnetic.take() {
+                magnetic.stop();
+            }
+            self.model.config.magnetic_mode = false;
+            self.clear_overlay_notice();
+        }
+        self.sync_magnetic_checkbox();
+        if let Err(error) = self.model.config.save() {
+            tracing::error!("Failed to persist selected magnetic target: {error}");
+        }
+    }
+
+    pub(super) fn handle_magnetic_notice_timer(&mut self) {
+        self.clear_overlay_notice();
+    }
+
+    fn show_overlay_notice(&mut self, notice: OverlayNotice) -> bool {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), MAGNETIC_NOTICE_TIMER);
+        }
+        self.model.runtime.overlay_notice = Some(notice);
+        window::set_window_visible(self.hwnd, true);
+        if !self.pause_clipboard_capture("자석 대상 선택") {
+            self.model.runtime.overlay_notice = None;
+            window::set_window_visible(self.hwnd, self.model.config.window_visible);
+            return false;
+        }
+        if let Err(error) = self.paint() {
+            tracing::warn!("Failed to paint magnetic notice: {error}");
+        }
+        if notice == OverlayNotice::MagneticTargetAttached {
+            let timer = unsafe {
+                SetTimer(
+                    Some(self.hwnd),
+                    MAGNETIC_NOTICE_TIMER,
+                    MAGNETIC_NOTICE_DURATION_MS,
+                    None,
+                )
+            };
+            if timer == 0 {
+                tracing::warn!("Failed to start magnetic notice timer");
+                self.clear_overlay_notice();
+            }
+        }
+        true
+    }
+
+    fn clear_overlay_notice(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), MAGNETIC_NOTICE_TIMER);
+        }
+        if self.model.runtime.overlay_notice.take().is_none() {
+            return;
+        }
+        window::set_window_visible(self.hwnd, self.model.config.window_visible);
+        if let Err(error) = self.paint() {
+            tracing::warn!("Failed to repaint after magnetic notice: {error}");
+        }
+        self.resume_clipboard_capture();
     }
 
     fn sync_magnetic_checkbox(&self) {

@@ -1,5 +1,7 @@
 use super::{ReentryPolicy, reentry_policy};
-use crate::constants::{WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_TRANSLATION_COMPLETE};
+use crate::constants::{
+    WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_TRANSLATION_COMPLETE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     WM_APP, WM_CLIPBOARDUPDATE, WM_COMMAND, WM_DPICHANGED, WM_NOTIFY, WM_SIZE,
 };
@@ -12,6 +14,7 @@ fn reentry_defers_owned_app_messages() {
         WM_CLIPBOARDUPDATE,
         WM_APP_REFRESH,
         WM_APP_SET_MAGNETIC,
+        WM_APP_MAGNETIC_TARGET_SELECTED,
         WM_TRANSLATION_COMPLETE,
     ] {
         assert_eq!(reentry_policy(msg, 0), ReentryPolicy::DeferOwned);

@@ -207,6 +207,11 @@ unsafe extern "system" fn settings_dialog_proc(
             }
             WM_DESTROY => {
                 unregister_resource_dialog(hwnd);
+                if let Ok(dialog) = dialog.try_borrow()
+                    && let Some(actions) = &dialog.actions
+                {
+                    actions.settings_dialog_closed();
+                }
                 SETTINGS_INSTANCE.with(|slot| {
                     if let Ok(mut guard) = slot.try_borrow_mut() {
                         *guard = None;

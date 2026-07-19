@@ -15,10 +15,12 @@ use windows::Win32::{
 
 use super::{
     APP, App, CLIPBOARD_DEBOUNCE_TIMER, CLIPBOARD_READ_RETRY_TIMER, COMPOSITION_RETRY_TIMER,
+    MAGNETIC_NOTICE_TIMER,
 };
 use crate::constants::{
-    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_ACTION, WM_APP_REFRESH, WM_APP_SET_MAGNETIC,
-    WM_DEFERRED_PAINT, WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
+    MIN_WINDOW_SIZE, RESIZE_BORDER_WIDTH, WM_APP_ACTION, WM_APP_MAGNETIC_TARGET_SELECTED,
+    WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT, WM_DEFERRED_RESIZE,
+    WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
 };
 use crate::window;
 
@@ -60,6 +62,7 @@ fn reentry_policy(msg: u32, taskbar_created_msg: u32) -> ReentryPolicy {
             msg,
             WM_APP_REFRESH
                 | WM_APP_ACTION
+                | WM_APP_MAGNETIC_TARGET_SELECTED
                 | WM_APP_SET_MAGNETIC
                 | WM_DEFERRED_RESIZE
                 | WM_DEFERRED_PAINT
@@ -187,6 +190,11 @@ impl App {
                     Some(LRESULT(0))
                 }
 
+                WM_TIMER if wparam.0 == MAGNETIC_NOTICE_TIMER => {
+                    self.handle_magnetic_notice_timer();
+                    Some(LRESULT(0))
+                }
+
                 WM_CLIPBOARDUPDATE => {
                     self.handle_clipboard_change();
                     Some(LRESULT(0))
@@ -207,6 +215,11 @@ impl App {
 
                 _ if msg == WM_APP_SET_MAGNETIC => {
                     self.apply_magnetic_request(wparam.0 != 0);
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_APP_MAGNETIC_TARGET_SELECTED => {
+                    self.handle_magnetic_target_selected(HWND(wparam.0 as _));
                     Some(LRESULT(0))
                 }
 
@@ -387,6 +400,7 @@ impl App {
                     }
                     return LRESULT(HTCAPTION as isize);
                 }
+
                 WM_GETMINMAXINFO => {
                     let mm = &mut *(lparam.0 as *mut MINMAXINFO);
                     window::set_min_track_size(mm, MIN_WINDOW_SIZE, MIN_WINDOW_SIZE);

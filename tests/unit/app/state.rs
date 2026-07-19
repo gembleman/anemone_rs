@@ -1,7 +1,7 @@
 use super::{
     AppAction, AppCommand, AppModel, AppState, ClientSize, ClipboardDebounce, Effect,
-    MagneticAction, PendingTranslation, correlate_translation, magnetic_action,
-    should_watch_clipboard,
+    MagneticAction, OverlayNotice, PendingTranslation, clipboard_capture_is_paused,
+    correlate_translation, magnetic_action, should_watch_clipboard,
 };
 use crate::backlog::{BacklogFilter, BacklogStore, LogEntry};
 use crate::config::Config;
@@ -19,6 +19,18 @@ fn clipboard_debounce_keeps_only_the_last_submission() {
 }
 
 #[test]
+fn magnetic_notices_use_the_requested_copy() {
+    assert_eq!(
+        OverlayNotice::SelectMagneticTarget.text(),
+        "따라다닐 창을 선택해주세요."
+    );
+    assert_eq!(
+        OverlayNotice::MagneticTargetAttached.text(),
+        "해당 창을 따라다닐게요! >.<"
+    );
+}
+
+#[test]
 fn manual_translation_dialog_temporarily_suspends_clipboard_capture() {
     assert!(should_watch_clipboard(true, false));
     assert!(!should_watch_clipboard(true, true));
@@ -27,8 +39,26 @@ fn manual_translation_dialog_temporarily_suspends_clipboard_capture() {
 }
 
 #[test]
+fn all_non_idle_ui_states_pause_clipboard_capture() {
+    assert!(!clipboard_capture_is_paused(
+        false, false, false, false, false
+    ));
+    for active_reason in 0..5 {
+        let mut reasons = [false; 5];
+        reasons[active_reason] = true;
+        assert!(clipboard_capture_is_paused(
+            reasons[0], reasons[1], reasons[2], reasons[3], reasons[4]
+        ));
+    }
+}
+
+#[test]
 fn translate_dialog_close_is_forwarded_as_a_platform_effect() {
     let mut model = app_model();
+    assert_eq!(
+        model.update(AppAction::SettingsDialogClosed),
+        vec![Effect::SettingsDialogClosed]
+    );
     assert_eq!(
         model.update(AppAction::TranslateDialogClosed(17)),
         vec![Effect::TranslateDialogClosed(17)]
@@ -128,6 +158,7 @@ fn app_model() -> AppModel {
             client_size: ClientSize::new(400, 200),
             original_text: String::new(),
             translated_text: String::new(),
+            overlay_notice: None,
             pending_translation: None,
             clipboard_debounce: ClipboardDebounce::default(),
         },

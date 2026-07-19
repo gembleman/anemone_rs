@@ -105,6 +105,17 @@ fn build_render_blocks(config: &Config, original: &str, translated: &str) -> Vec
         .collect()
 }
 
+fn build_notice_render_blocks(config: &Config, text: &str) -> Vec<RenderBlock> {
+    let style = render_style(config, &config.translation_style);
+    vec![RenderBlock {
+        text: text.to_string(),
+        top: config.text_margin_y as f32,
+        height: text.lines().count().max(1) as f32 * (style.font_size.max(1) as f32 * 1.35),
+        style,
+        gap_after: 0.0,
+    }]
+}
+
 impl App {
     const FRAME_WAIT_TIMEOUT_MS: u32 = 16;
 
@@ -162,11 +173,14 @@ impl App {
         let border_width = cfg.border_width;
         let border_color = cfg.border_color;
 
-        let mut render_blocks = build_render_blocks(
-            cfg,
-            &self.model.runtime.original_text,
-            &self.model.runtime.translated_text,
-        );
+        let mut render_blocks = match self.model.runtime.overlay_notice {
+            Some(notice) => build_notice_render_blocks(cfg, notice.text()),
+            None => build_render_blocks(
+                cfg,
+                &self.model.runtime.original_text,
+                &self.model.runtime.translated_text,
+            ),
+        };
         let margin_x = cfg.text_margin_x;
         let margin_y = cfg.text_margin_y;
 

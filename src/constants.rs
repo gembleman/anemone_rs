@@ -40,6 +40,9 @@ pub const WM_DEFERRED_PAINT: u32 = WM_APP + 4;
 /// 다이얼로그가 UI thread의 AppAction queue에 새 작업을 넣었음을 알린다.
 pub const WM_APP_ACTION: u32 = WM_APP + 5;
 
+/// 자석 선택 훅이 사용자가 활성화한 외부 창을 주 창에 전달한다 (`WPARAM`: HWND).
+pub const WM_APP_MAGNETIC_TARGET_SELECTED: u32 = WM_APP + 6;
+
 // ── 파일 번역 진행률 메시지 ─────────────────────────────
 
 // ── 응답 저장소 ─────────────────────────────────────────

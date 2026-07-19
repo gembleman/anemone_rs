@@ -46,6 +46,10 @@ impl AppActionSender {
         self.send(AppAction::ClearBacklog);
     }
 
+    pub(crate) fn settings_dialog_closed(&self) {
+        self.send(AppAction::SettingsDialogClosed);
+    }
+
     pub(crate) fn translate_dialog_closed(&self, session: u64) {
         self.send(AppAction::TranslateDialogClosed(session));
     }
@@ -105,6 +109,7 @@ impl App {
                     DialogKind::Backlog => self.open_backlog_dialog(),
                     DialogKind::FileTranslation => self.open_file_trans_dialog(),
                 },
+                Effect::SettingsDialogClosed => self.handle_settings_dialog_closed(),
                 Effect::TranslateDialogClosed(session) => {
                     self.handle_translate_dialog_closed(session);
                 }

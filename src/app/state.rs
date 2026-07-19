@@ -70,6 +70,20 @@ pub(super) const fn should_watch_clipboard(
     configured && !translate_dialog_active
 }
 
+pub(super) const fn clipboard_capture_is_paused(
+    translation_dialog: bool,
+    file_translation_dialog: bool,
+    settings_dialog: bool,
+    context_menu: bool,
+    overlay_notice: bool,
+) -> bool {
+    translation_dialog
+        || file_translation_dialog
+        || settings_dialog
+        || context_menu
+        || overlay_notice
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MagneticAction {
     Noop,
@@ -127,8 +141,24 @@ pub(super) struct AppState {
     pub client_size: ClientSize,
     pub original_text: String,
     pub translated_text: String,
+    pub overlay_notice: Option<OverlayNotice>,
     pub pending_translation: Option<PendingTranslation>,
     pub clipboard_debounce: ClipboardDebounce,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OverlayNotice {
+    SelectMagneticTarget,
+    MagneticTargetAttached,
+}
+
+impl OverlayNotice {
+    pub(super) const fn text(self) -> &'static str {
+        match self {
+            Self::SelectMagneticTarget => "따라다닐 창을 선택해주세요.",
+            Self::MagneticTargetAttached => "해당 창을 따라다닐게요! >.<",
+        }
+    }
 }
 
 /// Win32 handle과 service를 제외한 애플리케이션의 단일 상태 소유자.
@@ -144,6 +174,7 @@ pub(super) enum AppAction {
     PreviewSettings(SettingsDraft),
     CommitSettings(SettingsDraft),
     ClearBacklog,
+    SettingsDialogClosed,
     TranslateDialogClosed(u64),
     FileTransDialogClosed(u64),
 }
@@ -158,6 +189,7 @@ pub(super) enum Effect {
     SetClipboardWatch(bool),
     SetMagnetic(bool),
     OpenDialog(DialogKind),
+    SettingsDialogClosed,
     TranslateDialogClosed(u64),
     FileTransDialogClosed(u64),
     Close,
@@ -188,6 +220,7 @@ impl AppModel {
                 self.backlog.clear();
                 Vec::new()
             }
+            AppAction::SettingsDialogClosed => vec![Effect::SettingsDialogClosed],
             AppAction::TranslateDialogClosed(session) => {
                 vec![Effect::TranslateDialogClosed(session)]
             }
