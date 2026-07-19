@@ -8,7 +8,7 @@ use windows::{
 use super::ctrl_id;
 use super::{SettingsDialog, mask_secret};
 use crate::config::{ColorType, TextAlign, TextType};
-use crate::dialogs::color::ColorDialog;
+use crate::dialogs::color::{ColorDialog, ColorDialogConfig};
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
 use crate::dialogs::models::SettingsDraft;
 use crate::settings_model::{
@@ -94,10 +94,9 @@ impl SettingsDialog {
             // 배경 색상
             BACKGROUND_COLOR => {
                 let initial = self.draft.borrow().background_color;
-                if let Some(result) = ColorDialog::show_rgb(self.hwnd, initial) {
-                    self.apply_settings_change(SettingsChange::BackgroundColor(result.argb));
-                    self.invalidate_color_button(BACKGROUND_COLOR);
-                }
+                self.show_live_color_dialog(BACKGROUND_COLOR, initial, false, |argb| {
+                    SettingsChange::BackgroundColor(argb)
+                });
             }
 
             // 배경 표시 토글
@@ -163,10 +162,9 @@ impl SettingsDialog {
             }
             BORDER_COLOR => {
                 let initial = self.draft.borrow().border_color;
-                if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
-                    self.apply_settings_change(SettingsChange::BorderColor(result.argb));
-                    self.invalidate_color_button(BORDER_COLOR);
-                }
+                self.show_live_color_dialog(BORDER_COLOR, initial, true, |argb| {
+                    SettingsChange::BorderColor(argb)
+                });
             }
 
             // 표시 옵션 체크박스
@@ -355,14 +353,56 @@ impl SettingsDialog {
     /// 색상 버튼 처리
     fn handle_color_button(&mut self, ctrl_id: u16, text_type: TextType, color_type: ColorType) {
         let initial = self.draft.borrow().get_text_color(text_type, color_type);
-        if let Some(result) = ColorDialog::show_simple(self.hwnd, initial) {
-            self.apply_settings_change(SettingsChange::TextColor {
+        self.show_live_color_dialog(ctrl_id, initial, true, move |argb| {
+            SettingsChange::TextColor {
                 text_type,
                 color_type,
-                argb: result.argb,
-            });
-            self.invalidate_color_button(ctrl_id);
-        }
+                argb,
+            }
+        });
+    }
+
+    /// 선택 중에는 즉시 미리보기를 갱신하고, 취소하면 대화상자를 열기 전 색으로 복원한다.
+    fn show_live_color_dialog<F>(
+        &self,
+        ctrl_id: u16,
+        initial: u32,
+        show_alpha: bool,
+        make_change: F,
+    ) where
+        F: Fn(u32) -> SettingsChange + Copy + 'static,
+    {
+        let draft = self.draft.clone();
+        let actions = self.actions.clone();
+        let settings_hwnd = self.hwnd;
+        let preview_change = make_change;
+        let had_unapplied_changes = self.has_unapplied_changes.get();
+
+        let result = ColorDialog::show(
+            self.hwnd,
+            ColorDialogConfig {
+                initial_color: initial,
+                on_color_change: Some(Box::new(move |argb| {
+                    let result =
+                        SettingsEditor::apply(&mut draft.borrow_mut(), preview_change(argb));
+                    if result.preview_refresh_required
+                        && let Some(actions) = &actions
+                    {
+                        actions.preview_settings(draft.borrow().clone());
+                    }
+                    SettingsDialog::invalidate_color_button_for(settings_hwnd, ctrl_id);
+                })),
+                no_activate: false,
+                show_alpha,
+            },
+        );
+
+        let final_color = result.map_or(initial, |result| result.argb);
+        self.apply_settings_change(make_change(final_color));
+        // callback에서 바뀐 값은 최종 apply가 no-op일 수 있고, 취소 복원은 새 변경이 아니다.
+        self.has_unapplied_changes
+            .set(had_unapplied_changes || (result.is_some() && final_color != initial));
+        self.invalidate_color_button(ctrl_id);
     }
 
     /// 폰트 버튼 처리

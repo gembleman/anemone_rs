@@ -82,32 +82,6 @@ impl ColorDialog {
         unsafe { Self::show_impl(hwnd, config) }
     }
 
-    /// 간단한 색상 선택 (콜백 없음)
-    pub fn show_simple(hwnd: HWND, initial_argb: u32) -> Option<ColorResult> {
-        Self::show(
-            hwnd,
-            ColorDialogConfig {
-                initial_color: initial_argb,
-                on_color_change: None,
-                no_activate: false,
-                show_alpha: true,
-            },
-        )
-    }
-
-    /// 알파 채널을 유지한 채 RGB 색상만 선택한다.
-    pub fn show_rgb(hwnd: HWND, initial_argb: u32) -> Option<ColorResult> {
-        Self::show(
-            hwnd,
-            ColorDialogConfig {
-                initial_color: initial_argb,
-                on_color_change: None,
-                no_activate: false,
-                show_alpha: false,
-            },
-        )
-    }
-
     unsafe fn show_impl(hwnd: HWND, config: ColorDialogConfig) -> Option<ColorResult> {
         // SAFETY: 구조체 크기, owner, color buffer와 hook pointer가 모두 유효하다.
         unsafe {
@@ -211,6 +185,18 @@ impl ColorDialog {
 
             ((alpha & 0xFF) << 24) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF)
         }
+    }
+
+    fn notify_color_change(hdlg: HWND) {
+        let color = Self::read_dialog_argb(hdlg);
+        HOOK_CONTEXT.with(|ctx| {
+            if let Ok(guard) = ctx.try_borrow()
+                && let Some(ref context) = *guard
+                && let Some(ref callback) = context.callback
+            {
+                callback(color);
+            }
+        });
     }
 
     /// CHOOSECOLOR 훅 프로시저
@@ -409,16 +395,7 @@ impl ColorDialog {
                         }
                     });
 
-                    // 콜백 호출
-                    let color = Self::read_dialog_argb(hdlg);
-                    HOOK_CONTEXT.with(|ctx| {
-                        if let Ok(guard) = ctx.try_borrow()
-                            && let Some(ref c) = *guard
-                            && let Some(ref cb) = c.callback
-                        {
-                            cb(color);
-                        }
-                    });
+                    Self::notify_color_change(hdlg);
                 }
 
                 WM_COMMAND => {
@@ -448,22 +425,14 @@ impl ColorDialog {
                                 let value = HSTRING::from(alpha.to_string());
                                 let _ = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &value);
                             }
+                            Self::notify_color_change(hdlg);
                         }
+                    } else if matches!(id, COLOR_RED_EDIT | COLOR_GREEN_EDIT | COLOR_BLUE_EDIT)
+                        && notification == EN_CHANGE
+                    {
+                        // 팔레트, 색상 스펙트럼, 키보드/직접 입력 모두 RGB edit을 갱신한다.
+                        Self::notify_color_change(hdlg);
                     }
-                }
-
-                WM_KEYDOWN | WM_KEYUP | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN
-                | WM_RBUTTONUP | WM_MOUSEMOVE => {
-                    // 색상 변경 시 콜백 호출
-                    let color = Self::read_dialog_argb(hdlg);
-                    HOOK_CONTEXT.with(|ctx| {
-                        if let Ok(guard) = ctx.try_borrow()
-                            && let Some(ref c) = *guard
-                            && let Some(ref cb) = c.callback
-                        {
-                            cb(color);
-                        }
-                    });
                 }
 
                 WM_MOVING | WM_SIZING => {

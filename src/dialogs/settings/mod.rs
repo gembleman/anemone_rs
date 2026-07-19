@@ -450,9 +450,13 @@ impl SettingsDialog {
 
     /// 색상 변경 후 해당 버튼만 강제 다시 그리기
     pub(super) fn invalidate_color_button(&self, id: u16) {
-        // SAFETY: self.hwnd is valid; GetDlgItem returns a valid control handle.
+        Self::invalidate_color_button_for(self.hwnd, id);
+    }
+
+    fn invalidate_color_button_for(hwnd: HWND, id: u16) {
+        // SAFETY: hwnd is a valid settings window; GetDlgItem returns its child control.
         unsafe {
-            if let Ok(h) = GetDlgItem(Some(self.hwnd), id as i32) {
+            if let Ok(h) = GetDlgItem(Some(hwnd), id as i32) {
                 let _ = InvalidateRect(Some(h), None, true);
             }
         }
