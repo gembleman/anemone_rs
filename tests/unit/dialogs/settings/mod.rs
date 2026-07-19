@@ -46,6 +46,10 @@ fn translation_panel_and_height_follow_the_selected_engine() {
         SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL)
             < SettingsDialog::translation_height_for_engine(TranslationEngine::Llm)
     );
+    assert_eq!(
+        SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL),
+        335
+    );
     assert!(
         SettingsDialog::translation_group_height_for_engine(TranslationEngine::Papago)
             < SettingsDialog::translation_group_height_for_engine(TranslationEngine::DeepL)
@@ -53,6 +57,10 @@ fn translation_panel_and_height_follow_the_selected_engine() {
     assert!(
         SettingsDialog::translation_group_height_for_engine(TranslationEngine::DeepL)
             < SettingsDialog::translation_group_height_for_engine(TranslationEngine::Llm)
+    );
+    assert_eq!(
+        SettingsDialog::translation_group_height_for_engine(TranslationEngine::DeepL),
+        136
     );
     assert_eq!(
         SettingsDialog::translation_height_for_engine(TranslationEngine::Custom),
@@ -191,11 +199,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
             &mut deepl_key_input_rect,
         )
         .unwrap();
-        GetWindowRect(
-            control(hwnd, ctrl_id::DEEPL_KEY_REMOVE_BTN),
-            &mut deepl_last_control_rect,
-        )
-        .unwrap();
+        GetWindowRect(control(hwnd, 2216), &mut deepl_last_control_rect).unwrap();
     }
     assert!(deepl_key_input_rect.top > deepl_keys_rect.bottom);
     assert!(deepl_last_control_rect.bottom < deepl_group_rect.bottom);

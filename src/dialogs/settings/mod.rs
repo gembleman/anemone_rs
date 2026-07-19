@@ -527,7 +527,7 @@ impl SettingsDialog {
             | TranslationEngine::EzTrans
             | TranslationEngine::Papago
             | TranslationEngine::Custom => 245,
-            TranslationEngine::DeepL => 325,
+            TranslationEngine::DeepL => 365,
             TranslationEngine::Llm => 460,
         }
     }
@@ -535,7 +535,7 @@ impl SettingsDialog {
     /// 선택된 엔진의 전용 입력을 감싸도록 번역 설정 그룹박스 높이를 반환한다.
     fn translation_group_height_for_engine(engine: TranslationEngine) -> i32 {
         match engine {
-            TranslationEngine::DeepL => 126,
+            TranslationEngine::DeepL => 136,
             TranslationEngine::Llm => 187,
             TranslationEngine::Google
             | TranslationEngine::EzTrans
