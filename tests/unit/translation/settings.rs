@@ -59,7 +59,10 @@ fn engine_and_eztrans_changes_request_runtime_sync() {
     assert!(result.runtime_sync_required);
     let result = TranslationSettingsEditor::apply(
         &mut config,
-        TranslationSettingChange::DeepLApiKey("secret".into()),
+        TranslationSettingChange::AddDeepLKey {
+            tier: DeepLApiTier::Pro,
+            key: "secret".into(),
+        },
     )
     .unwrap();
     assert!(!result.runtime_sync_required);
@@ -80,6 +83,7 @@ fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
         .changed
     );
     assert_eq!(config.deepl_keys, ["key"]);
+    assert_eq!(config.deepl_key_tiers, ["pro"]);
     assert!(
         !TranslationSettingsEditor::apply(
             &mut config,
@@ -97,10 +101,11 @@ fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
             .changed
     );
     assert!(config.deepl_keys.is_empty());
+    assert!(config.deepl_key_tiers.is_empty());
 }
 
 #[test]
-fn deepl_key_type_must_match_the_key_suffix() {
+fn deepl_free_key_must_match_the_key_suffix() {
     let mut config = TranslationConfig::default();
     assert_eq!(
         TranslationSettingsEditor::apply(
@@ -112,17 +117,29 @@ fn deepl_key_type_must_match_the_key_suffix() {
         ),
         Err(TranslationSettingsError::InvalidDeepLFreeKey)
     );
-    assert_eq!(
-        TranslationSettingsEditor::apply(
-            &mut config,
-            TranslationSettingChange::AddDeepLKey {
-                tier: DeepLApiTier::Pro,
-                key: "free-key:fx".into(),
-            }
-        ),
-        Err(TranslationSettingsError::InvalidDeepLProKey)
-    );
     assert!(config.deepl_keys.is_empty());
+}
+
+#[test]
+fn deepl_pro_key_can_have_the_free_key_suffix() {
+    let mut config = TranslationConfig::default();
+    let result = TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::AddDeepLKey {
+            tier: DeepLApiTier::Pro,
+            key: "pro-key:fx".into(),
+        },
+    )
+    .unwrap();
+
+    assert!(result.changed);
+    assert_eq!(config.deepl_keys, ["pro-key:fx"]);
+    assert_eq!(config.deepl_key_tiers, ["pro"]);
+    assert_eq!(config.deepl_key_tier(0), DeepLApiTier::Pro);
+
+    let serialized = toml::to_string(&config).unwrap();
+    let restored: TranslationConfig = toml::from_str(&serialized).unwrap();
+    assert_eq!(restored.deepl_key_tier(0), DeepLApiTier::Pro);
 }
 
 #[test]

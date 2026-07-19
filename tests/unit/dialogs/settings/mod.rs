@@ -1,5 +1,5 @@
 use super::{EngineGroup, SettingsDialog, format_deepl_key, mask_secret};
-use crate::translation::TranslationEngine;
+use crate::translation::{DeepLApiTier, TranslationEngine};
 
 #[test]
 fn secret_mask_never_contains_the_complete_secret() {
@@ -11,8 +11,14 @@ fn secret_mask_never_contains_the_complete_secret() {
 
 #[test]
 fn deepl_key_labels_show_the_detected_api_tier() {
-    assert_eq!(format_deepl_key("free-secret:fx"), "[무료] ••••t:fx");
-    assert_eq!(format_deepl_key("pro-secret"), "[유료] ••••cret");
+    assert_eq!(
+        format_deepl_key("free-secret:fx", DeepLApiTier::Free),
+        "[무료] ••••t:fx"
+    );
+    assert_eq!(
+        format_deepl_key("pro-secret:fx", DeepLApiTier::Pro),
+        "[유료] ••••t:fx"
+    );
 }
 
 #[test]
@@ -164,13 +170,15 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         let instance = slot.borrow().as_ref().expect("settings instance").clone();
         instance.borrow_mut().switch_tab(super::TAB_TRANSLATION);
     });
-    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_API_KEY_EDIT)).as_bool() });
+    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_KEYS_LIST)).as_bool() });
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_KEY_TIER_COMBO)).as_bool() });
     assert_eq!(combo_index(hwnd, ctrl_id::DEEPL_KEY_TIER_COMBO), 0);
     assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::PAPAGO_ID_EDIT)).as_bool() });
     assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)).as_bool() });
     let mut deepl_rect = Default::default();
     let mut deepl_group_rect = Default::default();
+    let mut deepl_keys_rect = Default::default();
+    let mut deepl_key_input_rect = Default::default();
     let mut deepl_last_control_rect = Default::default();
     unsafe {
         GetWindowRect(hwnd, &mut deepl_rect).unwrap();
@@ -180,11 +188,22 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         )
         .unwrap();
         GetWindowRect(
+            control(hwnd, ctrl_id::DEEPL_KEYS_LIST),
+            &mut deepl_keys_rect,
+        )
+        .unwrap();
+        GetWindowRect(
+            control(hwnd, ctrl_id::DEEPL_KEY_ADD_EDIT),
+            &mut deepl_key_input_rect,
+        )
+        .unwrap();
+        GetWindowRect(
             control(hwnd, ctrl_id::DEEPL_KEY_REMOVE_BTN),
             &mut deepl_last_control_rect,
         )
         .unwrap();
     }
+    assert!(deepl_key_input_rect.top > deepl_keys_rect.bottom);
     assert!(deepl_last_control_rect.bottom < deepl_group_rect.bottom);
 
     select_combo(
@@ -192,7 +211,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         ctrl_id::TRANS_ENGINE,
         TranslationEngine::Papago as usize,
     );
-    assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_API_KEY_EDIT)).as_bool() });
+    assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_KEYS_LIST)).as_bool() });
     assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_KEY_TIER_COMBO)).as_bool() });
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::PAPAGO_ID_EDIT)).as_bool() });
     let mut papago_rect = Default::default();

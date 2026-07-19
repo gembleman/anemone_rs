@@ -61,8 +61,7 @@ pub(super) fn mask_secret(secret: &str) -> String {
     format!("••••{suffix}")
 }
 
-pub(super) fn format_deepl_key(secret: &str) -> String {
-    let tier = crate::translation::DeepLApiTier::from_api_key(secret);
+pub(super) fn format_deepl_key(secret: &str, tier: crate::translation::DeepLApiTier) -> String {
     format!("[{}] {}", tier.display_name(), mask_secret(secret))
 }
 

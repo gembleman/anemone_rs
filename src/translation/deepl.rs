@@ -33,6 +33,21 @@ impl DeepLApiTier {
             Self::Pro => "유료",
         }
     }
+
+    pub(crate) const fn config_value(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Pro => "pro",
+        }
+    }
+
+    pub(crate) fn from_config_value(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "free" => Some(Self::Free),
+            "pro" => Some(Self::Pro),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -59,6 +74,7 @@ pub async fn translate_async_with_client(
     source: Language,
     target: Language,
     api_key: &str,
+    tier: DeepLApiTier,
 ) -> TranslationResult {
     validate_not_empty(text)?;
 
@@ -72,7 +88,7 @@ pub async fn translate_async_with_client(
 
     let request = build_deepl_request(
         client,
-        deepl_translate_url(api_key),
+        deepl_translate_url(tier),
         text,
         source_code,
         target_code,
@@ -87,8 +103,8 @@ pub async fn translate_async_with_client(
     parse_deepl_response(&body)
 }
 
-fn deepl_translate_url(api_key: &str) -> &'static str {
-    match DeepLApiTier::from_api_key(api_key) {
+fn deepl_translate_url(tier: DeepLApiTier) -> &'static str {
+    match tier {
         DeepLApiTier::Free => DEEPL_FREE_TRANSLATE_URL,
         DeepLApiTier::Pro => DEEPL_PRO_TRANSLATE_URL,
     }

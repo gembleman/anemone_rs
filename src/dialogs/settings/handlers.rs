@@ -319,7 +319,7 @@ impl SettingsDialog {
                 Ok(h) if !h.is_invalid() => h,
                 _ => return,
             };
-            let key_wide = to_wide(&format_deepl_key(&key));
+            let key_wide = to_wide(&format_deepl_key(&key, tier));
             let _ = SendMessageW(
                 listbox,
                 LB_ADDSTRING,
@@ -660,7 +660,6 @@ impl SettingsDialog {
         let text = self.get_control_text(ctrl_id);
         use ctrl_id::*;
         let change = match ctrl_id {
-            DEEPL_API_KEY_EDIT => TranslationSettingChange::DeepLApiKey(text),
             PAPAGO_ID_EDIT => TranslationSettingChange::PapagoClientId(text),
             PAPAGO_SECRET_EDIT => TranslationSettingChange::PapagoClientSecret(text),
             EZTRANS_DLL_EDIT => TranslationSettingChange::EzTransDllPath(text),

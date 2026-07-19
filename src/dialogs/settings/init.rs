@@ -67,7 +67,6 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::EZTRANS_DLL_BROWSE,
     ctrl_id::EZTRANS_DAT_EDIT,
     ctrl_id::EZTRANS_DAT_BROWSE,
-    ctrl_id::DEEPL_API_KEY_EDIT,
     ctrl_id::DEEPL_KEYS_LIST,
     ctrl_id::DEEPL_KEY_ADD_EDIT,
     ctrl_id::DEEPL_KEY_ADD_BTN,
@@ -138,7 +137,6 @@ impl SettingsDialog {
         self.register_engine_ids(
             EngineGroup::DeepL,
             &[
-                ctrl_id::DEEPL_API_KEY_EDIT,
                 ctrl_id::DEEPL_KEYS_LIST,
                 ctrl_id::DEEPL_KEY_ADD_EDIT,
                 ctrl_id::DEEPL_KEY_ADD_BTN,
@@ -288,10 +286,6 @@ impl SettingsDialog {
             ctrl_id::EZTRANS_DAT_EDIT,
             &config.translation.eztrans_dat_path,
         )?;
-        self.set_text(
-            ctrl_id::DEEPL_API_KEY_EDIT,
-            &config.translation.deepl_api_key,
-        )?;
         let strategy = match config.translation.deepl_strategy.to_lowercase().as_str() {
             "round-robin" | "roundrobin" | "rr" => 1,
             _ => 0,
@@ -303,8 +297,9 @@ impl SettingsDialog {
         )?;
         self.initialize_combo(ctrl_id::DEEPL_KEY_TIER_COMBO, &["무료", "유료"], 0)?;
         let key_list = self.control(ctrl_id::DEEPL_KEYS_LIST)?;
-        for key in &config.translation.deepl_keys {
-            let wide = to_wide(&format_deepl_key(key));
+        for (index, key) in config.translation.deepl_keys.iter().enumerate() {
+            let tier = config.translation.deepl_key_tier(index);
+            let wide = to_wide(&format_deepl_key(key, tier));
             unsafe {
                 let _ = SendMessageW(
                     key_list,

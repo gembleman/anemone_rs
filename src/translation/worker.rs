@@ -475,7 +475,7 @@ impl TranslationDispatch {
         text: &str,
         source: Language,
         target: Language,
-        keys: &[String],
+        keys: &[(String, crate::translation::DeepLApiTier)],
         strategy: DeepLStrategy,
     ) -> TranslationResult {
         debug_assert!(!keys.is_empty());
@@ -492,8 +492,11 @@ impl TranslationDispatch {
 
         for offset in 0..keys.len() {
             let idx = (start + offset) % keys.len();
-            let key = &keys[idx];
-            match super::deepl::translate_async_with_client(client, text, source, target, key).await
+            let (key, tier) = &keys[idx];
+            match super::deepl::translate_async_with_client(
+                client, text, source, target, key, *tier,
+            )
+            .await
             {
                 Ok(s) => return Ok(s),
                 Err(e) => {

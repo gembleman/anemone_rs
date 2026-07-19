@@ -34,10 +34,13 @@ fn builds_json_request_with_header_authentication() {
 #[test]
 fn selects_endpoint_from_the_api_key_type() {
     assert_eq!(
-        deepl_translate_url("existing-free-key:fx"),
+        deepl_translate_url(DeepLApiTier::Free),
         DEEPL_FREE_TRANSLATE_URL
     );
-    assert_eq!(deepl_translate_url("pro-key"), DEEPL_PRO_TRANSLATE_URL);
+    assert_eq!(
+        deepl_translate_url(DeepLApiTier::Pro),
+        DEEPL_PRO_TRANSLATE_URL
+    );
 }
 
 #[test]
@@ -84,6 +87,7 @@ async fn rejects_a_whitespace_only_api_key() {
         Language::Eng,
         Language::Kor,
         "  \t ",
+        DeepLApiTier::Free,
     )
     .await;
 
