@@ -108,49 +108,46 @@ BEGIN
     EDITTEXT        1266, 63, 66, 160, 12, ES_AUTOHSCROLL | WS_TABSTOP
     PUSHBUTTON      "찾아보기", 1267, 226, 66, 40, 12
 
-    GROUPBOX        "DeepL", 2210, 9, 93, 263, 83
-    LTEXT           "API 키 (단일):", 2211, 17, 107, 46, 10
-    EDITTEXT        1268, 66, 106, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    LTEXT           "* 보조 키 목록이 비어있을 때만 단일 키를 사용합니다.", 2212, 17, 120, 246, 9
-    LTEXT           "보조 키 목록:", 2213, 17, 131, 57, 10
-    LTEXT           "전략:", 2214, 183, 131, 29, 10
-    COMBOBOX        1276, 206, 130, 57, 64, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LISTBOX         1272, 17, 142, 163, 29, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
-    EDITTEXT        1273, 183, 142, 80, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    PUSHBUTTON      "추가", 1274, 183, 157, 37, 12
-    PUSHBUTTON      "삭제", 1275, 226, 157, 37, 12
-
     // 엔진별 설정 패널은 같은 위치에 겹쳐 두고 선택된 패널만 표시한다.
-    GROUPBOX        "Papago", 2220, 9, 93, 263, 37
-    LTEXT           "Client ID:", 2221, 17, 105, 46, 10
-    EDITTEXT        1270, 66, 104, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    LTEXT           "Secret:", 2222, 17, 118, 46, 10
-    EDITTEXT        1271, 66, 117, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    LTEXT           "API 키 (단일):", 2211, 17, 51, 46, 10
+    EDITTEXT        1268, 66, 50, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    LTEXT           "* 보조 키 목록이 비어있을 때만 단일 키를 사용합니다.", 2212, 17, 64, 246, 9
+    LTEXT           "보조 키 목록:", 2213, 17, 75, 57, 10
+    LTEXT           "전략:", 2214, 183, 75, 29, 10
+    COMBOBOX        1276, 206, 74, 57, 64, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LISTBOX         1272, 17, 86, 163, 29, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        1273, 183, 86, 80, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    PUSHBUTTON      "추가", 1274, 183, 101, 37, 12
+    PUSHBUTTON      "삭제", 1275, 226, 101, 37, 12
 
-    GROUPBOX        "LLM 번역", 2230, 9, 93, 263, 168
-    LTEXT           "제공자:", 2231, 17, 106, 29, 10
-    COMBOBOX        1280, 46, 105, 57, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "모델:", 2232, 111, 106, 23, 10
-    EDITTEXT        1281, 134, 105, 131, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "API 키:", 2233, 17, 122, 29, 10
-    EDITTEXT        1282, 46, 121, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    LTEXT           "시스템 프롬프트:", 2235, 17, 138, 57, 10
-    EDITTEXT        1284, 17, 149, 249, 59, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Temperature:", 2236, 17, 213, 51, 10
-    CONTROL         "", 1287, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 69, 212, 103, 12
-    LTEXT           "0.00", 1288, 174, 214, 29, 10
-    LTEXT           "Max:", 2237, 206, 214, 24, 10
-    EDITTEXT        1286, 231, 213, 34, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "디바운스(ms):", 2238, 17, 230, 51, 10
-    EDITTEXT        1289, 69, 229, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "사전 항목: 0", 1298, 120, 230, 69, 10
-    PUSHBUTTON      "사전 편집...", 1297, 194, 229, 71, 12
-    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 245, 249, 10
+    // Papago 자격 증명은 EzTrans 경로와 같은 번역 설정 내부 슬롯을 사용한다.
+    LTEXT           "Client ID:", 2221, 17, 51, 46, 10
+    EDITTEXT        1270, 63, 50, 203, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    LTEXT           "Secret:", 2222, 17, 67, 46, 10
+    EDITTEXT        1271, 63, 66, 203, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
 
-    GROUPBOX        "커스텀 API", 2240, 9, 93, 263, 42
-    LTEXT           "등록 이름:", 2241, 17, 107, 46, 10
-    COMBOBOX        1310, 66, 106, 197, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "상세 설정은 구성 파일에서 관리합니다.", 2242, 17, 122, 246, 9
+    LTEXT           "제공자:", 2231, 17, 51, 29, 10
+    COMBOBOX        1280, 46, 50, 57, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "모델:", 2232, 111, 51, 23, 10
+    EDITTEXT        1281, 134, 50, 131, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "API 키:", 2233, 17, 67, 29, 10
+    EDITTEXT        1282, 46, 66, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    LTEXT           "시스템 프롬프트:", 2235, 17, 83, 57, 10
+    EDITTEXT        1284, 17, 94, 249, 59, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Temperature:", 2236, 17, 158, 51, 10
+    CONTROL         "", 1287, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 69, 157, 103, 12
+    LTEXT           "0.00", 1288, 174, 159, 29, 10
+    LTEXT           "Max:", 2237, 206, 159, 24, 10
+    EDITTEXT        1286, 231, 158, 34, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "디바운스(ms):", 2238, 17, 175, 51, 10
+    EDITTEXT        1289, 69, 174, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "사전 항목: 0", 1298, 120, 175, 69, 10
+    PUSHBUTTON      "사전 편집...", 1297, 194, 174, 71, 12
+    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 190, 249, 10
+
+    LTEXT           "등록 이름:", 2241, 17, 51, 46, 10
+    COMBOBOX        1310, 66, 50, 197, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "상세 설정은 구성 파일에서 관리합니다.", 2242, 17, 66, 246, 9
 
     PUSHBUTTON      "적용", 1301, 149, 598, 57, 16
     DEFPUSHBUTTON   "닫기", 1300, 211, 598, 57, 16

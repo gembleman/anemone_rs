@@ -513,11 +513,51 @@ impl SettingsDialog {
 
     fn translation_height_for_engine(engine: TranslationEngine) -> i32 {
         match engine {
-            TranslationEngine::Google | TranslationEngine::EzTrans => 245,
-            TranslationEngine::Papago => 325,
-            TranslationEngine::DeepL => 410,
-            TranslationEngine::Custom => 330,
-            TranslationEngine::Llm => 570,
+            TranslationEngine::Google
+            | TranslationEngine::EzTrans
+            | TranslationEngine::Papago
+            | TranslationEngine::Custom => 245,
+            TranslationEngine::DeepL => 300,
+            TranslationEngine::Llm => 460,
+        }
+    }
+
+    /// 선택된 엔진의 전용 입력을 감싸도록 번역 설정 그룹박스 높이를 반환한다.
+    fn translation_group_height_for_engine(engine: TranslationEngine) -> i32 {
+        match engine {
+            TranslationEngine::DeepL => 101,
+            TranslationEngine::Llm => 187,
+            TranslationEngine::Google
+            | TranslationEngine::EzTrans
+            | TranslationEngine::Papago
+            | TranslationEngine::Custom => 69,
+        }
+    }
+
+    fn resize_translation_group(&self, engine: TranslationEngine) {
+        let Ok(group) = (unsafe { GetDlgItem(Some(self.hwnd), ctrl_id::TRANSLATION_GROUP as i32) })
+        else {
+            return;
+        };
+        let mut current = RECT::default();
+        if unsafe { GetWindowRect(group, &mut current) }.is_err() {
+            return;
+        }
+        let mut size = RECT {
+            bottom: Self::translation_group_height_for_engine(engine),
+            ..Default::default()
+        };
+        unsafe {
+            let _ = MapDialogRect(self.hwnd, &mut size);
+            let _ = SetWindowPos(
+                group,
+                None,
+                0,
+                0,
+                current.right - current.left,
+                size.bottom,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -877,6 +917,7 @@ impl SettingsDialog {
 
     /// 엔진별 패널, 언어 콤보, 번역 탭 높이를 함께 갱신한다.
     pub(super) fn apply_engine_state(&mut self, engine: TranslationEngine) {
+        self.resize_translation_group(engine);
         self.update_engine_controls(engine);
         self.refresh_language_combos(engine);
         if self.current_tab == TAB_TRANSLATION {

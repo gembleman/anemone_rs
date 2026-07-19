@@ -20,6 +20,10 @@ fn translation_panel_and_height_follow_the_selected_engine() {
         Some(EngineGroup::Papago)
     );
     assert_eq!(
+        SettingsDialog::engine_group(TranslationEngine::Custom),
+        Some(EngineGroup::Custom)
+    );
+    assert_eq!(
         SettingsDialog::engine_group(TranslationEngine::Google),
         None
     );
@@ -28,13 +32,25 @@ fn translation_panel_and_height_follow_the_selected_engine() {
         SettingsDialog::translation_height_for_engine(TranslationEngine::Papago)
             < SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL)
     );
+    assert_eq!(
+        SettingsDialog::translation_height_for_engine(TranslationEngine::Papago),
+        SettingsDialog::translation_height_for_engine(TranslationEngine::EzTrans)
+    );
     assert!(
         SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL)
             < SettingsDialog::translation_height_for_engine(TranslationEngine::Llm)
     );
+    assert!(
+        SettingsDialog::translation_group_height_for_engine(TranslationEngine::Papago)
+            < SettingsDialog::translation_group_height_for_engine(TranslationEngine::DeepL)
+    );
+    assert!(
+        SettingsDialog::translation_group_height_for_engine(TranslationEngine::DeepL)
+            < SettingsDialog::translation_group_height_for_engine(TranslationEngine::Llm)
+    );
     assert_eq!(
         SettingsDialog::translation_height_for_engine(TranslationEngine::Custom),
-        330
+        SettingsDialog::translation_height_for_engine(TranslationEngine::Papago)
     );
 }
 
@@ -146,9 +162,22 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::PAPAGO_ID_EDIT)).as_bool() });
     assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)).as_bool() });
     let mut deepl_rect = Default::default();
+    let mut deepl_group_rect = Default::default();
+    let mut deepl_last_control_rect = Default::default();
     unsafe {
         GetWindowRect(hwnd, &mut deepl_rect).unwrap();
+        GetWindowRect(
+            control(hwnd, ctrl_id::TRANSLATION_GROUP),
+            &mut deepl_group_rect,
+        )
+        .unwrap();
+        GetWindowRect(
+            control(hwnd, ctrl_id::DEEPL_KEY_REMOVE_BTN),
+            &mut deepl_last_control_rect,
+        )
+        .unwrap();
     }
+    assert!(deepl_last_control_rect.bottom < deepl_group_rect.bottom);
 
     select_combo(
         hwnd,
@@ -158,10 +187,60 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_API_KEY_EDIT)).as_bool() });
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::PAPAGO_ID_EDIT)).as_bool() });
     let mut papago_rect = Default::default();
+    let mut papago_group_rect = Default::default();
     unsafe {
         GetWindowRect(hwnd, &mut papago_rect).unwrap();
+        GetWindowRect(
+            control(hwnd, ctrl_id::TRANSLATION_GROUP),
+            &mut papago_group_rect,
+        )
+        .unwrap();
     }
     assert!(papago_rect.bottom - papago_rect.top < deepl_rect.bottom - deepl_rect.top);
+    assert!(
+        papago_group_rect.bottom - papago_group_rect.top
+            < deepl_group_rect.bottom - deepl_group_rect.top
+    );
+
+    select_combo(
+        hwnd,
+        ctrl_id::TRANS_ENGINE,
+        TranslationEngine::Custom as usize,
+    );
+    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::CUSTOM_API_SELECT)).as_bool() });
+    assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::PAPAGO_ID_EDIT)).as_bool() });
+    let mut custom_group_rect = Default::default();
+    let mut custom_last_control_rect = Default::default();
+    unsafe {
+        GetWindowRect(
+            control(hwnd, ctrl_id::TRANSLATION_GROUP),
+            &mut custom_group_rect,
+        )
+        .unwrap();
+        GetWindowRect(control(hwnd, 2242), &mut custom_last_control_rect).unwrap();
+    }
+    assert_eq!(
+        custom_group_rect.bottom - custom_group_rect.top,
+        papago_group_rect.bottom - papago_group_rect.top
+    );
+    assert!(custom_last_control_rect.bottom < custom_group_rect.bottom);
+
+    select_combo(hwnd, ctrl_id::TRANS_ENGINE, TranslationEngine::Llm as usize);
+    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)).as_bool() });
+    let mut llm_group_rect = Default::default();
+    let mut llm_last_control_rect = Default::default();
+    unsafe {
+        GetWindowRect(
+            control(hwnd, ctrl_id::TRANSLATION_GROUP),
+            &mut llm_group_rect,
+        )
+        .unwrap();
+        GetWindowRect(control(hwnd, 2239), &mut llm_last_control_rect).unwrap();
+    }
+    assert!(
+        llm_group_rect.bottom - llm_group_rect.top > deepl_group_rect.bottom - deepl_group_rect.top
+    );
+    assert!(llm_last_control_rect.bottom < llm_group_rect.bottom);
 
     select_combo(hwnd, ctrl_id::TRANS_ENGINE, 0);
 
