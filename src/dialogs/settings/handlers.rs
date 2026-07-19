@@ -10,6 +10,7 @@ use super::{SettingsDialog, mask_secret};
 use crate::config::{ColorType, TextAlign, TextType};
 use crate::dialogs::color::ColorDialog;
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
+use crate::dialogs::models::SettingsDraft;
 use crate::settings_model::{
     BoolSetting, NumericSetting, SettingsChange, SettingsChangeResult, SettingsEditor,
 };
@@ -21,6 +22,28 @@ use crate::util::to_wide;
 
 fn take_unapplied_changes(pending: &std::cell::Cell<bool>) -> bool {
     pending.replace(false)
+}
+
+fn restore_last_applied(
+    pending: &std::cell::Cell<bool>,
+    draft: &std::cell::RefCell<SettingsDraft>,
+    last_applied: &std::cell::RefCell<SettingsDraft>,
+) -> Option<SettingsDraft> {
+    if !take_unapplied_changes(pending) {
+        return None;
+    }
+    let restored = last_applied.borrow().clone();
+    draft.replace(restored.clone());
+    Some(restored)
+}
+
+fn record_last_applied(
+    draft: &std::cell::RefCell<SettingsDraft>,
+    last_applied: &std::cell::RefCell<SettingsDraft>,
+) -> SettingsDraft {
+    let applied = draft.borrow().clone();
+    last_applied.replace(applied.clone());
+    applied
 }
 
 /// +/- 버튼 처리 매크로: config에서 값을 읽고, 범위 내에서 증감 후, UI 업데이트
@@ -708,8 +731,23 @@ impl SettingsDialog {
             return;
         }
         self.sync_translation_manager();
+        let applied = record_last_applied(self.draft.as_ref(), &self.last_applied);
         if let Some(actions) = &self.actions {
-            actions.commit_settings(self.draft.borrow().clone());
+            actions.commit_settings(applied);
+        }
+    }
+
+    pub(super) fn discard_unapplied_changes(&self) {
+        let Some(restored) = restore_last_applied(
+            &self.has_unapplied_changes,
+            self.draft.as_ref(),
+            &self.last_applied,
+        ) else {
+            return;
+        };
+        self.sync_translation_manager();
+        if let Some(actions) = &self.actions {
+            actions.preview_settings(restored);
         }
     }
 }

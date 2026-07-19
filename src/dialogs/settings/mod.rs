@@ -65,6 +65,8 @@ pub(super) fn mask_secret(secret: &str) -> String {
 pub struct SettingsDialog {
     hwnd: HWND,
     draft: Rc<RefCell<SettingsDraft>>,
+    /// 창을 닫을 때 미적용 preview를 되돌릴 마지막 적용 상태.
+    last_applied: RefCell<SettingsDraft>,
     actions: Option<AppActionSender>,
     /// 각 탭에 속한 컨트롤 HWND 목록 (탭 전환 시 표시/숨김)
     tab_controls: [Vec<HWND>; 3],
@@ -106,9 +108,11 @@ unsafe extern "system" fn settings_dialog_proc(
                 return 0;
             };
 
+            let last_applied = RefCell::new(draft.borrow().clone());
             let dialog = Rc::new(RefCell::new(SettingsDialog {
                 hwnd,
                 draft,
+                last_applied,
                 actions,
                 tab_controls: [Vec::new(), Vec::new(), Vec::new()],
                 current_tab: TAB_APPEARANCE,
@@ -192,7 +196,13 @@ unsafe extern "system" fn settings_dialog_proc(
                 1
             }
             WM_CLOSE => {
-                let _ = DestroyWindow(hwnd);
+                if let Ok(dialog) = dialog.try_borrow() {
+                    dialog.discard_unapplied_changes();
+                    drop(dialog);
+                    let _ = DestroyWindow(hwnd);
+                } else {
+                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
+                }
                 1
             }
             WM_DESTROY => {
