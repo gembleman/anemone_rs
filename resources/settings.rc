@@ -120,50 +120,51 @@ BEGIN
     PUSHBUTTON      "추가", 1274, 183, 157, 37, 12
     PUSHBUTTON      "삭제", 1275, 226, 157, 37, 12
 
-    GROUPBOX        "Papago", 2220, 9, 181, 263, 37
-    LTEXT           "Client ID:", 2221, 17, 193, 46, 10
-    EDITTEXT        1270, 66, 192, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    LTEXT           "Secret:", 2222, 17, 206, 46, 10
-    EDITTEXT        1271, 66, 205, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    // 엔진별 설정 패널은 같은 위치에 겹쳐 두고 선택된 패널만 표시한다.
+    GROUPBOX        "Papago", 2220, 9, 93, 263, 37
+    LTEXT           "Client ID:", 2221, 17, 105, 46, 10
+    EDITTEXT        1270, 66, 104, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    LTEXT           "Secret:", 2222, 17, 118, 46, 10
+    EDITTEXT        1271, 66, 117, 197, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
 
-    GROUPBOX        "LLM 번역", 2230, 9, 224, 263, 184
-    LTEXT           "제공자:", 2231, 17, 237, 29, 10
-    COMBOBOX        1280, 46, 236, 57, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "모델:", 2232, 111, 237, 23, 10
-    EDITTEXT        1281, 134, 236, 131, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "API 키:", 2233, 17, 253, 29, 10
-    EDITTEXT        1282, 46, 252, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    LTEXT           "Base URL:", 2234, 17, 269, 34, 10
-    EDITTEXT        1283, 54, 268, 211, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "시스템 프롬프트:", 2235, 17, 285, 57, 10
-    EDITTEXT        1284, 17, 296, 249, 59, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Temperature:", 2236, 17, 360, 51, 10
-    CONTROL         "", 1287, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 69, 359, 103, 12
-    LTEXT           "0.00", 1288, 174, 361, 29, 10
-    LTEXT           "Max:", 2237, 206, 361, 24, 10
-    EDITTEXT        1286, 231, 360, 34, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "디바운스(ms):", 2238, 17, 377, 51, 10
-    EDITTEXT        1289, 69, 376, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "사전 항목: 0", 1298, 120, 377, 69, 10
-    PUSHBUTTON      "사전 편집...", 1297, 194, 376, 71, 12
-    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 392, 249, 10
+    GROUPBOX        "LLM 번역", 2230, 9, 93, 263, 184
+    LTEXT           "제공자:", 2231, 17, 106, 29, 10
+    COMBOBOX        1280, 46, 105, 57, 80, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "모델:", 2232, 111, 106, 23, 10
+    EDITTEXT        1281, 134, 105, 131, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "API 키:", 2233, 17, 122, 29, 10
+    EDITTEXT        1282, 46, 121, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    LTEXT           "Base URL:", 2234, 17, 138, 34, 10
+    EDITTEXT        1283, 54, 137, 211, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "시스템 프롬프트:", 2235, 17, 154, 57, 10
+    EDITTEXT        1284, 17, 165, 249, 59, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Temperature:", 2236, 17, 229, 51, 10
+    CONTROL         "", 1287, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 69, 228, 103, 12
+    LTEXT           "0.00", 1288, 174, 230, 29, 10
+    LTEXT           "Max:", 2237, 206, 230, 24, 10
+    EDITTEXT        1286, 231, 229, 34, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "디바운스(ms):", 2238, 17, 246, 51, 10
+    EDITTEXT        1289, 69, 245, 40, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "사전 항목: 0", 1298, 120, 246, 69, 10
+    PUSHBUTTON      "사전 편집...", 1297, 194, 245, 71, 12
+    LTEXT           "주의: 입력 텍스트가 선택한 제공자 서버로 전송됩니다. 민감 정보 복사에 주의.", 2239, 17, 261, 249, 10
 
-    GROUPBOX        "커스텀 API (JSON POST)", 2240, 9, 413, 263, 177
-    LTEXT           "URL:", 2241, 17, 427, 29, 10
-    EDITTEXT        1310, 46, 426, 220, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "API 키:", 2242, 17, 443, 29, 10
-    EDITTEXT        1311, 46, 442, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
-    LTEXT           "인증 헤더:", 2243, 17, 459, 40, 10
-    EDITTEXT        1312, 59, 458, 94, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "스킴:", 2244, 159, 459, 23, 10
-    EDITTEXT        1313, 183, 458, 83, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "추가 헤더:", 2248, 17, 475, 40, 10
-    EDITTEXT        1316, 59, 474, 207, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "응답 경로:", 2245, 17, 491, 40, 10
-    EDITTEXT        1315, 59, 490, 207, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "요청 JSON 템플릿:", 2246, 17, 507, 69, 10
-    EDITTEXT        1314, 17, 518, 249, 51, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "변수: {text}, {source}, {target}, {api_key} · 응답 경로를 비우면 본문 전체 사용", 2247, 17, 573, 249, 10
+    GROUPBOX        "커스텀 API (JSON POST)", 2240, 9, 93, 263, 177
+    LTEXT           "URL:", 2241, 17, 107, 29, 10
+    EDITTEXT        1310, 46, 106, 220, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "API 키:", 2242, 17, 123, 29, 10
+    EDITTEXT        1311, 46, 122, 220, 12, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+    LTEXT           "인증 헤더:", 2243, 17, 139, 40, 10
+    EDITTEXT        1312, 59, 138, 94, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "스킴:", 2244, 159, 139, 23, 10
+    EDITTEXT        1313, 183, 138, 83, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "추가 헤더:", 2248, 17, 155, 40, 10
+    EDITTEXT        1316, 59, 154, 207, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "응답 경로:", 2245, 17, 171, 40, 10
+    EDITTEXT        1315, 59, 170, 207, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "요청 JSON 템플릿:", 2246, 17, 187, 69, 10
+    EDITTEXT        1314, 17, 198, 249, 51, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "변수: {text}, {source}, {target}, {api_key} · 응답 경로를 비우면 본문 전체 사용", 2247, 17, 253, 249, 10
 
     PUSHBUTTON      "적용", 1301, 149, 598, 57, 16
     DEFPUSHBUTTON   "닫기", 1300, 211, 598, 57, 16

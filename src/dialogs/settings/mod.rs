@@ -33,8 +33,8 @@ const TAB_APPEARANCE: usize = 0;
 const TAB_DISPLAY: usize = 1;
 const TAB_TRANSLATION: usize = 2;
 
-/// 엔진별 컨트롤 그룹 (활성/비활성 토글용)
-#[derive(Clone, Copy)]
+/// 선택된 엔진 패널만 표시하기 위한 컨트롤 그룹.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EngineGroup {
     EzTrans = 0,
     DeepL = 1,
@@ -75,7 +75,7 @@ pub struct SettingsDialog {
     scroll_pos: i32,
     scroll_max: i32,
     has_unapplied_changes: Cell<bool>,
-    /// 엔진별 컨트롤 (EnableWindow 토글용)
+    /// 엔진별 컨트롤 (선택 엔진 패널 표시/숨김용)
     pub(super) engine_controls: [Vec<HWND>; 5],
 }
 
@@ -501,14 +501,36 @@ impl SettingsDialog {
             }
         }
         self.current_tab = new_tab;
+        if new_tab == TAB_TRANSLATION {
+            let engine = self.draft.borrow().translation.get_engine().ok();
+            if let Some(engine) = engine {
+                self.update_engine_controls(engine);
+            }
+        }
         self.adjust_dialog_size_for_tab(new_tab);
     }
 
-    fn target_height_for_tab(tab: usize) -> i32 {
+    fn translation_height_for_engine(engine: TranslationEngine) -> i32 {
+        match engine {
+            TranslationEngine::Google | TranslationEngine::EzTrans => 245,
+            TranslationEngine::Papago => 325,
+            TranslationEngine::DeepL => 410,
+            TranslationEngine::Custom => 580,
+            TranslationEngine::Llm => 600,
+        }
+    }
+
+    fn target_height_for_tab(&self, tab: usize) -> i32 {
         match tab {
             TAB_APPEARANCE => 505,
             TAB_DISPLAY => 305,
-            TAB_TRANSLATION => 1180,
+            TAB_TRANSLATION => self
+                .draft
+                .borrow()
+                .translation
+                .get_engine()
+                .map(Self::translation_height_for_engine)
+                .unwrap_or(245),
             _ => 505,
         }
     }
@@ -516,7 +538,7 @@ impl SettingsDialog {
     /// 탭에 따라 다이얼로그 클라이언트 높이를 조정 (빈 공간 최소화)
     fn adjust_dialog_size_for_tab(&mut self, tab: usize) {
         // 각 탭의 마지막 group 아래에 닫기 button이 오도록 높이를 잡는다.
-        let target_height = Self::target_height_for_tab(tab);
+        let target_height = self.target_height_for_tab(tab);
         // SAFETY: self.hwnd is valid. SetWindowPos uses valid parameters.
         unsafe {
             self.scroll_to(0);
@@ -593,7 +615,7 @@ impl SettingsDialog {
             let height = (client.bottom - client.top).max(1);
             let dpi = crate::dpi::dpi_for_window(self.hwnd);
             let s = |v: i32| crate::dpi::scale(v, dpi);
-            let content_height = s(Self::target_height_for_tab(self.current_tab));
+            let content_height = s(self.target_height_for_tab(self.current_tab));
             let scroll_max = (content_height - height).max(0);
             let new_scroll_pos = self.scroll_pos.clamp(0, scroll_max);
 
@@ -768,23 +790,28 @@ impl SettingsDialog {
         self.scroll_to(target);
     }
 
-    /// 엔진별 컨트롤 enable 상태 갱신
-    fn update_engine_enable(&self, engine: TranslationEngine) {
-        let active = match engine {
-            TranslationEngine::EzTrans => EngineGroup::EzTrans as usize,
-            TranslationEngine::DeepL => EngineGroup::DeepL as usize,
-            TranslationEngine::Papago => EngineGroup::Papago as usize,
-            TranslationEngine::Llm => EngineGroup::Llm as usize,
-            TranslationEngine::Custom => EngineGroup::Custom as usize,
-            // Google은 별도 입력란이 없으므로 전부 비활성
-            TranslationEngine::Google => usize::MAX,
-        };
+    fn engine_group(engine: TranslationEngine) -> Option<EngineGroup> {
+        match engine {
+            TranslationEngine::EzTrans => Some(EngineGroup::EzTrans),
+            TranslationEngine::DeepL => Some(EngineGroup::DeepL),
+            TranslationEngine::Papago => Some(EngineGroup::Papago),
+            TranslationEngine::Llm => Some(EngineGroup::Llm),
+            TranslationEngine::Custom => Some(EngineGroup::Custom),
+            TranslationEngine::Google => None,
+        }
+    }
+
+    /// 번역 탭에서는 선택된 엔진의 전용 컨트롤만 표시한다.
+    fn update_engine_controls(&self, engine: TranslationEngine) {
+        let active = Self::engine_group(engine).map(|group| group as usize);
+        let translation_tab_visible = self.current_tab == TAB_TRANSLATION;
         // SAFETY: HWNDs in engine_controls are valid child controls.
         unsafe {
             for (idx, group) in self.engine_controls.iter().enumerate() {
-                let enable = idx == active;
+                let visible = translation_tab_visible && active == Some(idx);
                 for &h in group {
-                    let _ = EnableWindow(h, enable);
+                    let _ = EnableWindow(h, visible);
+                    let _ = ShowWindow(h, if visible { SW_SHOW } else { SW_HIDE });
                 }
             }
         }
@@ -847,10 +874,13 @@ impl SettingsDialog {
         }
     }
 
-    /// 엔진별 enable 상태와 언어 콤보를 동시에 갱신 (엔진 변경 시 호출)
-    pub(super) fn apply_engine_state(&self, engine: TranslationEngine) {
-        self.update_engine_enable(engine);
+    /// 엔진별 패널, 언어 콤보, 번역 탭 높이를 함께 갱신한다.
+    pub(super) fn apply_engine_state(&mut self, engine: TranslationEngine) {
+        self.update_engine_controls(engine);
         self.refresh_language_combos(engine);
+        if self.current_tab == TAB_TRANSLATION {
+            self.adjust_dialog_size_for_tab(TAB_TRANSLATION);
+        }
     }
 
     /// 커스텀 메시지 핸들러

@@ -1,4 +1,5 @@
-use super::mask_secret;
+use super::{EngineGroup, SettingsDialog, mask_secret};
+use crate::translation::TranslationEngine;
 
 #[test]
 fn secret_mask_never_contains_the_complete_secret() {
@@ -9,9 +10,34 @@ fn secret_mask_never_contains_the_complete_secret() {
 }
 
 #[test]
+fn translation_panel_and_height_follow_the_selected_engine() {
+    assert_eq!(
+        SettingsDialog::engine_group(TranslationEngine::DeepL),
+        Some(EngineGroup::DeepL)
+    );
+    assert_eq!(
+        SettingsDialog::engine_group(TranslationEngine::Papago),
+        Some(EngineGroup::Papago)
+    );
+    assert_eq!(
+        SettingsDialog::engine_group(TranslationEngine::Google),
+        None
+    );
+
+    assert!(
+        SettingsDialog::translation_height_for_engine(TranslationEngine::Papago)
+            < SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL)
+    );
+    assert!(
+        SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL)
+            < SettingsDialog::translation_height_for_engine(TranslationEngine::Llm)
+    );
+}
+
+#[test]
 #[ignore = "requires a Win32 desktop and embedded dialog resources"]
 fn win32_engine_transition_and_invalid_numeric_input_smoke() {
-    use super::{SettingsDialog, ctrl_id};
+    use super::ctrl_id;
     use crate::config::Config;
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -105,9 +131,34 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     assert!(apply_rect.top >= dialog_rect.top);
     assert!(apply_rect.right <= dialog_rect.right);
     assert!(apply_rect.bottom <= dialog_rect.bottom);
-
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_SOURCE_LANG), 2);
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_TARGET_LANG), 5);
+
+    super::SETTINGS_INSTANCE.with(|slot| {
+        let instance = slot.borrow().as_ref().expect("settings instance").clone();
+        instance.borrow_mut().switch_tab(super::TAB_TRANSLATION);
+    });
+    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_API_KEY_EDIT)).as_bool() });
+    assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::PAPAGO_ID_EDIT)).as_bool() });
+    assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)).as_bool() });
+    let mut deepl_rect = Default::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut deepl_rect).unwrap();
+    }
+
+    select_combo(
+        hwnd,
+        ctrl_id::TRANS_ENGINE,
+        TranslationEngine::Papago as usize,
+    );
+    assert!(!unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_API_KEY_EDIT)).as_bool() });
+    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::PAPAGO_ID_EDIT)).as_bool() });
+    let mut papago_rect = Default::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut papago_rect).unwrap();
+    }
+    assert!(papago_rect.bottom - papago_rect.top < deepl_rect.bottom - deepl_rect.top);
+
     select_combo(hwnd, ctrl_id::TRANS_ENGINE, 0);
 
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_SOURCE_LANG), 0);
