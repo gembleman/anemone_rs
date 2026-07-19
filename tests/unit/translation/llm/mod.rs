@@ -58,6 +58,42 @@ fn openai_model_presets_include_current_families_and_default() {
 }
 
 #[test]
+fn provider_model_presets_include_current_models_and_default() {
+    let cases = [
+        (
+            LlmProvider::Anthropic,
+            &["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"][..],
+        ),
+        (
+            LlmProvider::Gemini,
+            &[
+                "gemini-3.5-flash",
+                "gemini-3.1-pro-preview",
+                "gemini-2.5-pro",
+            ][..],
+        ),
+        (
+            LlmProvider::Grok,
+            &["grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"][..],
+        ),
+    ];
+
+    for (provider, expected) in cases {
+        let presets = provider.model_presets();
+        assert!(presets.contains(&provider.default_model()));
+        for model in expected {
+            assert!(
+                presets.contains(model),
+                "missing {provider:?} model: {model}"
+            );
+        }
+
+        let unique: std::collections::HashSet<_> = presets.iter().collect();
+        assert_eq!(unique.len(), presets.len(), "duplicate {provider:?} model");
+    }
+}
+
+#[test]
 fn blank_model_uses_provider_default_for_ui_and_api_calls() {
     assert_eq!(
         LlmProvider::OpenAi.model_or_default(""),

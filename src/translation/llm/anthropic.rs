@@ -63,11 +63,14 @@ fn request_payload<'a>(
     }
 }
 
-/// Opus 4.7부터는 기본값이 아닌 sampling parameter를 요청에 포함하면 API가
+/// Opus 4.7 이후 모델과 Sonnet 5는 sampling parameter를 요청에 포함하면 API가
 /// 거부한다. 모델 별 계약에 맞춰 필드를 값 1.0으로 보내는 대신 완전히 생략한다.
 fn anthropic_sampling_temperature(params: &LlmCallParams) -> Option<f32> {
     let model = params.effective_model().to_ascii_lowercase();
-    if model.starts_with("claude-opus-4-7") {
+    if ["claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5"]
+        .iter()
+        .any(|prefix| model == *prefix || model.starts_with(&format!("{prefix}-")))
+    {
         None
     } else {
         Some(params.temperature)

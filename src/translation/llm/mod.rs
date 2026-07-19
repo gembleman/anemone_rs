@@ -88,7 +88,7 @@ impl LlmProvider {
             Self::OpenAi => "gpt-5.4-nano",
             Self::Anthropic => "claude-opus-4-7",
             Self::Gemini => "gemini-2.5-flash",
-            Self::Grok => "grok-3",
+            Self::Grok => "grok-4.3",
             Self::OpenRouter => "openai/gpt-5",
         }
     }
@@ -110,7 +110,10 @@ impl LlmProvider {
     pub fn model_presets(self) -> &'static [&'static str] {
         match self {
             Self::OpenAi => OPENAI_CHAT_COMPLETION_MODELS,
-            Self::Anthropic | Self::Gemini | Self::Grok | Self::OpenRouter => &[],
+            Self::Anthropic => ANTHROPIC_MESSAGES_MODELS,
+            Self::Gemini => GEMINI_GENERATE_CONTENT_MODELS,
+            Self::Grok => GROK_CHAT_COMPLETION_MODELS,
+            Self::OpenRouter => &[],
         }
     }
 
@@ -263,6 +266,46 @@ pub const OPENAI_CHAT_COMPLETION_MODELS: &[&str] = &[
     "gpt-3.5-turbo-1106",
     "gpt-3.5-turbo-0125",
     "gpt-3.5-turbo-16k-0613",
+];
+
+/// Anthropic Messages API에서 사용할 수 있는 현재 공개 Claude 모델.
+/// 4.5 모델은 고정 스냅샷과 Claude API 편의 별칭을 함께 제공한다.
+pub const ANTHROPIC_MESSAGES_MODELS: &[&str] = &[
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-opus-4-5-20251101",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-5-20250929",
+    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
+];
+
+/// Gemini API `generateContent`를 지원하는 범용 텍스트 생성 모델.
+pub const GEMINI_GENERATE_CONTENT_MODELS: &[&str] = &[
+    "gemini-3.5-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+];
+
+/// xAI Chat Completions에서 사용할 수 있는 현재 텍스트 모델.
+pub const GROK_CHAT_COMPLETION_MODELS: &[&str] = &[
+    "grok-4.5",
+    "grok-4.5-latest",
+    "grok-build-0.1",
+    "grok-build-latest",
+    "grok-4.3",
+    "grok-4.20-multi-agent-0309",
+    "grok-4.20-0309-reasoning",
+    "grok-4.20-0309-non-reasoning",
 ];
 
 impl fmt::Debug for LlmCallParams {

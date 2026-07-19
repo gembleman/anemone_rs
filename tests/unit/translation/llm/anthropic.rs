@@ -22,22 +22,27 @@ fn serializes_cache_control_and_borrowed_messages() {
 }
 
 #[test]
-fn omits_temperature_for_opus_4_7() {
-    let params = LlmCallParams {
-        provider: super::super::LlmProvider::Anthropic,
-        model: String::new(),
-        api_key: "key".into(),
-        base_url: String::new(),
-        system_prompt: String::new(),
-        temperature: 0.3,
-        max_tokens: 321,
-        reasoning_effort: None,
-        glossary: Vec::new(),
-    };
+fn omits_temperature_for_models_without_sampling_parameters() {
+    for model in ["", "claude-opus-4-8", "claude-sonnet-5"] {
+        let params = LlmCallParams {
+            provider: super::super::LlmProvider::Anthropic,
+            model: model.into(),
+            api_key: "key".into(),
+            base_url: String::new(),
+            system_prompt: String::new(),
+            temperature: 0.3,
+            max_tokens: 321,
+            reasoning_effort: None,
+            glossary: Vec::new(),
+        };
 
-    let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
-    assert_eq!(params.effective_model(), "claude-opus-4-7");
-    assert!(value.get("temperature").is_none());
+        let value = serde_json::to_value(request_payload(&params, "system", "source")).unwrap();
+        assert!(
+            value.get("temperature").is_none(),
+            "model: {}",
+            params.effective_model()
+        );
+    }
 }
 
 #[test]
