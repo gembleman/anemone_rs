@@ -201,12 +201,6 @@ fn format_entry(entry: &LogEntry, filter: BacklogFilter, add_linefeed: bool) -> 
             });
         }
     }
-    if filter == BacklogFilter::All && add_linefeed {
-        segments.push(StyledText {
-            text: "\r\n".into(),
-            kind: TextKind::Original,
-        });
-    }
     segments
 }
 

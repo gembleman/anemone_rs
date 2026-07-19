@@ -23,7 +23,7 @@ fn filters_rendered_entries() {
     let _ = store.push(sample_entry());
     assert_eq!(
         rendered_text(&store, BacklogFilter::All, true),
-        "[화자] 원문\r\n번역\r\n\r\n"
+        "[화자] 원문\r\n번역\r\n"
     );
     assert_eq!(
         rendered_text(&store, BacklogFilter::Original, false),
@@ -32,6 +32,18 @@ fn filters_rendered_entries() {
     assert_eq!(
         rendered_text(&store, BacklogFilter::Translation, true),
         "번역\r\n"
+    );
+}
+
+#[test]
+fn all_filter_does_not_add_blank_lines_between_entries() {
+    let mut store = BacklogStore::new();
+    let _ = store.push(sample_entry());
+    let _ = store.push(LogEntry::new("다음 원문".into()).with_translation("다음 번역".into()));
+
+    assert_eq!(
+        rendered_text(&store, BacklogFilter::All, true),
+        "[화자] 원문\r\n번역\r\n다음 원문\r\n다음 번역\r\n"
     );
 }
 
