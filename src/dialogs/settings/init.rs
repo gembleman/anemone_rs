@@ -238,7 +238,14 @@ impl SettingsDialog {
         self.set_checked(ctrl_id::CLIPBOARD_WATCH, config.clipboard_watch)?;
         self.set_checked(ctrl_id::WNDCLICK_THROUGH, config.click_through)?;
 
-        let engine_names = ["EzTrans", "Google", "DeepL", "Papago", "LLM", "Custom API"];
+        let engine_names = [
+            "EzTrans",
+            "Google",
+            "DeepL",
+            "Papago API",
+            "LLM",
+            "Custom API",
+        ];
         let engine = config
             .translation
             .get_engine()

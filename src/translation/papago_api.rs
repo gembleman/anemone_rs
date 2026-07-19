@@ -1,4 +1,4 @@
-//! Papago (네이버) 번역 엔진
+//! Papago (네이버) 유료 번역 엔진
 //!
 //! Ncloud Papago Text Translation API. 워커 스레드에서 호출되는 async 함수만 제공한다.
 

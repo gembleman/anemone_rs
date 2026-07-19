@@ -634,7 +634,7 @@ impl TranslationDispatch {
                 client_id,
                 client_secret,
             } => {
-                super::papago::translate_async_with_client(
+                super::papago_api::translate_async_with_client(
                     client,
                     &req.text,
                     languages.source(),

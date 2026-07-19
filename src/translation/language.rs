@@ -75,7 +75,7 @@ impl TranslationEngine {
             Self::EzTrans => "EzTrans",
             Self::Google => "Google",
             Self::DeepL => "DeepL",
-            Self::Papago => "Papago",
+            Self::Papago => "Papago API",
             Self::Llm => "LLM",
             Self::Custom => "Custom API",
         }
