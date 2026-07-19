@@ -1,7 +1,10 @@
 //! HTTP 번역 engine 공통 client, timeout, response 처리.
 
 use super::TranslationError;
+use std::sync::Once;
 use std::time::Duration;
+
+static INSTALL_RUSTLS_PROVIDER: Once = Once::new();
 
 /// 일반 번역 요청이 worker 종료를 오래 막지 않게 하는 전체 timeout.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -17,6 +20,9 @@ const SUCCESS_BODY_LIMIT: usize = 8 * 1024 * 1024;
 const ERROR_BODY_LIMIT: usize = 64 * 1024;
 
 pub fn create_client() -> reqwest::Client {
+    INSTALL_RUSTLS_PROVIDER.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)

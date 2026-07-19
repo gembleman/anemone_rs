@@ -147,7 +147,7 @@ fn oversized_input_is_rejected_before_network_io() {
         .unwrap();
     let result = runtime.block_on(TranslationDispatch::translate_async(
         &req,
-        &reqwest::Client::new(),
+        &crate::translation::http_common::create_client(),
     ));
     assert!(matches!(
         result,

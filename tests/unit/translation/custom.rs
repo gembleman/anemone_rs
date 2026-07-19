@@ -142,7 +142,7 @@ async fn posts_rendered_json_and_extracts_the_configured_response() {
         response_path: "data.translated".into(),
     };
     let translated = translate_async_with_client(
-        &reqwest::Client::new(),
+        &crate::translation::http_common::create_client(),
         "hello \"world\"",
         crate::translation::Language::Eng,
         crate::translation::Language::Kor,

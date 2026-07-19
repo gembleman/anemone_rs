@@ -43,7 +43,7 @@ async fn rejects_oversized_content_length_before_reading_the_body() {
         format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n")
             .into_bytes();
     let url = serve_once(response);
-    let response = reqwest::Client::new().get(url).send().await.unwrap();
+    let response = create_client().get(url).send().await.unwrap();
 
     assert!(matches!(
         send_and_read_body(response).await,
@@ -64,7 +64,7 @@ async fn rejects_chunked_error_body_when_actual_bytes_cross_the_limit() {
     response.extend_from_slice(&body);
     response.extend_from_slice(b"\r\n0\r\n\r\n");
     let url = serve_once(response);
-    let response = reqwest::Client::new().get(url).send().await.unwrap();
+    let response = create_client().get(url).send().await.unwrap();
 
     assert!(matches!(
         send_and_read_body(response).await,

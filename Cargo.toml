@@ -69,9 +69,14 @@ tokio = { version = "1.53", features = [
 ] }
 reqwest = { version = "0.13", features = [
     "json",
-    "native-tls",
+    "rustls-no-provider",
     "form",
 ], default-features = false }
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+] }
 httpdate = "1.0"
 quick_cache = { version = "0.7", default-features = false }
 

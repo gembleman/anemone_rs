@@ -328,7 +328,7 @@ fn cancellation_aborts_an_in_flight_file_http_request() {
         .enable_all()
         .build()
         .unwrap();
-    let client = reqwest::Client::new();
+    let client = crate::translation::http_common::create_client();
     let context = super::TranslationContext::new(&runtime, &client);
     let cancel = cancel_token.clone();
     std::thread::spawn(move || {
