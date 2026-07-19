@@ -463,7 +463,10 @@ impl SettingsDialog {
                 );
             }
         }
-        self.set_text(ctrl_id::LLM_MODEL_EDIT, configured_model)
+        self.set_text(
+            ctrl_id::LLM_MODEL_EDIT,
+            provider.model_or_default(configured_model),
+        )
     }
 
     fn initialize_trackbar(&self, id: u16, min: i32, max: i32, value: i32) -> Result<()> {

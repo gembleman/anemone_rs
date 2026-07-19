@@ -93,6 +93,15 @@ impl LlmProvider {
         }
     }
 
+    /// 설정값이 비어 있을 때 UI와 API 호출에서 공통으로 사용할 모델 ID.
+    pub fn model_or_default(self, configured_model: &str) -> &str {
+        if configured_model.is_empty() {
+            self.default_model()
+        } else {
+            configured_model
+        }
+    }
+
     /// 설정 UI에 제안할 모델 ID 목록.
     ///
     /// 이 목록은 선택을 돕는 프리셋일 뿐 허용 목록이 아니다. 계정별 모델 접근
@@ -275,11 +284,7 @@ impl fmt::Debug for LlmCallParams {
 
 impl LlmCallParams {
     pub fn effective_model(&self) -> &str {
-        if self.model.is_empty() {
-            self.provider.default_model()
-        } else {
-            self.model.as_str()
-        }
+        self.provider.model_or_default(&self.model)
     }
 
     pub fn effective_base_url(&self) -> &str {

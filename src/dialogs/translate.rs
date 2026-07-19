@@ -484,7 +484,7 @@ impl TranslateDialog {
 
         let provider = LlmProvider::from_u8(provider_index as u8)
             .ok_or_else(|| Error::new(E_INVALIDARG, "잘못된 LLM 제공자 설정"))?;
-        self.populate_llm_model_combo(provider);
+        self.populate_llm_model_combo(provider, &model);
 
         unsafe {
             let _ = SendMessageW(
@@ -520,7 +520,6 @@ impl TranslateDialog {
                 Some(WPARAM(provider_index)),
                 None,
             );
-            let _ = set_window_text(self.llm_model_edit, &model);
             let _ = set_window_text(self.llm_api_key_edit, &api_key);
         }
         self.update_llm_group_visibility(engine);
@@ -682,8 +681,9 @@ impl TranslateDialog {
         let Some(provider) = LlmProvider::from_u8(sel) else {
             return;
         };
+        let configured_model = self.config.translation.llm.model.clone();
         self.config.translation.llm.set_provider(provider);
-        self.populate_llm_model_combo(provider);
+        self.populate_llm_model_combo(provider, &configured_model);
     }
 
     fn apply_llm_model(&mut self) {
@@ -699,15 +699,17 @@ impl TranslateDialog {
     }
 
     /// 제공자별 모델 프리셋을 다시 채우고 현재 직접 입력값을 유지한다.
-    fn populate_llm_model_combo(&self, provider: LlmProvider) {
-        let configured_model = get_window_text(self.llm_model_edit);
+    fn populate_llm_model_combo(&self, provider: LlmProvider, configured_model: &str) {
         unsafe {
             let _ = SendMessageW(self.llm_model_edit, CB_RESETCONTENT, None, None);
         }
         for model in provider.model_presets() {
             self.add_combobox_item(self.llm_model_edit, model);
         }
-        let _ = set_window_text(self.llm_model_edit, &configured_model);
+        let _ = set_window_text(
+            self.llm_model_edit,
+            provider.model_or_default(configured_model),
+        );
     }
 
     fn add_combobox_item(&self, combo: HWND, text: &str) {

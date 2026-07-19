@@ -569,7 +569,7 @@ impl SettingsDialog {
                     };
                     let _ = self
                         .apply_translation_change(TranslationSettingChange::LlmProvider(provider));
-                    let configured_model = self.get_control_text(LLM_MODEL_EDIT);
+                    let configured_model = self.draft.borrow().translation.llm.model.clone();
                     let _ = self.populate_llm_model_combo(provider, &configured_model);
                 }
                 LLM_MODEL_EDIT => {

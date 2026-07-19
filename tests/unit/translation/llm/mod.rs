@@ -56,3 +56,15 @@ fn openai_model_presets_include_current_families_and_default() {
     let unique: std::collections::HashSet<_> = presets.iter().collect();
     assert_eq!(unique.len(), presets.len());
 }
+
+#[test]
+fn blank_model_uses_provider_default_for_ui_and_api_calls() {
+    assert_eq!(
+        LlmProvider::OpenAi.model_or_default(""),
+        LlmProvider::OpenAi.default_model()
+    );
+    assert_eq!(
+        LlmProvider::OpenAi.model_or_default("future-or-private-model-id"),
+        "future-or-private-model-id"
+    );
+}

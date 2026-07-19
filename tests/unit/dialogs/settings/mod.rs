@@ -253,6 +253,10 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
 
     select_combo(hwnd, ctrl_id::TRANS_ENGINE, TranslationEngine::Llm as usize);
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)).as_bool() });
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_MODEL_EDIT)),
+        crate::translation::LlmProvider::OpenAi.default_model()
+    );
     assert_eq!(combo_index(hwnd, ctrl_id::LLM_REASONING_EFFORT), 0);
     select_combo(hwnd, ctrl_id::LLM_REASONING_EFFORT, 5);
     super::SETTINGS_INSTANCE.with(|slot| {
