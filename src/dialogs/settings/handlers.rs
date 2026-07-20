@@ -202,6 +202,10 @@ impl SettingsDialog {
             WNDCLICK_THROUGH => {
                 toggle_field!(self, BoolSetting::ClickThrough);
             }
+            CLIPBOARD_CACHE_ENABLED => {
+                toggle_field!(self, BoolSetting::ClipboardCacheEnabled);
+            }
+            CLIPBOARD_CACHE_CLEAR => self.clear_translation_cache(),
 
             // 텍스트 크기 +/-
             TEXTSIZE_MINUS => handle_size_button!(
@@ -359,6 +363,24 @@ impl SettingsDialog {
         };
         let _ =
             self.apply_translation_change(TranslationSettingChange::RemoveDeepLKey(sel as usize));
+    }
+
+    /// 번역 캐시 비우기 (확인 후 AppAction으로 전달)
+    fn clear_translation_cache(&self) {
+        let confirmed = unsafe {
+            MessageBoxW(
+                Some(self.hwnd),
+                w!("저장된 번역 캐시를 모두 지우시겠습니까?"),
+                w!("캐시 비우기"),
+                MB_ICONQUESTION | MB_YESNO,
+            )
+        };
+        if confirmed != IDYES {
+            return;
+        }
+        if let Some(actions) = &self.actions {
+            actions.clear_translation_cache();
+        }
     }
 
     /// 글로서리 편집기 다이얼로그 열기

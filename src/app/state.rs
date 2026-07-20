@@ -26,13 +26,19 @@ impl ClientSize {
 pub(super) struct PendingTranslation {
     pub req_id: u64,
     pub original: Arc<str>,
+    pub cache_key: crate::cache::CacheKey,
 }
 
 impl PendingTranslation {
-    pub(super) fn new(req_id: u64, original: impl Into<Arc<str>>) -> Self {
+    pub(super) fn new(
+        req_id: u64,
+        original: impl Into<Arc<str>>,
+        cache_key: crate::cache::CacheKey,
+    ) -> Self {
         Self {
             req_id,
             original: original.into(),
+            cache_key,
         }
     }
 }
@@ -40,6 +46,7 @@ impl PendingTranslation {
 #[derive(Debug)]
 pub(super) struct TranslationCompletion<T, E> {
     pub original: Arc<str>,
+    pub cache_key: crate::cache::CacheKey,
     pub result: Result<T, E>,
 }
 
@@ -58,6 +65,7 @@ pub(super) fn correlate_translation<T, E>(
     let request = pending.take().expect("matching pending translation exists");
     Some(TranslationCompletion {
         original: request.original,
+        cache_key: request.cache_key,
         result,
     })
 }
@@ -174,6 +182,7 @@ pub(super) enum AppAction {
     PreviewSettings(SettingsDraft),
     CommitSettings(SettingsDraft),
     ClearBacklog,
+    ClearTranslationCache,
     SettingsDialogClosed,
     TranslateDialogClosed(u64),
     FileTransDialogClosed(u64),
@@ -188,6 +197,7 @@ pub(super) enum Effect {
     SetClickThrough(bool),
     SetClipboardWatch(bool),
     SetMagnetic(bool),
+    ClearTranslationCache,
     OpenDialog(DialogKind),
     SettingsDialogClosed,
     TranslateDialogClosed(u64),
@@ -220,6 +230,7 @@ impl AppModel {
                 self.backlog.clear();
                 Vec::new()
             }
+            AppAction::ClearTranslationCache => vec![Effect::ClearTranslationCache],
             AppAction::SettingsDialogClosed => vec![Effect::SettingsDialogClosed],
             AppAction::TranslateDialogClosed(session) => {
                 vec![Effect::TranslateDialogClosed(session)]

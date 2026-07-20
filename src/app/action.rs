@@ -46,6 +46,10 @@ impl AppActionSender {
         self.send(AppAction::ClearBacklog);
     }
 
+    pub(crate) fn clear_translation_cache(&self) {
+        self.send(AppAction::ClearTranslationCache);
+    }
+
     pub(crate) fn settings_dialog_closed(&self) {
         self.send(AppAction::SettingsDialogClosed);
     }
@@ -109,6 +113,7 @@ impl App {
                     DialogKind::Backlog => self.open_backlog_dialog(),
                     DialogKind::FileTranslation => self.open_file_trans_dialog(),
                 },
+                Effect::ClearTranslationCache => self.services.translation_cache.clear(),
                 Effect::SettingsDialogClosed => self.handle_settings_dialog_closed(),
                 Effect::TranslateDialogClosed(session) => {
                     self.handle_translate_dialog_closed(session);

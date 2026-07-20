@@ -139,14 +139,29 @@ impl App {
     fn request_translation_async(&mut self, text: &str) {
         use crate::translation::PreparedJob;
 
-        let config = &self.model.config;
-        let job = match PreparedJob::from_config(&config.translation) {
+        let cache_enabled = self.model.config.clipboard_cache_enabled;
+        let job = match PreparedJob::from_config(&self.model.config.translation) {
             Ok(spec) => spec,
             Err(error) => {
                 tracing::warn!("자동 번역 요청을 구성할 수 없습니다: {error}");
                 return;
             }
         };
+
+        let cache_key = job.cache_key(text);
+
+        if cache_enabled && let Some(cached) = self.services.translation_cache.get(&cache_key) {
+            tracing::debug!("clipboard translation cache hit");
+            self.model.runtime.pending_translation = None;
+            self.model.runtime.original_text = text.to_string();
+            self.model.runtime.translated_text = cached.clone();
+            self.push_backlog(LogEntry::new(text.to_string()).with_translation(cached));
+            if let Err(e) = self.paint() {
+                tracing::warn!("paint failed during cached translation: {e}");
+            }
+            return;
+        }
+
         if let Err(error) = job.prepare() {
             tracing::warn!("자동 번역 엔진을 준비할 수 없습니다: {error}");
             return;
@@ -162,8 +177,11 @@ impl App {
 
         match request {
             Ok(req_id) => {
-                self.model.runtime.pending_translation =
-                    Some(state::PendingTranslation::new(req_id, original));
+                self.model.runtime.pending_translation = Some(state::PendingTranslation::new(
+                    req_id,
+                    original,
+                    cache_key,
+                ));
                 self.model.runtime.original_text = text.to_string();
                 self.model.runtime.translated_text = "[번역 중...]".to_string();
             }
@@ -201,6 +219,11 @@ impl App {
             Ok(translated) => {
                 self.model.runtime.original_text = original.to_string();
                 self.model.runtime.translated_text = translated.clone();
+                if self.model.config.clipboard_cache_enabled {
+                    self.services
+                        .translation_cache
+                        .put(&completion.cache_key, &translated);
+                }
                 Some(translated)
             }
             Err(err) => {

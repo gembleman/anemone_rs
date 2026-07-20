@@ -22,6 +22,9 @@ pub struct Config {
     // 클립보드
     pub clipboard_watch: bool,
     pub clipboard_max_length: u32,
+    /// 동일 원문 재번역 시 API 호출을 건너뛰고 sqlite 캐시를 사용할지 여부.
+    #[serde(default = "default_clipboard_cache_enabled")]
+    pub clipboard_cache_enabled: bool,
 
     // 배경
     pub background_visible: bool,
@@ -74,6 +77,7 @@ impl Default for Config {
 
             clipboard_watch: true,
             clipboard_max_length: 300,
+            clipboard_cache_enabled: true,
 
             background_visible: true,
             background_color: 0xC8282828, // 반투명 어두운 배경
@@ -111,6 +115,10 @@ impl Default for Config {
             translation: TranslationConfig::default(),
         }
     }
+}
+
+fn default_clipboard_cache_enabled() -> bool {
+    true
 }
 
 impl Config {

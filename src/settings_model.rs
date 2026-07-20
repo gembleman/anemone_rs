@@ -15,6 +15,7 @@ pub enum BoolSetting {
     MagneticMode,
     MagneticMinimize,
     ClipboardWatch,
+    ClipboardCacheEnabled,
     ClickThrough,
 }
 
@@ -118,6 +119,7 @@ fn toggle(config: &mut Config, setting: BoolSetting) -> bool {
         BoolSetting::MagneticMode => &mut config.magnetic_mode,
         BoolSetting::MagneticMinimize => &mut config.magnetic_minimize,
         BoolSetting::ClipboardWatch => &mut config.clipboard_watch,
+        BoolSetting::ClipboardCacheEnabled => &mut config.clipboard_cache_enabled,
         BoolSetting::ClickThrough => &mut config.click_through,
     };
     *target = !*target;

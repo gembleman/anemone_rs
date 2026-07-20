@@ -57,6 +57,8 @@ const DISPLAY_IDS: &[u16] = &[
     ctrl_id::MAGNETIC_MINIMIZE,
     ctrl_id::CLIPBOARD_WATCH,
     ctrl_id::WNDCLICK_THROUGH,
+    ctrl_id::CLIPBOARD_CACHE_ENABLED,
+    ctrl_id::CLIPBOARD_CACHE_CLEAR,
 ];
 
 const TRANSLATION_IDS: &[u16] = &[
@@ -239,6 +241,10 @@ impl SettingsDialog {
         self.set_checked(ctrl_id::MAGNETIC_MINIMIZE, config.magnetic_minimize)?;
         self.set_checked(ctrl_id::CLIPBOARD_WATCH, config.clipboard_watch)?;
         self.set_checked(ctrl_id::WNDCLICK_THROUGH, config.click_through)?;
+        self.set_checked(
+            ctrl_id::CLIPBOARD_CACHE_ENABLED,
+            config.clipboard_cache_enabled,
+        )?;
 
         let engine_names = [
             "EzTrans",

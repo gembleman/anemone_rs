@@ -100,6 +100,15 @@ impl PreparedEngine {
             _ => None,
         }
     }
+
+    /// 캐시 키에 쓰이는 엔진 식별자. LLM은 모델이 바뀌면 결과가 달라질 수 있어
+    /// 모델명까지 포함하고, 다른 엔진은 엔진명만으로 충분하다.
+    pub fn cache_engine_id(&self) -> String {
+        match self.0.as_ref() {
+            PreparedEngineKind::Llm(params) => format!("llm:{}", params.model),
+            _ => self.engine().to_str().to_string(),
+        }
+    }
 }
 
 impl std::fmt::Debug for PreparedEngine {
@@ -273,6 +282,16 @@ impl PreparedJob {
 
     pub fn languages(&self) -> LanguagePair {
         self.languages
+    }
+
+    /// 클립보드 번역 캐시 조회/저장에 쓰는 키를 만든다.
+    pub fn cache_key(&self, original: &str) -> crate::cache::CacheKey {
+        crate::cache::CacheKey {
+            engine_id: self.engine.cache_engine_id(),
+            source_lang: crate::translation::lang_utils::to_code(self.languages.source()),
+            target_lang: crate::translation::lang_utils::to_code(self.languages.target()),
+            original: original.to_string(),
+        }
     }
 }
 

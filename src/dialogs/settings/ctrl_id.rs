@@ -73,6 +73,8 @@ pub const USE_MAGNETIC: u16 = 1211;
 pub const MAGNETIC_MINIMIZE: u16 = 1212;
 pub const CLIPBOARD_WATCH: u16 = 1214;
 pub const WNDCLICK_THROUGH: u16 = 1215;
+pub const CLIPBOARD_CACHE_ENABLED: u16 = 1216;
+pub const CLIPBOARD_CACHE_CLEAR: u16 = 1217;
 
 // 텍스트 정렬
 pub const TEXTALIGN_LEFT: u16 = 1220;

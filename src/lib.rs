@@ -1,5 +1,6 @@
 mod app;
 mod backlog;
+mod cache;
 mod cli;
 mod clipboard;
 mod config;

@@ -4,9 +4,19 @@ use super::{
     correlate_translation, magnetic_action, should_watch_clipboard,
 };
 use crate::backlog::{BacklogFilter, BacklogStore, LogEntry};
+use crate::cache::CacheKey;
 use crate::config::Config;
 use crate::dialogs::models::SettingsDraft;
 use crate::menu;
+
+fn test_cache_key() -> CacheKey {
+    CacheKey {
+        engine_id: "test".to_string(),
+        source_lang: "ja",
+        target_lang: "ko",
+        original: "test".to_string(),
+    }
+}
 
 #[test]
 fn clipboard_debounce_keeps_only_the_last_submission() {
@@ -107,7 +117,7 @@ fn magnetic_transition_is_idempotent() {
 
 #[test]
 fn stale_translation_cannot_take_latest_original() {
-    let mut pending = Some(PendingTranslation::new(2, "latest".to_string()));
+    let mut pending = Some(PendingTranslation::new(2, "latest".to_string(), test_cache_key()));
     let stale = correlate_translation(&mut pending, 1, Ok::<_, ()>("old result"));
 
     assert!(stale.is_none());
@@ -119,14 +129,14 @@ fn stale_translation_cannot_take_latest_original() {
 
 #[test]
 fn success_and_failure_keep_the_matching_original() {
-    let mut success = Some(PendingTranslation::new(7, "first".to_string()));
+    let mut success = Some(PendingTranslation::new(7, "first".to_string(), test_cache_key()));
     let completed = correlate_translation(&mut success, 7, Ok::<_, ()>("translated"))
         .expect("current response");
     assert_eq!(completed.original.as_ref(), "first");
     assert_eq!(completed.result, Ok("translated"));
     assert!(success.is_none());
 
-    let mut failure = Some(PendingTranslation::new(8, "second".to_string()));
+    let mut failure = Some(PendingTranslation::new(8, "second".to_string(), test_cache_key()));
     let completed = correlate_translation(&mut failure, 8, Err::<String, _>("failed"))
         .expect("current response");
     assert_eq!(completed.original.as_ref(), "second");

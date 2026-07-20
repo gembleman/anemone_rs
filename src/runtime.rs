@@ -73,6 +73,10 @@ pub fn data_file(name: &str) -> PathBuf {
     data_dir().join(name)
 }
 
+pub fn cache_db_file() -> PathBuf {
+    data_file("translation_cache.sqlite3")
+}
+
 pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")
 }
