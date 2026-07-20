@@ -41,10 +41,7 @@ pub fn translate_eztrans_window(
     translator: &dyn EzTransBatchTranslator,
     cache: &mut BoundedTranslationCache,
 ) -> Result<Vec<String>, FileTranslationError> {
-    let mut results = lines
-        .iter()
-        .map(|line| line.text.clone())
-        .collect::<Vec<_>>();
+    let mut results = vec![None; lines.len()];
     let mut miss_by_text: HashMap<Arc<str>, usize> = HashMap::new();
     let mut misses = Vec::<Arc<str>>::new();
     let mut line_misses = vec![None; lines.len()];
@@ -54,7 +51,7 @@ pub fn translate_eztrans_window(
             continue;
         }
         if let Some(translated) = cache.get(&line.text) {
-            results[index] = translated.to_string();
+            results[index] = Some(translated.to_string());
             continue;
         }
         if let Some(&miss_index) = miss_by_text.get(line.text.as_str()) {
@@ -69,7 +66,7 @@ pub fn translate_eztrans_window(
     }
 
     if misses.is_empty() {
-        return Ok(results);
+        return Ok(fill_untranslated(results, lines));
     }
     let batches = partition_eztrans_batches(&misses, translator.process_count());
     let translated_batches = translator
@@ -89,10 +86,19 @@ pub fn translate_eztrans_window(
     }
     for (index, miss_index) in line_misses.into_iter().enumerate() {
         if let Some(miss_index) = miss_index {
-            results[index] = translated_misses[miss_index].clone();
+            results[index] = Some(translated_misses[miss_index].clone());
         }
     }
-    Ok(results)
+    Ok(fill_untranslated(results, lines))
+}
+
+/// 캐시/번역 대상이 아니었던 자리만 원문으로 채운다.
+fn fill_untranslated(results: Vec<Option<String>>, lines: &[InputLine]) -> Vec<String> {
+    results
+        .into_iter()
+        .zip(lines)
+        .map(|(result, line)| result.unwrap_or_else(|| line.text.clone()))
+        .collect()
 }
 
 pub fn partition_eztrans_batches(
