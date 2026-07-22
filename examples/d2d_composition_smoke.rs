@@ -20,26 +20,6 @@ mod config {
         Right,
     }
 }
-mod window {
-    use crate::config::TextAlign;
-
-    #[derive(Clone, Debug)]
-    pub struct TextRenderStyle {
-        pub font_size: i32,
-        pub font_face: String,
-        pub font_style: u8,
-        pub text_align: TextAlign,
-        pub color: u32,
-        pub outline1_size: i32,
-        pub outline1_color: u32,
-        pub outline2_size: i32,
-        pub outline2_color: u32,
-        pub shadow_enabled: bool,
-        pub shadow_color: u32,
-        pub shadow_offset_x: i32,
-        pub shadow_offset_y: i32,
-    }
-}
 // Example이 사용하지 않는 binary용 D2D API만 허용한다.
 #[allow(dead_code)]
 #[path = "../src/d2d/mod.rs"]
@@ -47,9 +27,8 @@ mod d2d;
 
 use bench::{BenchAccumulator, paint_bench_iters};
 use config::TextAlign;
-use d2d::{CompositionRenderer, D2DRenderer, TextBox, WaitOutcome};
+use d2d::{CompositionRenderer, D2DRenderer, TextBox, TextRenderStyle, WaitOutcome};
 use std::cell::RefCell;
-use window::TextRenderStyle;
 use windows::{
     Win32::{
         Foundation::*,
@@ -317,7 +296,7 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
 
         let base_style = TextRenderStyle {
             font_size: 24,
-            font_face: "Segoe UI".to_string(),
+            font_face: "Segoe UI".into(),
             font_style: 2, // italic overhang 확인
             text_align: TextAlign::Left,
             color: 0xFFFFFFFF,
@@ -373,7 +352,7 @@ fn draw_bench_match_app(ctx: &ID2D1DeviceContext) -> Result<()> {
         // 메인 paint 와 같은 default TextStyle (config.rs::TextStyle::default).
         let style = TextRenderStyle {
             font_size: 22,
-            font_face: "맑은 고딕".to_string(),
+            font_face: "맑은 고딕".into(),
             font_style: 0,
             text_align: TextAlign::Left,
             color: 0xFFFFFFFF,

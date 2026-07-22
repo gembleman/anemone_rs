@@ -26,14 +26,14 @@ use super::helpers::{
 };
 use crate::app::action::AppActionSender;
 use crate::define_dialog_instance;
-use crate::util::to_wide;
+use crate::win32::to_wide;
 
+use crate::app::messages::WM_TRANSLATION_COMPLETE;
+use crate::app::services::GuiTranslationHost;
 use crate::clipboard::{ClipboardGuard, OwnedGlobalMemory};
 use crate::config::Config;
-use crate::constants::WM_TRANSLATION_COMPLETE;
 use crate::translation::manual::{ManualOutputFormat, ManualTranslationOptions};
 use crate::translation::{Language, LlmProvider, PreparedJob, TranslationEngine};
-use crate::translation_ui::GuiTranslationHost;
 
 // 컨트롤 ID
 mod ctrl_id {

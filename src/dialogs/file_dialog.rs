@@ -12,7 +12,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{HRESULT, HSTRING, PCWSTR, Result};
 
-use crate::util::to_wide;
+use crate::win32::to_wide;
 
 /// 파일 filter 한 항목. 여러 확장자는 `;`로 구분한다.
 pub struct FileFilter<'a> {

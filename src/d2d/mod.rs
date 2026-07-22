@@ -5,10 +5,12 @@ mod color;
 mod composition;
 mod outline_text_renderer;
 mod renderer;
+mod style;
 mod text;
 
 pub use composition::{CompositionRenderer, WaitOutcome};
 pub use renderer::D2DRenderer;
+pub(crate) use style::TextRenderStyle;
 
 /// Text 그리기와 hit 영역 계산이 공유하는 원점과 최대 layout 크기.
 #[derive(Clone, Copy)]

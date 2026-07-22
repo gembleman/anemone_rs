@@ -7,8 +7,8 @@ use windows::{
 
 use super::{App, COMPOSITION_RETRY_TIMER, state};
 use crate::config::{Config, TextStyle, TextType};
+use crate::d2d::TextRenderStyle;
 use crate::d2d::{CompositionRenderer, WaitOutcome};
-use crate::window::TextRenderStyle;
 
 struct RenderBlock {
     text: String,

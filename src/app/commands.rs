@@ -10,10 +10,40 @@ use windows::{
 };
 
 use super::{App, MAGNETIC_NOTICE_DURATION_MS, MAGNETIC_NOTICE_TIMER, state, state::OverlayNotice};
+use crate::config::HotkeySlot;
 use crate::dialogs::{BacklogDialog, FileTransDialog, SettingsDialog, TranslateDialog};
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
+use crate::menu;
 use crate::window;
+
+pub(super) fn command_from_menu_id(id: u16) -> Option<state::AppCommand> {
+    match id {
+        menu::id::WINDOW_SHOW => Some(state::AppCommand::WindowShow),
+        menu::id::CLICK_THROUGH => Some(state::AppCommand::ClickThrough),
+        menu::id::CLIPBOARD_WATCH => Some(state::AppCommand::ClipboardWatch),
+        menu::id::BACKGROUND_TOGGLE => Some(state::AppCommand::BackgroundToggle),
+        menu::id::BORDER_TOGGLE => Some(state::AppCommand::BorderToggle),
+        menu::id::MAGNETIC_MODE => Some(state::AppCommand::MagneticMode),
+        menu::id::SETTINGS => Some(state::AppCommand::Settings),
+        menu::id::TRANSLATE => Some(state::AppCommand::Translate),
+        menu::id::BACKLOG => Some(state::AppCommand::Backlog),
+        menu::id::FILE_TRANS => Some(state::AppCommand::FileTrans),
+        menu::id::TEXT_SIZE_UP => Some(state::AppCommand::TextSizeUp),
+        menu::id::TEXT_SIZE_DOWN => Some(state::AppCommand::TextSizeDown),
+        menu::id::EXIT => Some(state::AppCommand::Exit),
+        _ => None,
+    }
+}
+
+pub(super) fn command_from_hotkey_id(id: i32) -> Option<state::AppCommand> {
+    match HotkeyManager::slot_for_id(id)? {
+        HotkeySlot::ToggleWindow => Some(state::AppCommand::WindowShow),
+        HotkeySlot::TextSizeUp => Some(state::AppCommand::TextSizeUp),
+        HotkeySlot::TextSizeDown => Some(state::AppCommand::TextSizeDown),
+        HotkeySlot::ClipboardWatch => Some(state::AppCommand::ClipboardWatch),
+    }
+}
 
 impl App {
     fn show_context_menu(&mut self, x: i32, y: i32) -> Result<()> {
@@ -35,7 +65,7 @@ impl App {
     }
 
     pub(super) fn handle_menu_command(&mut self, cmd: u16) -> Result<()> {
-        let Some(command) = state::AppCommand::from_menu_id(cmd) else {
+        let Some(command) = command_from_menu_id(cmd) else {
             return Ok(());
         };
 
@@ -482,8 +512,9 @@ impl App {
     }
 
     pub(super) fn handle_hotkey(&mut self, id: i32) -> Result<()> {
-        if let Some(cmd) = HotkeyManager::to_menu_command(id) {
-            self.handle_menu_command(cmd)?;
+        if let Some(command) = command_from_hotkey_id(id) {
+            let effects = self.model.update(state::AppAction::Command(command));
+            self.run_effects(effects);
         }
         Ok(())
     }

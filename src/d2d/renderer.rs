@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use crate::window::TextRenderStyle;
 use windows::{
     Win32::Graphics::{
         Direct2D::{Common::*, *},
@@ -14,6 +13,7 @@ use super::{
     cache::*,
     color::{argb_to_color_f, font_style_to_dwrite, text_align_to_dwrite},
     outline_text_renderer::OutlineTextRenderer,
+    style::TextRenderStyle,
 };
 
 /// 호출자가 관리하는 render target에 그리는 Direct2D 렌더러.

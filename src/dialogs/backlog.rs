@@ -27,7 +27,7 @@ use super::helpers::{
 };
 use crate::app::action::AppActionSender;
 use crate::define_dialog_instance;
-use crate::util::to_wide;
+use crate::win32::to_wide;
 
 // 컨트롤 ID
 mod ctrl_id {
@@ -44,7 +44,7 @@ mod ctrl_id {
     pub const GROUP_ACTION: u16 = 3031;
 }
 
-use crate::backlog::{
+use crate::app::backlog::{
     BacklogFilter, BacklogStore, LogEntry, MAX_BACKLOG_ENTRIES, MAX_BACKLOG_TEXT_BYTES, TextKind,
 };
 
@@ -346,7 +346,7 @@ impl BacklogDialog {
     /// RichEdit에 항목 추가
     fn append_styled_texts_to_richedit(
         &self,
-        segments: impl IntoIterator<Item = crate::backlog::StyledText>,
+        segments: impl IntoIterator<Item = crate::app::backlog::StyledText>,
     ) {
         // SAFETY: self.richedit is a valid RichEdit control handle from create_controls.
         // SendMessageW and append_styled_text use valid control handles.

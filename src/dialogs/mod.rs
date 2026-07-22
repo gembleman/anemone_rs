@@ -14,11 +14,13 @@ pub mod glossary;
 pub mod settings;
 pub mod translate;
 
-pub use crate::backlog::{BacklogStore, LogEntry};
 pub use backlog::BacklogDialog;
 pub use file_trans::FileTransDialog;
 pub use settings::SettingsDialog;
 pub use translate::TranslateDialog;
+
+/// `windows` 0.62에 빠진 `TBM_GETPOS` (`WM_USER`).
+pub(crate) const TBM_GETPOS: u32 = 1024;
 
 fn trackbar_thumb_position(code: u32, wparam: usize) -> Option<i32> {
     use windows::Win32::UI::Controls::{TB_THUMBPOSITION, TB_THUMBTRACK};

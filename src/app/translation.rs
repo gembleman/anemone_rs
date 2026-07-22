@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use super::backlog::LogEntry;
 use super::{App, state};
 use crate::clipboard::ClipboardUpdate;
-use crate::dialogs::LogEntry;
 use crate::translation::TranslationEngine;
 
 fn debounce_delay_ms(engine: TranslationEngine, configured_ms: u32) -> u32 {
@@ -177,11 +177,8 @@ impl App {
 
         match request {
             Ok(req_id) => {
-                self.model.runtime.pending_translation = Some(state::PendingTranslation::new(
-                    req_id,
-                    original,
-                    cache_key,
-                ));
+                self.model.runtime.pending_translation =
+                    Some(state::PendingTranslation::new(req_id, original, cache_key));
                 self.model.runtime.original_text = text.to_string();
                 self.model.runtime.translated_text = "[번역 중...]".to_string();
             }

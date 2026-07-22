@@ -10,7 +10,7 @@ use super::eztrans::{
     BoundedTranslationCache, EZTRANS_CACHE_MAX_ENTRIES, EZTRANS_WINDOW_MAX_CHARS,
     EZTRANS_WINDOW_MAX_LINES, should_translate_line, translate_eztrans_window,
 };
-use super::input::{InputLine, preflight_inputs, read_input_line};
+use super::input::{InputLine, open_utf8_translation_input, preflight_inputs, read_input_line};
 use super::output::{PendingOutput, write_output};
 use super::{
     FileTransJobData, FileTranslationError, FileTranslationSummary, ProgressEvent,
@@ -190,8 +190,8 @@ fn process_single_file(
     runtime: &mut FileRuntime<'_>,
     report: &impl Fn(ProgressEvent),
 ) -> Result<(), FileTranslationError> {
-    let mut reader = crate::util::open_utf8_translation_input(input_path)
-        .map_err(FileTranslationError::input)?;
+    let mut reader =
+        open_utf8_translation_input(input_path).map_err(FileTranslationError::input)?;
     let mut pending_output = PendingOutput::create(output_path)?;
     pending_output
         .writer()

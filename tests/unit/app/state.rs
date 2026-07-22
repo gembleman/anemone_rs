@@ -3,11 +3,13 @@ use super::{
     MagneticAction, OverlayNotice, PendingTranslation, clipboard_capture_is_paused,
     correlate_translation, magnetic_action, should_watch_clipboard,
 };
-use crate::backlog::{BacklogFilter, BacklogStore, LogEntry};
-use crate::cache::CacheKey;
+use crate::app::backlog::{BacklogFilter, BacklogStore, LogEntry};
+use crate::app::commands::{command_from_hotkey_id, command_from_menu_id};
 use crate::config::Config;
 use crate::dialogs::models::SettingsDraft;
+use crate::hotkey;
 use crate::menu;
+use crate::translation::CacheKey;
 
 fn test_cache_key() -> CacheKey {
     CacheKey {
@@ -99,12 +101,33 @@ fn menu_ids_map_to_distinct_commands() {
 
     let mut commands = ids
         .into_iter()
-        .map(|id| AppCommand::from_menu_id(id).expect("known menu id"))
+        .map(|id| command_from_menu_id(id).expect("known menu id"))
         .collect::<Vec<_>>();
     commands.sort_by_key(|command| *command as u8);
     commands.dedup();
     assert_eq!(commands.len(), ids.len());
-    assert_eq!(AppCommand::from_menu_id(u16::MAX), None);
+    assert_eq!(command_from_menu_id(u16::MAX), None);
+}
+
+#[test]
+fn hotkey_ids_map_directly_to_app_commands() {
+    assert_eq!(
+        command_from_hotkey_id(hotkey::id::TOGGLE_WINDOW),
+        Some(AppCommand::WindowShow)
+    );
+    assert_eq!(
+        command_from_hotkey_id(hotkey::id::TEXT_SIZE_UP),
+        Some(AppCommand::TextSizeUp)
+    );
+    assert_eq!(
+        command_from_hotkey_id(hotkey::id::TEXT_SIZE_DOWN),
+        Some(AppCommand::TextSizeDown)
+    );
+    assert_eq!(
+        command_from_hotkey_id(hotkey::id::CLIPBOARD_WATCH),
+        Some(AppCommand::ClipboardWatch)
+    );
+    assert_eq!(command_from_hotkey_id(i32::MAX), None);
 }
 
 #[test]
@@ -117,7 +140,11 @@ fn magnetic_transition_is_idempotent() {
 
 #[test]
 fn stale_translation_cannot_take_latest_original() {
-    let mut pending = Some(PendingTranslation::new(2, "latest".to_string(), test_cache_key()));
+    let mut pending = Some(PendingTranslation::new(
+        2,
+        "latest".to_string(),
+        test_cache_key(),
+    ));
     let stale = correlate_translation(&mut pending, 1, Ok::<_, ()>("old result"));
 
     assert!(stale.is_none());
@@ -129,14 +156,22 @@ fn stale_translation_cannot_take_latest_original() {
 
 #[test]
 fn success_and_failure_keep_the_matching_original() {
-    let mut success = Some(PendingTranslation::new(7, "first".to_string(), test_cache_key()));
+    let mut success = Some(PendingTranslation::new(
+        7,
+        "first".to_string(),
+        test_cache_key(),
+    ));
     let completed = correlate_translation(&mut success, 7, Ok::<_, ()>("translated"))
         .expect("current response");
     assert_eq!(completed.original.as_ref(), "first");
     assert_eq!(completed.result, Ok("translated"));
     assert!(success.is_none());
 
-    let mut failure = Some(PendingTranslation::new(8, "second".to_string(), test_cache_key()));
+    let mut failure = Some(PendingTranslation::new(
+        8,
+        "second".to_string(),
+        test_cache_key(),
+    ));
     let completed = correlate_translation(&mut failure, 8, Err::<String, _>("failed"))
         .expect("current response");
     assert_eq!(completed.original.as_ref(), "second");

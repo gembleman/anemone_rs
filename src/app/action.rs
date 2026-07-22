@@ -7,8 +7,8 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE},
 };
 
+use super::messages::WM_APP_ACTION;
 use super::{App, state::AppAction, state::DialogKind, state::Effect};
-use crate::constants::WM_APP_ACTION;
 use crate::dialogs::models::SettingsDraft;
 use crate::window;
 

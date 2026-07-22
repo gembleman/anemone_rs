@@ -28,10 +28,8 @@ pub enum TranslationSettingChange {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SettingsApplyResult {
+pub struct TranslationSettingsChangeResult {
     pub changed: bool,
-    pub save_required: bool,
-    pub preview_refresh_required: bool,
     pub runtime_sync_required: bool,
 }
 
@@ -59,7 +57,7 @@ impl TranslationSettingsEditor {
     pub fn apply(
         config: &mut TranslationConfig,
         change: TranslationSettingChange,
-    ) -> Result<SettingsApplyResult, TranslationSettingsError> {
+    ) -> Result<TranslationSettingsChangeResult, TranslationSettingsError> {
         let runtime_sync_required = matches!(
             change,
             TranslationSettingChange::Engine(_)
@@ -231,10 +229,8 @@ impl TranslationSettingsEditor {
                 })?
             }
         };
-        Ok(SettingsApplyResult {
+        Ok(TranslationSettingsChangeResult {
             changed,
-            save_required: changed,
-            preview_refresh_required: changed,
             runtime_sync_required: changed && runtime_sync_required,
         })
     }

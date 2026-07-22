@@ -3,8 +3,7 @@ use windows::{
     core::*,
 };
 
-use crate::config::HotkeyConfig;
-use crate::menu;
+use crate::config::{HotkeyConfig, HotkeySlot};
 
 // 핫키 ID
 pub mod id {
@@ -32,7 +31,6 @@ impl HotkeyManager {
     pub fn register_from_config(&mut self, config: &HotkeyConfig) -> Result<()> {
         let registered_before = self.registered.len();
         let result = (|| {
-            use crate::config::HotkeySlot;
             for (slot, spec) in config.entries() {
                 let hotkey_id = match slot {
                     HotkeySlot::ToggleWindow => id::TOGGLE_WINDOW,
@@ -75,13 +73,13 @@ impl HotkeyManager {
         self.registered.truncate(start);
     }
 
-    /// 핫키 ID를 메뉴 명령 ID로 변환
-    pub fn to_menu_command(hotkey_id: i32) -> Option<u16> {
+    /// Win32 핫키 ID를 설정에서 사용하는 안정적인 슬롯으로 변환한다.
+    pub fn slot_for_id(hotkey_id: i32) -> Option<HotkeySlot> {
         match hotkey_id {
-            id::TOGGLE_WINDOW => Some(menu::id::WINDOW_SHOW),
-            id::TEXT_SIZE_UP => Some(menu::id::TEXT_SIZE_UP),
-            id::TEXT_SIZE_DOWN => Some(menu::id::TEXT_SIZE_DOWN),
-            id::CLIPBOARD_WATCH => Some(menu::id::CLIPBOARD_WATCH),
+            id::TOGGLE_WINDOW => Some(HotkeySlot::ToggleWindow),
+            id::TEXT_SIZE_UP => Some(HotkeySlot::TextSizeUp),
+            id::TEXT_SIZE_DOWN => Some(HotkeySlot::TextSizeDown),
+            id::CLIPBOARD_WATCH => Some(HotkeySlot::ClipboardWatch),
             _ => None,
         }
     }

@@ -96,7 +96,13 @@ impl SettingsEditor {
                 changed
             }
         };
-        SettingsChangeResult {
+        SettingsChangeResult::from_changed(changed)
+    }
+}
+
+impl SettingsChangeResult {
+    pub(super) const fn from_changed(changed: bool) -> Self {
+        Self {
             changed,
             save_required: changed,
             preview_refresh_required: changed,
@@ -192,5 +198,5 @@ fn set_if_changed<T: PartialEq>(target: &mut T, value: T) -> bool {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/settings_model.rs"]
+#[path = "../../../tests/unit/settings_model.rs"]
 mod tests;

@@ -4,6 +4,7 @@ mod ctrl_id;
 mod handlers;
 mod hotkeys;
 mod init;
+mod model;
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -17,6 +18,7 @@ use windows::{
     core::*,
 };
 
+use super::TBM_GETPOS;
 use super::helpers::{
     center_dialog_on_monitor, register_resource_dialog, show_dialog_window,
     unregister_resource_dialog,
@@ -24,10 +26,9 @@ use super::helpers::{
 use super::models::SettingsDraft;
 use crate::app::action::AppActionSender;
 use crate::config::{Config, TextAlign};
-use crate::constants::TBM_GETPOS_VAL;
 use crate::define_dialog_instance;
 use crate::translation::{TranslationEngine, lang_utils};
-use crate::util::to_wide;
+use crate::win32::to_wide;
 
 /// 탭 인덱스
 const TAB_APPEARANCE: usize = 0;
@@ -1014,7 +1015,7 @@ impl SettingsDialog {
                             | TB_BOTTOM | TB_ENDTRACK => {
                                 SendMessageW(
                                     trackbar_hwnd,
-                                    TBM_GETPOS_VAL,
+                                    TBM_GETPOS,
                                     Some(WPARAM(0)),
                                     Some(LPARAM(0)),
                                 )

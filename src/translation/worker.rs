@@ -11,7 +11,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::constants::MAX_RESPONSE_STORAGE;
 use thiserror::Error;
 use tokio::sync::{Semaphore, watch};
 
@@ -19,6 +18,8 @@ use super::llm::LlmProvider;
 use super::{
     DeepLStrategy, Language, PreparedEngineKind, PreparedJob, TranslationError, TranslationResult,
 };
+
+const MAX_RESPONSE_STORAGE: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TranslationRequestError {

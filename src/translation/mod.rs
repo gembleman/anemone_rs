@@ -1,5 +1,6 @@
 //! EzTrans, Google, DeepL, Papago, LLM, 커스텀 API 번역 엔진과 비동기 dispatch를 제공한다.
 
+mod cache_key;
 pub(crate) mod custom;
 pub(crate) mod deepl;
 mod error;
@@ -17,6 +18,7 @@ mod service;
 pub(crate) mod settings;
 pub(crate) mod worker;
 
+pub(crate) use cache_key::CacheKey;
 pub(crate) use deepl::DeepLApiTier;
 pub use error::{TranslationError, TranslationResult};
 pub(crate) use eztrans::EzTransTranslator;

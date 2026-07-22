@@ -205,5 +205,5 @@ fn format_entry(entry: &LogEntry, filter: BacklogFilter, add_linefeed: bool) -> 
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/backlog.rs"]
+#[path = "../../tests/unit/backlog.rs"]
 mod tests;

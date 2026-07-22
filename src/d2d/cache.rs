@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::{config::TextAlign, window::TextRenderStyle};
+use crate::config::TextAlign;
+
+use super::style::TextRenderStyle;
 use windows::Win32::{
     Foundation::RECT,
     Graphics::{Direct2D::*, DirectWrite::*},

@@ -12,7 +12,6 @@ use crate::d2d::{CompositionRenderer, D2DRenderer};
 use crate::hotkey::HotkeyManager;
 use crate::magnetic::MagneticManager;
 use crate::menu::ContextMenu;
-use crate::services::AppServices;
 use crate::tray::TrayIcon;
 
 #[cfg(feature = "benchmark")]
@@ -23,11 +22,15 @@ mod bench;
 mod bench_app;
 
 pub(crate) mod action;
+pub(crate) mod backlog;
 mod commands;
 mod lifecycle;
+pub(crate) mod messages;
 mod rendering;
+pub(crate) mod services;
 mod state;
 mod translation;
+mod translation_cache;
 mod window_proc;
 
 const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
@@ -43,7 +46,7 @@ pub struct App {
     hwnd: HWND,
     model: state::AppModel,
     action_queue: Rc<RefCell<VecDeque<state::AppAction>>>,
-    services: AppServices,
+    services: services::AppServices,
     tray: TrayIcon,
     menu: ContextMenu,
     hotkey: Option<HotkeyManager>,

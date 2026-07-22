@@ -508,7 +508,7 @@ impl FileTransDialog {
     /// 파일 미리보기 (처음 7줄). 입력은 UTF-8 / UTF-8 BOM 만 허용한다.
     fn show_preview(&self, path: &Path) {
         const PREVIEW_BYTE_LIMIT: u64 = 64 * 1024;
-        let content = match crate::util::read_utf8_preview(path, 7, PREVIEW_BYTE_LIMIT) {
+        let content = match crate::file_trans::read_utf8_preview(path, 7, PREVIEW_BYTE_LIMIT) {
             Ok(content) => content,
             Err(msg) => format!("! {msg}"),
         };

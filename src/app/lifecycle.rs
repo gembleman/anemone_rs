@@ -20,19 +20,23 @@ use windows::{
     core::{Error, HRESULT, PCWSTR, Result},
 };
 
-use super::{APP, App, CLASS_NAME, PARENT_CLASS_NAME, WINDOW_TITLE, state};
+use super::{
+    APP, App, CLASS_NAME, PARENT_CLASS_NAME, WINDOW_TITLE, backlog::BacklogStore,
+    services::AppServices, state,
+};
 use crate::clipboard::ClipboardWatcher;
 use crate::config::Config;
-use crate::constants::{
-    APP_ICON_ID, INITIAL_WINDOW_HEIGHT, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_X, INITIAL_WINDOW_Y,
-};
 use crate::d2d::D2DRenderer;
-use crate::dialogs::BacklogStore;
 use crate::dialogs::helpers::dispatch_resource_dialog_message;
 use crate::hotkey::HotkeyManager;
 use crate::menu::ContextMenu;
-use crate::services::AppServices;
 use crate::tray::{self, TrayIcon};
+
+const APP_ICON_ID: u32 = 1;
+const INITIAL_WINDOW_WIDTH: i32 = 400;
+const INITIAL_WINDOW_HEIGHT: i32 = 200;
+const INITIAL_WINDOW_X: i32 = 100;
+const INITIAL_WINDOW_Y: i32 = 100;
 
 #[cfg(feature = "benchmark")]
 use super::bench;

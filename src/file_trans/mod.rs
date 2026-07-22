@@ -21,6 +21,7 @@ use crate::translation::PreparedJob;
 
 pub use error::FileTranslationError;
 pub(crate) use eztrans::split_eztrans_batch;
+pub(crate) use input::read_utf8_preview;
 pub(crate) use pipeline::run;
 pub use progress::{FileTranslationProgress, FileTranslationSummary};
 pub use supervisor::{

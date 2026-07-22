@@ -6,19 +6,19 @@ use windows::{
 };
 
 use super::ctrl_id;
+use super::model::{
+    BoolSetting, NumericSetting, SettingsChange, SettingsChangeResult, SettingsEditor,
+};
 use super::{SettingsDialog, format_deepl_key};
 use crate::config::{ColorType, TextAlign, TextType};
 use crate::dialogs::color::{ColorDialog, ColorDialogConfig};
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
 use crate::dialogs::models::SettingsDraft;
-use crate::settings_model::{
-    BoolSetting, NumericSetting, SettingsChange, SettingsChangeResult, SettingsEditor,
-};
 use crate::translation::settings::{
-    SettingsApplyResult, TranslationSettingChange, TranslationSettingsEditor,
+    TranslationSettingChange, TranslationSettingsChangeResult, TranslationSettingsEditor,
     TranslationSettingsError,
 };
-use crate::util::to_wide;
+use crate::win32::to_wide;
 
 #[derive(Clone, Copy)]
 struct NumericControlBinding {
@@ -727,23 +727,18 @@ impl SettingsDialog {
     fn apply_translation_change(
         &self,
         change: TranslationSettingChange,
-    ) -> std::result::Result<SettingsApplyResult, TranslationSettingsError> {
+    ) -> std::result::Result<TranslationSettingsChangeResult, TranslationSettingsError> {
         let result =
             TranslationSettingsEditor::apply(&mut self.draft.borrow_mut().translation, change)?;
         self.finish_translation_change(result);
         Ok(result)
     }
 
-    fn finish_translation_change(&self, result: SettingsApplyResult) {
+    fn finish_translation_change(&self, result: TranslationSettingsChangeResult) {
         if result.runtime_sync_required {
             self.sync_translation_manager();
         }
-        if result.preview_refresh_required {
-            self.notify_preview();
-        }
-        if result.save_required {
-            self.has_unapplied_changes.set(true);
-        }
+        self.finish_settings_change(SettingsChangeResult::from_changed(result.changed));
     }
 
     /// 컨트롤 텍스트 설정 헬퍼

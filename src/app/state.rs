@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use crate::backlog::BacklogStore;
 use crate::config::Config;
 use crate::dialogs::models::SettingsDraft;
-use crate::menu;
+
+use super::backlog::BacklogStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ClientSize {
@@ -26,14 +26,14 @@ impl ClientSize {
 pub(super) struct PendingTranslation {
     pub req_id: u64,
     pub original: Arc<str>,
-    pub cache_key: crate::cache::CacheKey,
+    pub cache_key: crate::translation::CacheKey,
 }
 
 impl PendingTranslation {
     pub(super) fn new(
         req_id: u64,
         original: impl Into<Arc<str>>,
-        cache_key: crate::cache::CacheKey,
+        cache_key: crate::translation::CacheKey,
     ) -> Self {
         Self {
             req_id,
@@ -46,7 +46,7 @@ impl PendingTranslation {
 #[derive(Debug)]
 pub(super) struct TranslationCompletion<T, E> {
     pub original: Arc<str>,
-    pub cache_key: crate::cache::CacheKey,
+    pub cache_key: crate::translation::CacheKey,
     pub result: Result<T, E>,
 }
 
@@ -122,27 +122,6 @@ pub(super) enum AppCommand {
     TextSizeUp,
     TextSizeDown,
     Exit,
-}
-
-impl AppCommand {
-    pub(super) const fn from_menu_id(id: u16) -> Option<Self> {
-        match id {
-            menu::id::WINDOW_SHOW => Some(Self::WindowShow),
-            menu::id::CLICK_THROUGH => Some(Self::ClickThrough),
-            menu::id::CLIPBOARD_WATCH => Some(Self::ClipboardWatch),
-            menu::id::BACKGROUND_TOGGLE => Some(Self::BackgroundToggle),
-            menu::id::BORDER_TOGGLE => Some(Self::BorderToggle),
-            menu::id::MAGNETIC_MODE => Some(Self::MagneticMode),
-            menu::id::SETTINGS => Some(Self::Settings),
-            menu::id::TRANSLATE => Some(Self::Translate),
-            menu::id::BACKLOG => Some(Self::Backlog),
-            menu::id::FILE_TRANS => Some(Self::FileTrans),
-            menu::id::TEXT_SIZE_UP => Some(Self::TextSizeUp),
-            menu::id::TEXT_SIZE_DOWN => Some(Self::TextSizeDown),
-            menu::id::EXIT => Some(Self::Exit),
-            _ => None,
-        }
-    }
 }
 
 pub(super) struct AppState {

@@ -11,7 +11,11 @@ use windows::{
     core::*,
 };
 
-use crate::constants::{COLOR_BLUE_EDIT, COLOR_GREEN_EDIT, COLOR_RED_EDIT, TBM_GETPOS_VAL};
+use super::TBM_GETPOS;
+
+const COLOR_RED_EDIT: u16 = 0x2C2;
+const COLOR_GREEN_EDIT: u16 = 0x2C3;
+const COLOR_BLUE_EDIT: u16 = 0x2C4;
 
 // 알파 채널 컨트롤 ID
 const IDC_ALPHA_TRACKBAR: u16 = 10001;
@@ -374,7 +378,7 @@ impl ColorDialog {
                                 SendDlgItemMessageW(
                                     hdlg,
                                     IDC_ALPHA_TRACKBAR as i32,
-                                    TBM_GETPOS_VAL,
+                                    TBM_GETPOS,
                                     WPARAM(0),
                                     LPARAM(0),
                                 )

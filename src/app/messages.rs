@@ -1,0 +1,12 @@
+//! 프로세스 내 Win32 창들이 공유하는 사용자 정의 메시지 ID.
+
+use windows::Win32::UI::WindowsAndMessaging::{WM_APP, WM_USER};
+
+pub(crate) const WM_TRAY_ICON: u32 = WM_USER + 1;
+pub(crate) const WM_TRANSLATION_COMPLETE: u32 = WM_USER + 100;
+pub(crate) const WM_APP_REFRESH: u32 = WM_APP + 1;
+pub(crate) const WM_APP_SET_MAGNETIC: u32 = WM_APP + 2;
+pub(crate) const WM_DEFERRED_RESIZE: u32 = WM_APP + 3;
+pub(crate) const WM_DEFERRED_PAINT: u32 = WM_APP + 4;
+pub(crate) const WM_APP_ACTION: u32 = WM_APP + 5;
+pub(crate) const WM_APP_MAGNETIC_TARGET_SELECTED: u32 = WM_APP + 6;

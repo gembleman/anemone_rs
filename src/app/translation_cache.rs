@@ -6,21 +6,14 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::translation::CacheKey;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
     #[error("캐시 데이터베이스를 열 수 없습니다: {0}")]
     Open(rusqlite::Error),
     #[error("캐시 쿼리 실패: {0}")]
     Query(rusqlite::Error),
-}
-
-/// 캐시 조회/저장 키. LLM은 모델이 바뀌면 결과가 달라질 수 있어 엔진명에 모델을 포함한다.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CacheKey {
-    pub engine_id: String,
-    pub source_lang: &'static str,
-    pub target_lang: &'static str,
-    pub original: String,
 }
 
 /// 클립보드 번역 이력을 영속 저장하고, 동일 요청에 대해 캐시 히트를 제공한다.
@@ -67,7 +60,12 @@ impl TranslationCacheStore {
             .query_row(
                 "SELECT translation FROM translation_cache
                  WHERE engine_id = ?1 AND source_lang = ?2 AND target_lang = ?3 AND original = ?4",
-                params![key.engine_id, key.source_lang, key.target_lang, key.original],
+                params![
+                    key.engine_id,
+                    key.source_lang,
+                    key.target_lang,
+                    key.original
+                ],
                 |row| row.get::<_, String>(0),
             )
             .optional();
@@ -117,5 +115,5 @@ impl TranslationCacheStore {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/cache.rs"]
+#[path = "../../tests/unit/cache.rs"]
 mod tests;

@@ -1,4 +1,3 @@
-use crate::window::TextRenderStyle;
 use windows::{
     Win32::{
         Foundation::RECT,
@@ -19,6 +18,7 @@ use super::{
     },
     color::argb_to_color_f,
     renderer::D2DRenderer,
+    style::TextRenderStyle,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]

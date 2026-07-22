@@ -1,5 +1,5 @@
 use super::{ReentryPolicy, reentry_policy};
-use crate::constants::{
+use crate::app::messages::{
     WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_TRANSLATION_COMPLETE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{

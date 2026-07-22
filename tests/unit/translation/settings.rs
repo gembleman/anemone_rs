@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn clamps_numeric_inputs_and_reports_refresh_policy() {
+fn clamps_numeric_inputs_and_reports_domain_change() {
     let mut config = TranslationConfig::default();
     let result = TranslationSettingsEditor::apply(
         &mut config,
@@ -11,10 +11,8 @@ fn clamps_numeric_inputs_and_reports_refresh_policy() {
     assert_eq!(config.llm.max_tokens, 32_000);
     assert_eq!(
         result,
-        SettingsApplyResult {
+        TranslationSettingsChangeResult {
             changed: true,
-            save_required: true,
-            preview_refresh_required: true,
             runtime_sync_required: false
         }
     );
@@ -170,10 +168,8 @@ fn engine_change_normalizes_unsupported_languages() {
     assert_eq!(config.target_lang, "ko");
     assert_eq!(
         result,
-        SettingsApplyResult {
+        TranslationSettingsChangeResult {
             changed: true,
-            save_required: true,
-            preview_refresh_required: true,
             runtime_sync_required: true,
         }
     );
@@ -228,7 +224,7 @@ fn identical_engine_language_and_string_changes_have_no_follow_up_policy() {
     ] {
         assert_eq!(
             TranslationSettingsEditor::apply(&mut config, change).unwrap(),
-            SettingsApplyResult::default()
+            TranslationSettingsChangeResult::default()
         );
     }
 }

@@ -1,19 +1,55 @@
-//! Win32 번역 완료 통지 어댑터.
-//!
-//! 번역 워커는 불투명 대상 ID와 [`CompletionNotifier`]만 알고, 이 모듈이
-//! `HWND` 변환과 `PostMessageW`를 전담한다.
+//! GUI 애플리케이션의 장수명 서비스와 Win32 번역 완료 어댑터.
 
+use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
-use crate::constants::WM_TRANSLATION_COMPLETE;
-use crate::translation::PreparedJob;
+use crate::file_trans::FileTranslationSupervisor;
 use crate::translation::worker::{
     CompletionNotifier, TargetId, TranslationDispatch, TranslationRequest, TranslationRequestError,
     TranslationResponse,
 };
+use crate::translation::{PreparedJob, TranslationService};
+
+use super::messages::WM_TRANSLATION_COMPLETE;
+use super::translation_cache::TranslationCacheStore;
+
+/// GUI bootstrap에서 생성해 App과 dialog에 주입하는 장수명 서비스 집합.
+pub(crate) struct AppServices {
+    pub translation_ui: Rc<GuiTranslationHost>,
+    pub file_translation: Rc<FileTranslationSupervisor>,
+    pub translation_cache: Rc<TranslationCacheStore>,
+}
+
+impl AppServices {
+    pub fn new() -> Self {
+        let translation = TranslationService::new();
+        let http_client = translation.http_client();
+        let translation_ui = Rc::new(GuiTranslationHost::new(http_client.clone()));
+        let file_translation = Rc::new(FileTranslationSupervisor::with_http_client(http_client));
+        let translation_cache =
+            Rc::new(TranslationCacheStore::open(&crate::runtime::cache_db_file()));
+        Self {
+            translation_ui,
+            file_translation,
+            translation_cache,
+        }
+    }
+
+    pub fn shutdown(&self) {
+        self.translation_ui.shutdown();
+        let report = self.file_translation.shutdown(Duration::from_secs(2));
+        if report.detached > 0 {
+            tracing::warn!(
+                detached_tasks = report.detached,
+                "file translation tasks exceeded shutdown grace"
+            );
+        }
+    }
+}
 
 struct WindowMessageNotifier;
 
@@ -26,8 +62,7 @@ impl CompletionNotifier for WindowMessageNotifier {
             PostMessageW(
                 Some(hwnd),
                 WM_TRANSLATION_COMPLETE,
-                // request ID는 u64이므로 32-bit WPARAM에 싣지 않는다. message는
-                // 대상별 completion queue를 비우라는 신호로만 사용한다.
+                // message는 대상별 completion queue를 비우라는 신호로만 사용한다.
                 WPARAM(0),
                 LPARAM(0),
             )
@@ -42,15 +77,12 @@ fn target(hwnd: HWND) -> TargetId {
 
 /// Win32 완료 통지와 dispatcher 수명을 명시적으로 소유하는 GUI 번역 서비스.
 pub(crate) struct GuiTranslationHost {
-    _service: crate::translation::TranslationService,
     dispatch: TranslationDispatch,
 }
 
 impl GuiTranslationHost {
-    pub(crate) fn new(service: crate::translation::TranslationService) -> Self {
-        let http_client = service.http_client();
+    fn new(http_client: reqwest::Client) -> Self {
         Self {
-            _service: service,
             dispatch: TranslationDispatch::spawn(Arc::new(WindowMessageNotifier), http_client),
         }
     }

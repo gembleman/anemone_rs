@@ -1,10 +1,7 @@
 mod app;
-mod backlog;
-mod cache;
 mod cli;
 mod clipboard;
 mod config;
-mod constants;
 mod d2d;
 mod dialogs;
 mod dpi;
@@ -15,12 +12,9 @@ mod logging;
 mod magnetic;
 mod menu;
 mod runtime;
-mod services;
-mod settings_model;
 pub mod translation;
-mod translation_ui;
 mod tray;
-mod util;
+mod win32;
 mod window;
 
 use app::App;

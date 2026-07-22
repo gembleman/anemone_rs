@@ -10,7 +10,7 @@ use windows::{
     core::*,
 };
 
-use crate::util::to_wide;
+use crate::win32::to_wide;
 
 /// owner를 가진 일관된 오류 대화상자를 표시한다.
 pub fn show_error_message(owner: HWND, title: &str, message: &str) {

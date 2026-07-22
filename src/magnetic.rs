@@ -12,7 +12,7 @@ use windows::{
     core::*,
 };
 
-use crate::constants::WM_APP_MAGNETIC_TARGET_SELECTED;
+use crate::app::messages::WM_APP_MAGNETIC_TARGET_SELECTED;
 
 /// 자석 상태 (thread_local 보관)
 struct MagneticState {

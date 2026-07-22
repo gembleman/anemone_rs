@@ -285,8 +285,8 @@ impl PreparedJob {
     }
 
     /// 클립보드 번역 캐시 조회/저장에 쓰는 키를 만든다.
-    pub fn cache_key(&self, original: &str) -> crate::cache::CacheKey {
-        crate::cache::CacheKey {
+    pub(crate) fn cache_key(&self, original: &str) -> super::CacheKey {
+        super::CacheKey {
             engine_id: self.engine.cache_engine_id(),
             source_lang: crate::translation::lang_utils::to_code(self.languages.source()),
             target_lang: crate::translation::lang_utils::to_code(self.languages.target()),

@@ -15,7 +15,7 @@ use windows::{
 
 use super::{SettingsDialog, ctrl_id};
 use crate::config::{HotkeyConfig, HotkeySlot, HotkeySpec};
-use crate::util::to_wide;
+use crate::win32::to_wide;
 
 pub(super) const WM_HOTKEY_CAPTURED: u32 = WM_APP + 0x31;
 const HOTKEY_LIST_SUBCLASS_ID: usize = 1;

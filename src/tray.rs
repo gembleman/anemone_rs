@@ -1,8 +1,8 @@
 use std::mem::zeroed;
 use std::ptr::{addr_of_mut, write_unaligned};
 
-use crate::constants::WM_TRAY_ICON;
-use crate::util::to_wide;
+use crate::app::messages::WM_TRAY_ICON;
+use crate::win32::to_wide;
 use windows::{
     Win32::{
         Foundation::*, System::LibraryLoader::GetModuleHandleW, UI::Shell::*,
