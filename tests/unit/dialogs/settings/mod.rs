@@ -93,10 +93,11 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     use super::ctrl_id;
     use crate::config::Config;
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::Controls::{BST_UNCHECKED, EM_GETPASSWORDCHAR};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CB_GETCURSEL, CB_SETCURSEL, DestroyWindow, GWL_STYLE, GetDesktopWindow, GetDlgItem,
-        GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible, SendMessageW, SetWindowTextW,
-        WM_COMMAND, WS_THICKFRAME,
+        BM_CLICK, BM_GETCHECK, CB_GETCURSEL, CB_SETCURSEL, DestroyWindow, GWL_STYLE,
+        GetDesktopWindow, GetDlgItem, GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible,
+        SendMessageW, SetWindowTextW, WM_COMMAND, WS_THICKFRAME,
     };
     use windows::core::w;
 
@@ -315,6 +316,71 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
 
     select_combo(hwnd, ctrl_id::TRANS_ENGINE, TranslationEngine::Llm as usize);
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)).as_bool() });
+    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::LLM_API_KEY_VISIBLE)).as_bool() });
+    assert_eq!(
+        unsafe {
+            SendMessageW(
+                control(hwnd, ctrl_id::LLM_API_KEY_VISIBLE),
+                BM_GETCHECK,
+                None,
+                None,
+            )
+            .0
+        },
+        BST_UNCHECKED.0 as isize
+    );
+    assert_ne!(
+        unsafe {
+            SendMessageW(
+                control(hwnd, ctrl_id::LLM_API_KEY_EDIT),
+                EM_GETPASSWORDCHAR,
+                None,
+                None,
+            )
+            .0
+        },
+        0
+    );
+    unsafe {
+        let _ = SendMessageW(
+            control(hwnd, ctrl_id::LLM_API_KEY_VISIBLE),
+            BM_CLICK,
+            None,
+            None,
+        );
+    }
+    assert_eq!(
+        unsafe {
+            SendMessageW(
+                control(hwnd, ctrl_id::LLM_API_KEY_EDIT),
+                EM_GETPASSWORDCHAR,
+                None,
+                None,
+            )
+            .0
+        },
+        0
+    );
+    unsafe {
+        let _ = SendMessageW(
+            control(hwnd, ctrl_id::LLM_API_KEY_VISIBLE),
+            BM_CLICK,
+            None,
+            None,
+        );
+    }
+    assert_ne!(
+        unsafe {
+            SendMessageW(
+                control(hwnd, ctrl_id::LLM_API_KEY_EDIT),
+                EM_GETPASSWORDCHAR,
+                None,
+                None,
+            )
+            .0
+        },
+        0
+    );
     assert_eq!(
         crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_MODEL_EDIT)),
         crate::translation::LlmProvider::OpenAi.default_model()

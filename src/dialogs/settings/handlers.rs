@@ -1,7 +1,9 @@
 //! 설정 대화상자 명령/이벤트 핸들러
 
 use windows::{
-    Win32::{Foundation::*, UI::Controls::*, UI::WindowsAndMessaging::*},
+    Win32::{
+        Foundation::*, Graphics::Gdi::InvalidateRect, UI::Controls::*, UI::WindowsAndMessaging::*,
+    },
     core::*,
 };
 
@@ -316,10 +318,35 @@ impl SettingsDialog {
             // DeepL 보조 키 삭제
             DEEPL_KEY_REMOVE_BTN => self.deepl_keys_remove(),
 
+            // API 키 마스킹 표시 전환 (대화상자를 열 때마다 기본은 숨김)
+            LLM_API_KEY_VISIBLE => self.toggle_llm_api_key_visibility(),
+
             // 글로서리 편집 다이얼로그
             LLM_GLOSSARY_EDIT_BTN => self.open_glossary_editor(),
 
             _ => {}
+        }
+    }
+
+    fn toggle_llm_api_key_visibility(&self) {
+        let Ok(checkbox) = self.control(ctrl_id::LLM_API_KEY_VISIBLE) else {
+            return;
+        };
+        let Ok(api_key_edit) = self.control(ctrl_id::LLM_API_KEY_EDIT) else {
+            return;
+        };
+        // SAFETY: 두 HWND는 현재 설정 대화상자가 소유한 유효한 컨트롤이다.
+        unsafe {
+            let visible =
+                SendMessageW(checkbox, BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
+            let password_char = if visible { 0 } else { '●' as usize };
+            let _ = SendMessageW(
+                api_key_edit,
+                EM_SETPASSWORDCHAR,
+                Some(WPARAM(password_char)),
+                Some(LPARAM(0)),
+            );
+            let _ = InvalidateRect(Some(api_key_edit), None, true);
         }
     }
 

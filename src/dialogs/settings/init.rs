@@ -84,6 +84,7 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::LLM_PROVIDER,
     ctrl_id::LLM_MODEL_EDIT,
     ctrl_id::LLM_API_KEY_EDIT,
+    ctrl_id::LLM_API_KEY_VISIBLE,
     ctrl_id::LLM_REASONING_EFFORT,
     ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
     ctrl_id::LLM_MAX_TOKENS_EDIT,
@@ -175,6 +176,7 @@ impl SettingsDialog {
                 ctrl_id::LLM_PROVIDER,
                 ctrl_id::LLM_MODEL_EDIT,
                 ctrl_id::LLM_API_KEY_EDIT,
+                ctrl_id::LLM_API_KEY_VISIBLE,
                 ctrl_id::LLM_REASONING_EFFORT,
                 ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
                 ctrl_id::LLM_MAX_TOKENS_EDIT,
@@ -377,6 +379,7 @@ impl SettingsDialog {
         self.initialize_combo(ctrl_id::LLM_PROVIDER, &providers, provider as u8 as usize)?;
         self.populate_llm_model_combo(provider, &config.translation.llm.model)?;
         self.set_text(ctrl_id::LLM_API_KEY_EDIT, &config.translation.llm.api_key)?;
+        self.set_checked(ctrl_id::LLM_API_KEY_VISIBLE, false)?;
         self.set_text(
             ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
             &config.translation.llm.system_prompt,
