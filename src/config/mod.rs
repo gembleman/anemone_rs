@@ -11,4 +11,4 @@ pub use custom_api::CustomApiConfig;
 pub use hotkey::{HotkeyConfig, HotkeySlot, HotkeySpec};
 pub use llm::{LlmConfig, LlmGlossaryEntry};
 pub use text::{ColorType, TextAlign, TextStyle, TextType};
-pub use translation::TranslationConfig;
+pub use translation::{EzTransPostprocessEntry, TranslationConfig};

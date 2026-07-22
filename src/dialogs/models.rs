@@ -2,7 +2,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use crate::config::{Config, LlmGlossaryEntry};
+use crate::config::{Config, EzTransPostprocessEntry, LlmGlossaryEntry};
 
 /// 설정 창이 독립적으로 편집하고 AppAction으로 되돌려 보내는 설정 초안.
 #[derive(Clone, Debug)]
@@ -38,20 +38,63 @@ pub enum DraftChange {
     Updated(usize),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DictionaryTarget {
+    #[default]
+    Llm,
+    EzTransPostprocess,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DictionaryDraftEntry {
+    pub source: String,
+    pub target: String,
+}
+
 /// 적용 전까지 설정을 바꾸지 않는 사전 편집 초안.
 #[derive(Clone, Debug, Default)]
 pub struct GlossaryDraft {
-    entries: Vec<LlmGlossaryEntry>,
+    target: DictionaryTarget,
+    entries: Vec<DictionaryDraftEntry>,
 }
 
 impl GlossaryDraft {
     pub fn from_config(config: &Config) -> Self {
         Self {
-            entries: config.translation.llm.glossary.clone(),
+            target: DictionaryTarget::Llm,
+            entries: config
+                .translation
+                .llm
+                .glossary
+                .iter()
+                .map(|entry| DictionaryDraftEntry {
+                    source: entry.source.clone(),
+                    target: entry.target.clone(),
+                })
+                .collect(),
         }
     }
 
-    pub fn entries(&self) -> &[LlmGlossaryEntry] {
+    pub fn from_eztrans_config(config: &Config) -> Self {
+        Self {
+            target: DictionaryTarget::EzTransPostprocess,
+            entries: config
+                .translation
+                .eztrans_postprocess_dictionary
+                .iter()
+                .map(|entry| DictionaryDraftEntry {
+                    source: entry.source.clone(),
+                    target: entry.target.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn target(&self) -> DictionaryTarget {
+        self.target
+    }
+
+    pub fn entries(&self) -> &[DictionaryDraftEntry] {
         &self.entries
     }
 
@@ -70,7 +113,7 @@ impl GlossaryDraft {
             entry.target = target;
             Some(DraftChange::Updated(index))
         } else {
-            self.entries.push(LlmGlossaryEntry { source, target });
+            self.entries.push(DictionaryDraftEntry { source, target });
             Some(DraftChange::Added(self.entries.len() - 1))
         }
     }
@@ -84,7 +127,28 @@ impl GlossaryDraft {
     }
 
     pub fn commit(self, config: &mut Config) {
-        config.translation.llm.glossary = self.entries;
+        match self.target {
+            DictionaryTarget::Llm => {
+                config.translation.llm.glossary = self
+                    .entries
+                    .into_iter()
+                    .map(|entry| LlmGlossaryEntry {
+                        source: entry.source,
+                        target: entry.target,
+                    })
+                    .collect();
+            }
+            DictionaryTarget::EzTransPostprocess => {
+                config.translation.eztrans_postprocess_dictionary = self
+                    .entries
+                    .into_iter()
+                    .map(|entry| EzTransPostprocessEntry {
+                        source: entry.source,
+                        target: entry.target,
+                    })
+                    .collect();
+            }
+        }
     }
 }
 

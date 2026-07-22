@@ -309,6 +309,8 @@ impl SettingsDialog {
                 Err(error) => self.show_file_dialog_error(&error),
             },
 
+            EZTRANS_DICTIONARY_EDIT_BTN => self.open_eztrans_dictionary_editor(),
+
             // DeepL 보조 키 추가
             DEEPL_KEY_ADD_BTN => self.deepl_keys_add(),
             // DeepL 보조 키 삭제
@@ -419,11 +421,29 @@ impl SettingsDialog {
         let _ = crate::dialogs::glossary::GlossaryDialog::show(self.hwnd, draft);
     }
 
+    fn open_eztrans_dictionary_editor(&mut self) {
+        let draft = self.draft.clone();
+        let _ = crate::dialogs::glossary::GlossaryDialog::show_eztrans(self.hwnd, draft);
+    }
+
     pub(super) fn refresh_glossary_count(&self) {
         let count = self.draft.borrow().translation.llm.glossary.len();
         self.set_control_text(
             ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
             &format!("사전 항목: {}", count),
+        );
+    }
+
+    pub(super) fn refresh_eztrans_dictionary_count(&self) {
+        let count = self
+            .draft
+            .borrow()
+            .translation
+            .eztrans_postprocess_dictionary
+            .len();
+        self.set_control_text(
+            ctrl_id::EZTRANS_DICTIONARY_COUNT_LABEL,
+            &format!("후처리 사전: {count}"),
         );
     }
 
@@ -612,8 +632,9 @@ impl SettingsDialog {
                     };
                     let _ = self
                         .apply_translation_change(TranslationSettingChange::LlmProvider(provider));
-                    let configured_model = self.draft.borrow().translation.llm.model.clone();
-                    let _ = self.populate_llm_model_combo(provider, &configured_model);
+                    if let Err(error) = self.refresh_llm_provider_controls(provider) {
+                        tracing::warn!("LLM 제공자 설정 UI를 갱신할 수 없습니다: {error}");
+                    }
                 }
                 LLM_MODEL_EDIT => {
                     let model = self.get_control_text(LLM_MODEL_EDIT);
@@ -808,6 +829,12 @@ impl SettingsDialog {
 
     pub(super) fn glossary_applied(&self) {
         self.refresh_glossary_count();
+        self.has_unapplied_changes.set(true);
+        self.notify_preview();
+    }
+
+    pub(super) fn eztrans_dictionary_applied(&self) {
+        self.refresh_eztrans_dictionary_count();
         self.has_unapplied_changes.set(true);
         self.notify_preview();
     }

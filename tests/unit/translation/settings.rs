@@ -123,6 +123,91 @@ fn reasoning_effort_selection_updates_llm_config() {
 }
 
 #[test]
+fn llm_provider_change_restores_each_providers_settings() {
+    use crate::config::LlmGlossaryEntry;
+    use crate::translation::llm::ReasoningEffort;
+
+    let mut config = TranslationConfig::default();
+    config.llm.model = "openai-model".into();
+    config.llm.api_key = "openai-key".into();
+    config.llm.base_url = "https://openai.example/v1".into();
+    config.llm.system_prompt = "openai prompt".into();
+    config.llm.temperature = 0.21;
+    config.llm.top_p = 0.81;
+    config.llm.frequency_penalty = 0.31;
+    config.llm.presence_penalty = -0.41;
+    config.llm.max_tokens = 2_001;
+    config.llm.reasoning_effort = Some(ReasoningEffort::High);
+    config.llm.glossary = vec![LlmGlossaryEntry {
+        source: "OpenAI".into(),
+        target: "오픈AI".into(),
+    }];
+    config.llm.debounce_ms = 201;
+
+    let result = TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::LlmProvider(LlmProvider::Anthropic),
+    )
+    .unwrap();
+    assert!(result.changed);
+    assert_eq!(config.llm.model, "");
+    assert_eq!(config.llm.api_key, "");
+    assert_eq!(config.llm.temperature, 0.3);
+
+    config.llm.model = "anthropic-model".into();
+    config.llm.api_key = "anthropic-key".into();
+    config.llm.base_url = "https://anthropic.example/v1".into();
+    config.llm.system_prompt = "anthropic prompt".into();
+    config.llm.temperature = 0.72;
+    config.llm.top_p = 0.92;
+    config.llm.frequency_penalty = 0.12;
+    config.llm.presence_penalty = -0.22;
+    config.llm.max_tokens = 4_002;
+    config.llm.reasoning_effort = Some(ReasoningEffort::Low);
+    config.llm.glossary = vec![LlmGlossaryEntry {
+        source: "Claude".into(),
+        target: "클로드".into(),
+    }];
+    config.llm.debounce_ms = 402;
+
+    TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::LlmProvider(LlmProvider::OpenAi),
+    )
+    .unwrap();
+    assert_eq!(config.llm.model, "openai-model");
+    assert_eq!(config.llm.api_key, "openai-key");
+    assert_eq!(config.llm.base_url, "https://openai.example/v1");
+    assert_eq!(config.llm.system_prompt, "openai prompt");
+    assert_eq!(config.llm.temperature, 0.21);
+    assert_eq!(config.llm.top_p, 0.81);
+    assert_eq!(config.llm.frequency_penalty, 0.31);
+    assert_eq!(config.llm.presence_penalty, -0.41);
+    assert_eq!(config.llm.max_tokens, 2_001);
+    assert_eq!(config.llm.reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(config.llm.glossary[0].source, "OpenAI");
+    assert_eq!(config.llm.debounce_ms, 201);
+
+    TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::LlmProvider(LlmProvider::Anthropic),
+    )
+    .unwrap();
+    assert_eq!(config.llm.model, "anthropic-model");
+    assert_eq!(config.llm.api_key, "anthropic-key");
+    assert_eq!(config.llm.base_url, "https://anthropic.example/v1");
+    assert_eq!(config.llm.system_prompt, "anthropic prompt");
+    assert_eq!(config.llm.temperature, 0.72);
+    assert_eq!(config.llm.top_p, 0.92);
+    assert_eq!(config.llm.frequency_penalty, 0.12);
+    assert_eq!(config.llm.presence_penalty, -0.22);
+    assert_eq!(config.llm.max_tokens, 4_002);
+    assert_eq!(config.llm.reasoning_effort, Some(ReasoningEffort::Low));
+    assert_eq!(config.llm.glossary[0].source, "Claude");
+    assert_eq!(config.llm.debounce_ms, 402);
+}
+
+#[test]
 fn deepl_key_type_must_match_the_key_suffix() {
     let mut config = TranslationConfig::default();
     assert_eq!(

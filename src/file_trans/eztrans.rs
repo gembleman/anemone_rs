@@ -72,7 +72,11 @@ pub fn translate_eztrans_window(
     let translated_batches = translator
         .translate_batches(batches, &job_data.cancel_token)
         .map_err(FileTranslationError::backend)?;
-    let translated_misses = translated_batches.into_iter().flatten().collect::<Vec<_>>();
+    let translated_misses = translated_batches
+        .into_iter()
+        .flatten()
+        .map(|translated| job_data.translation.postprocess(translated))
+        .collect::<Vec<_>>();
     if translated_misses.len() != misses.len() {
         return Err(FileTranslationError::backend(format!(
             "EzTrans helper 결과 수가 일치하지 않습니다: 요청 {}, 응답 {}",

@@ -19,3 +19,21 @@ fn glossary_draft_adds_updates_removes_and_commits() {
     draft.commit(&mut config);
     assert_eq!(config.translation.llm.glossary[0].source, "Bob");
 }
+
+#[test]
+fn eztrans_dictionary_draft_is_separate_from_the_llm_glossary() {
+    let mut config = Config::default();
+    config.translation.llm.glossary = vec![crate::config::LlmGlossaryEntry {
+        source: "LLM".into(),
+        target: "엘엘엠".into(),
+    }];
+    let mut draft = GlossaryDraft::from_eztrans_config(&config);
+    draft.add_or_update("이지트랜스".into(), "EzTrans".into());
+    draft.commit(&mut config);
+
+    assert_eq!(config.translation.llm.glossary[0].source, "LLM");
+    assert_eq!(
+        config.translation.eztrans_postprocess_dictionary[0].source,
+        "이지트랜스"
+    );
+}

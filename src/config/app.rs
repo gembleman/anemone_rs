@@ -151,13 +151,7 @@ impl Config {
             style.font_style &= 0b11;
         }
 
-        let llm = &mut self.translation.llm;
-        llm.max_tokens = super::limits::llm_max_tokens(llm.max_tokens);
-        llm.debounce_ms = super::limits::llm_debounce_ms(llm.debounce_ms);
-        llm.temperature = super::limits::llm_temperature(llm.temperature);
-        llm.top_p = super::limits::llm_top_p(llm.top_p);
-        llm.frequency_penalty = super::limits::llm_penalty(llm.frequency_penalty);
-        llm.presence_penalty = super::limits::llm_penalty(llm.presence_penalty);
+        self.translation.llm.normalize();
     }
 
     fn migrate(&mut self) -> Result<(), ConfigDecodeError> {

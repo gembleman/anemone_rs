@@ -57,9 +57,9 @@ fn translation_panel_and_height_follow_the_selected_engine() {
         SettingsDialog::translation_height_for_engine(TranslationEngine::Papago)
             < SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL)
     );
-    assert_eq!(
-        SettingsDialog::translation_height_for_engine(TranslationEngine::Papago),
-        SettingsDialog::translation_height_for_engine(TranslationEngine::EzTrans)
+    assert!(
+        SettingsDialog::translation_height_for_engine(TranslationEngine::Papago)
+            < SettingsDialog::translation_height_for_engine(TranslationEngine::EzTrans)
     );
     assert!(
         SettingsDialog::translation_height_for_engine(TranslationEngine::DeepL)
@@ -163,6 +163,32 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     initial.translation.engine = "deepl".into();
     initial.translation.source_lang = "en".into();
     initial.translation.target_lang = "fr".into();
+    initial.translation.eztrans_postprocess_dictionary =
+        vec![crate::config::EzTransPostprocessEntry {
+            source: "번역 결과".into(),
+            target: "후처리 결과".into(),
+        }];
+    initial.translation.llm.api_key = "openai-key".into();
+    initial.translation.llm.temperature = 0.21;
+    initial
+        .translation
+        .llm
+        .set_provider(crate::translation::LlmProvider::Anthropic);
+    initial.translation.llm.model = "anthropic-model".into();
+    initial.translation.llm.api_key = "anthropic-key".into();
+    initial.translation.llm.system_prompt = "anthropic prompt".into();
+    initial.translation.llm.temperature = 0.72;
+    initial.translation.llm.max_tokens = 4_002;
+    initial.translation.llm.reasoning_effort = Some(crate::translation::llm::ReasoningEffort::Low);
+    initial.translation.llm.debounce_ms = 402;
+    initial.translation.llm.glossary = vec![crate::config::LlmGlossaryEntry {
+        source: "Claude".into(),
+        target: "클로드".into(),
+    }];
+    initial
+        .translation
+        .llm
+        .set_provider(crate::translation::LlmProvider::OpenAi);
     let config = initial;
     let parent = unsafe { GetDesktopWindow() };
     let hwnd = SettingsDialog::show(parent, config.clone(), None).unwrap();
@@ -308,6 +334,68 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
             Some(crate::translation::llm::ReasoningEffort::High)
         );
     });
+
+    select_combo(
+        hwnd,
+        ctrl_id::LLM_PROVIDER,
+        crate::translation::LlmProvider::Anthropic as usize,
+    );
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_MODEL_EDIT)),
+        "anthropic-model"
+    );
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)),
+        "anthropic-key"
+    );
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_SYSTEM_PROMPT_EDIT)),
+        "anthropic prompt"
+    );
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_TEMPERATURE_LABEL)),
+        "0.72"
+    );
+    assert_eq!(
+        unsafe {
+            SendMessageW(
+                control(hwnd, ctrl_id::LLM_TEMPERATURE_TRACKBAR),
+                crate::dialogs::TBM_GETPOS,
+                None,
+                None,
+            )
+            .0
+        },
+        72
+    );
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_MAX_TOKENS_EDIT)),
+        "4002"
+    );
+    assert_eq!(combo_index(hwnd, ctrl_id::LLM_REASONING_EFFORT), 3);
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_DEBOUNCE_EDIT)),
+        "402"
+    );
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_GLOSSARY_COUNT_LABEL)),
+        "사전 항목: 1"
+    );
+
+    select_combo(
+        hwnd,
+        ctrl_id::LLM_PROVIDER,
+        crate::translation::LlmProvider::OpenAi as usize,
+    );
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_API_KEY_EDIT)),
+        "openai-key"
+    );
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_TEMPERATURE_LABEL)),
+        "0.21"
+    );
+    assert_eq!(combo_index(hwnd, ctrl_id::LLM_REASONING_EFFORT), 5);
     let mut llm_group_rect = Default::default();
     let mut llm_last_control_rect = Default::default();
     unsafe {
@@ -316,7 +404,11 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
             &mut llm_group_rect,
         )
         .unwrap();
-        GetWindowRect(control(hwnd, 2239), &mut llm_last_control_rect).unwrap();
+        GetWindowRect(
+            control(hwnd, ctrl_id::LLM_GLOSSARY_EDIT_BTN),
+            &mut llm_last_control_rect,
+        )
+        .unwrap();
     }
     assert!(
         llm_group_rect.bottom - llm_group_rect.top > deepl_group_rect.bottom - deepl_group_rect.top
@@ -327,6 +419,16 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
 
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_SOURCE_LANG), 0);
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_TARGET_LANG), 0);
+    assert!(unsafe {
+        IsWindowVisible(control(hwnd, ctrl_id::EZTRANS_DICTIONARY_EDIT_BTN)).as_bool()
+    });
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(
+            hwnd,
+            ctrl_id::EZTRANS_DICTIONARY_COUNT_LABEL
+        )),
+        "후처리 사전: 1"
+    );
     let max_tokens = config.translation.llm.max_tokens;
     unsafe {
         SetWindowTextW(control(hwnd, ctrl_id::LLM_MAX_TOKENS_EDIT), w!("invalid")).unwrap();

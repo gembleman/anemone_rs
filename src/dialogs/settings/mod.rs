@@ -192,6 +192,17 @@ unsafe extern "system" fn settings_dialog_proc(
             return 1;
         }
 
+        if msg == crate::dialogs::glossary::WM_EZTRANS_DICTIONARY_APPLIED {
+            if let Ok(dialog) = dialog.try_borrow() {
+                dialog.eztrans_dictionary_applied();
+                drop(dialog);
+                super::helpers::flush_deferred_dialog_messages(hwnd);
+            } else {
+                super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
+            }
+            return 1;
+        }
+
         if let Ok(mut dialog) = dialog.try_borrow_mut()
             && let Some(result) = dialog.handle_message(msg, wparam, lparam)
         {
@@ -536,10 +547,10 @@ impl SettingsDialog {
 
     fn translation_height_for_engine(engine: TranslationEngine) -> i32 {
         match engine {
-            TranslationEngine::Google
-            | TranslationEngine::EzTrans
-            | TranslationEngine::Papago
-            | TranslationEngine::Custom => 245,
+            TranslationEngine::EzTrans => 265,
+            TranslationEngine::Google | TranslationEngine::Papago | TranslationEngine::Custom => {
+                245
+            }
             TranslationEngine::DeepL => 365,
             TranslationEngine::Llm => 490,
         }
@@ -550,10 +561,8 @@ impl SettingsDialog {
         match engine {
             TranslationEngine::DeepL => 136,
             TranslationEngine::Llm => 204,
-            TranslationEngine::Google
-            | TranslationEngine::EzTrans
-            | TranslationEngine::Papago
-            | TranslationEngine::Custom => 69,
+            TranslationEngine::EzTrans => 88,
+            TranslationEngine::Google | TranslationEngine::Papago | TranslationEngine::Custom => 69,
         }
     }
 

@@ -14,6 +14,7 @@ mod language;
 pub(crate) mod llm;
 pub(crate) mod manual;
 pub(crate) mod papago_api;
+mod postprocess;
 mod service;
 pub(crate) mod settings;
 pub(crate) mod worker;

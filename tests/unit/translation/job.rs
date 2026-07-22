@@ -119,6 +119,24 @@ fn file_job_carries_normalized_eztrans_process_configuration() {
 }
 
 #[test]
+fn eztrans_job_carries_and_applies_its_own_postprocess_dictionary() {
+    let mut config = TranslationConfig::default();
+    config.eztrans_postprocess_dictionary = vec![crate::config::EzTransPostprocessEntry {
+        source: "번역 전".into(),
+        target: "번역 후".into(),
+    }];
+    let job = PreparedJob::from_config(&config).unwrap();
+
+    assert_eq!(job.postprocess("번역 전 문장".into()), "번역 후 문장");
+    assert_ne!(job.engine().cache_engine_id(), "eztrans");
+
+    config.eztrans_postprocess_dictionary.clear();
+    let without_dictionary = PreparedJob::from_config(&config).unwrap();
+    assert_eq!(without_dictionary.postprocess("번역 전".into()), "번역 전");
+    assert_eq!(without_dictionary.engine().cache_engine_id(), "eztrans");
+}
+
+#[test]
 fn relative_eztrans_paths_resolve_from_the_executable_data_directory() {
     let config = TranslationConfig {
         eztrans_dll_path: r"eztrans_dll\J2KEngine.dll".into(),

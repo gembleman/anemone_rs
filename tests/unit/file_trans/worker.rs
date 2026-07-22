@@ -255,6 +255,31 @@ fn eztrans_window_deduplicates_and_reuses_bounded_cache() {
 }
 
 #[test]
+fn eztrans_window_applies_postprocess_dictionary_before_caching() {
+    let translator = MockBatchTranslator::new(1);
+    let mut config = crate::config::TranslationConfig::default();
+    config.eztrans_dll_path = "test.dll".into();
+    config.eztrans_dat_path = "test-dat".into();
+    config.eztrans_postprocess_dictionary = vec![crate::config::EzTransPostprocessEntry {
+        source: "번역:".into(),
+        target: "후처리:".into(),
+    }];
+    let mut job = eztrans_job();
+    job.translation = crate::translation::PreparedJob::from_config(&config).unwrap();
+    let mut cache = BoundedTranslationCache::new(10);
+
+    assert_eq!(
+        translate_eztrans_window(&[input_line("문장")], &job, &translator, &mut cache).unwrap(),
+        ["후처리:문장"]
+    );
+    assert_eq!(
+        translate_eztrans_window(&[input_line("문장")], &job, &translator, &mut cache).unwrap(),
+        ["후처리:문장"]
+    );
+    assert_eq!(translator.translated_lines.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn eztrans_cache_keeps_a_reused_entry_during_a_unique_scan() {
     let translator = MockBatchTranslator::new(1);
     let job = eztrans_job();

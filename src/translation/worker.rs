@@ -592,8 +592,8 @@ impl TranslationDispatch {
         client: &reqwest::Client,
     ) -> TranslationResult {
         let languages = req.job.languages();
-        match req.job.engine().kind() {
-            PreparedEngineKind::EzTrans(_) => {
+        let result = match req.job.engine().kind() {
+            PreparedEngineKind::EzTrans { .. } => {
                 // Arc clone으로 본문 복사 없이 blocking task에 넘긴다.
                 let text = Arc::clone(&req.text);
                 let source = languages.source();
@@ -693,7 +693,8 @@ impl TranslationDispatch {
                 )
                 .await
             }
-        }
+        };
+        result.map(|translated| req.job.postprocess(translated))
     }
 }
 

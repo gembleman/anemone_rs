@@ -72,6 +72,7 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::EZTRANS_DLL_BROWSE,
     ctrl_id::EZTRANS_DAT_EDIT,
     ctrl_id::EZTRANS_DAT_BROWSE,
+    ctrl_id::EZTRANS_DICTIONARY_EDIT_BTN,
     ctrl_id::DEEPL_KEYS_LIST,
     ctrl_id::DEEPL_KEY_ADD_EDIT,
     ctrl_id::DEEPL_KEY_ADD_BTN,
@@ -147,6 +148,7 @@ impl SettingsDialog {
                 ctrl_id::EZTRANS_DLL_BROWSE,
                 ctrl_id::EZTRANS_DAT_EDIT,
                 ctrl_id::EZTRANS_DAT_BROWSE,
+                ctrl_id::EZTRANS_DICTIONARY_EDIT_BTN,
             ],
         )?;
         self.register_engine_ids(EngineGroup::DeepL, ctrl_id::DEEPL_STATIC_IDS)?;
@@ -324,6 +326,13 @@ impl SettingsDialog {
         self.set_text(
             ctrl_id::EZTRANS_DAT_EDIT,
             &config.translation.eztrans_dat_path,
+        )?;
+        self.set_text(
+            ctrl_id::EZTRANS_DICTIONARY_COUNT_LABEL,
+            &format!(
+                "후처리 사전: {}",
+                config.translation.eztrans_postprocess_dictionary.len()
+            ),
         )?;
         let strategy = match config.translation.deepl_strategy.to_lowercase().as_str() {
             "round-robin" | "roundrobin" | "rr" => 1,
@@ -505,6 +514,69 @@ impl SettingsDialog {
             ctrl_id::LLM_MODEL_EDIT,
             provider.model_or_default(configured_model),
         )
+    }
+
+    /// 선택된 제공자의 설정값으로 LLM 입력 컨트롤 전체를 갱신한다.
+    pub(super) fn refresh_llm_provider_controls(
+        &self,
+        provider: crate::translation::LlmProvider,
+    ) -> Result<()> {
+        let (
+            model,
+            api_key,
+            system_prompt,
+            temperature,
+            max_tokens,
+            reasoning_effort,
+            debounce_ms,
+            glossary_count,
+        ) = {
+            let draft = self.draft.borrow();
+            let llm = &draft.translation.llm;
+            (
+                llm.model.clone(),
+                llm.api_key.clone(),
+                llm.system_prompt.clone(),
+                llm.temperature,
+                llm.max_tokens,
+                llm.reasoning_effort,
+                llm.debounce_ms,
+                llm.glossary.len(),
+            )
+        };
+
+        self.populate_llm_model_combo(provider, &model)?;
+        self.set_text(ctrl_id::LLM_API_KEY_EDIT, &api_key)?;
+        self.set_text(ctrl_id::LLM_SYSTEM_PROMPT_EDIT, &system_prompt)?;
+        self.initialize_trackbar(
+            ctrl_id::LLM_TEMPERATURE_TRACKBAR,
+            crate::config::limits::LLM_TEMPERATURE_SLIDER_MIN,
+            crate::config::limits::LLM_TEMPERATURE_SLIDER_MAX,
+            (crate::config::limits::llm_temperature(temperature) * 100.0) as i32,
+        )?;
+        self.set_text(ctrl_id::LLM_TEMPERATURE_LABEL, &format!("{temperature:.2}"))?;
+        self.set_text(ctrl_id::LLM_MAX_TOKENS_EDIT, &max_tokens.to_string())?;
+        let reasoning_effort_index = reasoning_effort
+            .and_then(|configured| {
+                crate::translation::llm::ReasoningEffort::ALL
+                    .iter()
+                    .position(|&effort| effort == configured)
+            })
+            .map_or(0, |index| index + 1);
+        self.set_combo_selection(ctrl_id::LLM_REASONING_EFFORT, reasoning_effort_index)?;
+        self.set_text(ctrl_id::LLM_DEBOUNCE_EDIT, &debounce_ms.to_string())?;
+        self.set_text(
+            ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
+            &format!("사전 항목: {glossary_count}"),
+        )
+    }
+
+    fn set_combo_selection(&self, id: u16, selected: usize) -> Result<()> {
+        let combo = self.control(id)?;
+        unsafe {
+            let _ = SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(selected)), Some(LPARAM(0)));
+        }
+        Ok(())
     }
 
     fn initialize_trackbar(&self, id: u16, min: i32, max: i32, value: i32) -> Result<()> {

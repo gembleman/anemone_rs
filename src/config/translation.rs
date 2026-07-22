@@ -4,6 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use super::{CustomApiConfig, LlmConfig};
 
+/// EzTrans 번역 결과에 적용하는 후처리 치환 한 항목.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EzTransPostprocessEntry {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub target: String,
+}
+
 /// 번역 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TranslationConfig {
@@ -31,6 +40,9 @@ pub struct TranslationConfig {
     /// 파일 번역에서 동시에 유지할 EzTrans helper 프로세스 수
     #[serde(default = "default_eztrans_process_count")]
     pub eztrans_process_count: u32,
+    /// EzTrans가 반환한 번역문에만 적용하는 후처리 사전.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub eztrans_postprocess_dictionary: Vec<EzTransPostprocessEntry>,
     /// DeepL API 키 (단일 키 — 하위 호환). `deepl_keys`가 비어 있을 때만 사용.
     #[serde(default)]
     pub deepl_api_key: String,
@@ -310,6 +322,7 @@ impl Default for TranslationConfig {
             eztrans_dll_path: default_eztrans_subpath("J2KEngine.dll"),
             eztrans_dat_path: default_eztrans_subpath("Dat"),
             eztrans_process_count: default_eztrans_process_count(),
+            eztrans_postprocess_dictionary: Vec::new(),
             deepl_api_key: String::new(),
             deepl_keys: Vec::new(),
             deepl_strategy: default_deepl_strategy(),

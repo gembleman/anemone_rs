@@ -15,7 +15,7 @@ use super::helpers::{
     get_window_text, listbox_add_item, listbox_get_sel, listbox_reset, set_window_text,
 };
 use super::host::{DialogHost, DialogResult, HostedDialog};
-use super::models::{GlossaryDraft, SettingsDraft};
+use super::models::{DictionaryTarget, GlossaryDraft, SettingsDraft};
 
 mod ctrl_id {
     pub const DIALOG: u16 = 102;
@@ -41,16 +41,30 @@ pub struct GlossaryDialog {
 pub(crate) struct GlossaryInit {
     owner: HWND,
     settings: Rc<RefCell<SettingsDraft>>,
+    target: DictionaryTarget,
 }
 
 impl GlossaryDialog {
     /// `resources/glossary.rc`의 모델리스 DIALOGEX 리소스를 연다.
     pub(crate) fn show(parent: HWND, settings: Rc<RefCell<SettingsDraft>>) -> Result<HWND> {
+        Self::show_for(parent, settings, DictionaryTarget::Llm)
+    }
+
+    pub(crate) fn show_eztrans(parent: HWND, settings: Rc<RefCell<SettingsDraft>>) -> Result<HWND> {
+        Self::show_for(parent, settings, DictionaryTarget::EzTransPostprocess)
+    }
+
+    fn show_for(
+        parent: HWND,
+        settings: Rc<RefCell<SettingsDraft>>,
+        target: DictionaryTarget,
+    ) -> Result<HWND> {
         DialogHost::<Self>::show(
             parent,
             GlossaryInit {
                 owner: parent,
                 settings,
+                target,
             },
         )
     }
@@ -74,6 +88,11 @@ impl GlossaryDialog {
             })?;
         }
         self.populate_listbox();
+        let title = match self.draft.target() {
+            DictionaryTarget::Llm => "LLM 사전 편집",
+            DictionaryTarget::EzTransPostprocess => "EzTrans 후처리 사전 편집",
+        };
+        set_window_text(self.hwnd, title)?;
         Ok(())
     }
 
@@ -104,9 +123,11 @@ impl GlossaryDialog {
         match cmd {
             BTN_APPLY => {
                 self.draft.clone().commit(&mut self.settings.borrow_mut());
-                let _ = unsafe {
-                    PostMessageW(Some(self.owner), WM_GLOSSARY_APPLIED, WPARAM(0), LPARAM(0))
+                let message = match self.draft.target() {
+                    DictionaryTarget::Llm => WM_GLOSSARY_APPLIED,
+                    DictionaryTarget::EzTransPostprocess => WM_EZTRANS_DICTIONARY_APPLIED,
                 };
+                let _ = unsafe { PostMessageW(Some(self.owner), message, WPARAM(0), LPARAM(0)) };
             }
             BTN_ADD => self.add_or_update_entry(),
             BTN_REMOVE => self.remove_selected(),
@@ -223,7 +244,12 @@ impl HostedDialog for GlossaryDialog {
     const RESOURCE_ID: u16 = ctrl_id::DIALOG;
 
     fn create(hwnd: HWND, init: Self::Init) -> Result<Self> {
-        let draft = GlossaryDraft::from_config(&init.settings.borrow());
+        let draft = match init.target {
+            DictionaryTarget::Llm => GlossaryDraft::from_config(&init.settings.borrow()),
+            DictionaryTarget::EzTransPostprocess => {
+                GlossaryDraft::from_eztrans_config(&init.settings.borrow())
+            }
+        };
         let dialog = Self {
             hwnd,
             owner: init.owner,
@@ -258,3 +284,4 @@ impl HostedDialog for GlossaryDialog {
 }
 
 pub(crate) const WM_GLOSSARY_APPLIED: u32 = WM_APP + 20;
+pub(crate) const WM_EZTRANS_DICTIONARY_APPLIED: u32 = WM_APP + 21;

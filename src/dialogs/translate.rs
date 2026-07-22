@@ -681,9 +681,11 @@ impl TranslateDialog {
         let Some(provider) = LlmProvider::from_u8(sel) else {
             return;
         };
-        let configured_model = self.config.translation.llm.model.clone();
         self.config.translation.llm.set_provider(provider);
+        let configured_model = self.config.translation.llm.model.clone();
+        let api_key = self.config.translation.llm.api_key.clone();
         self.populate_llm_model_combo(provider, &configured_model);
+        let _ = set_window_text(self.llm_api_key_edit, &api_key);
     }
 
     fn apply_llm_model(&mut self) {

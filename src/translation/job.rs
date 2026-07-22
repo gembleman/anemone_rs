@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::config::TranslationConfig;
+use crate::config::{EzTransPostprocessEntry, TranslationConfig};
 use crate::translation::custom::CustomApiCallParams;
 use crate::translation::llm::LlmCallParams;
 use crate::translation::{EzTransProcessConfig, Language, TranslationEngine, prepare_eztrans};
@@ -38,7 +38,10 @@ impl LanguagePair {
 
 /// 엔진과 인증 정보를 하나의 variant로 결합한 내부 실행 backend.
 pub(crate) enum PreparedEngineKind {
-    EzTrans(EzTransProcessConfig),
+    EzTrans {
+        process: EzTransProcessConfig,
+        postprocess_dictionary: Vec<EzTransPostprocessEntry>,
+    },
     Google,
     DeepL {
         keys: Vec<String>,
@@ -55,7 +58,7 @@ pub(crate) enum PreparedEngineKind {
 impl PreparedEngineKind {
     fn engine(&self) -> TranslationEngine {
         match self {
-            Self::EzTrans(_) => TranslationEngine::EzTrans,
+            Self::EzTrans { .. } => TranslationEngine::EzTrans,
             Self::Google => TranslationEngine::Google,
             Self::DeepL { .. } => TranslationEngine::DeepL,
             Self::Papago { .. } => TranslationEngine::Papago,
@@ -83,11 +86,11 @@ impl PreparedEngine {
     }
 
     pub fn is_blocking(&self) -> bool {
-        matches!(self.0.as_ref(), PreparedEngineKind::EzTrans(_))
+        matches!(self.0.as_ref(), PreparedEngineKind::EzTrans { .. })
     }
 
     pub fn supports_batch(&self) -> bool {
-        matches!(self.0.as_ref(), PreparedEngineKind::EzTrans(_))
+        matches!(self.0.as_ref(), PreparedEngineKind::EzTrans { .. })
     }
 
     pub(crate) fn kind(&self) -> &PreparedEngineKind {
@@ -96,7 +99,7 @@ impl PreparedEngine {
 
     pub(crate) fn eztrans_process(&self) -> Option<&EzTransProcessConfig> {
         match self.0.as_ref() {
-            PreparedEngineKind::EzTrans(config) => Some(config),
+            PreparedEngineKind::EzTrans { process, .. } => Some(process),
             _ => None,
         }
     }
@@ -106,6 +109,15 @@ impl PreparedEngine {
     pub fn cache_engine_id(&self) -> String {
         match self.0.as_ref() {
             PreparedEngineKind::Llm(params) => format!("llm:{}", params.model),
+            PreparedEngineKind::EzTrans {
+                postprocess_dictionary,
+                ..
+            } if !postprocess_dictionary.is_empty() => {
+                use std::hash::{DefaultHasher, Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                postprocess_dictionary.hash(&mut hasher);
+                format!("eztrans:{:016x}", hasher.finish())
+            }
             _ => self.engine().to_str().to_string(),
         }
     }
@@ -145,11 +157,16 @@ impl PreparedJob {
             return Err(TranslationConfigError::MissingEzTransPath);
         }
         Self::from_kind(
-            PreparedEngineKind::EzTrans(EzTransProcessConfig {
-                dll_path,
-                dat_path,
-                process_count: crate::config::limits::eztrans_process_count_usize(process_count),
-            }),
+            PreparedEngineKind::EzTrans {
+                process: EzTransProcessConfig {
+                    dll_path,
+                    dat_path,
+                    process_count: crate::config::limits::eztrans_process_count_usize(
+                        process_count,
+                    ),
+                },
+                postprocess_dictionary: Vec::new(),
+            },
             source,
             target,
         )
@@ -183,13 +200,16 @@ impl PreparedJob {
                     {
                         return Err(TranslationConfigError::MissingEzTransPath);
                     }
-                    PreparedEngineKind::EzTrans(EzTransProcessConfig {
-                        dll_path: resolve_configured_eztrans_path(&config.eztrans_dll_path),
-                        dat_path: resolve_configured_eztrans_path(&config.eztrans_dat_path),
-                        process_count: crate::config::limits::eztrans_process_count(
-                            config.eztrans_process_count,
-                        ) as usize,
-                    })
+                    PreparedEngineKind::EzTrans {
+                        process: EzTransProcessConfig {
+                            dll_path: resolve_configured_eztrans_path(&config.eztrans_dll_path),
+                            dat_path: resolve_configured_eztrans_path(&config.eztrans_dat_path),
+                            process_count: crate::config::limits::eztrans_process_count(
+                                config.eztrans_process_count,
+                            ) as usize,
+                        },
+                        postprocess_dictionary: config.eztrans_postprocess_dictionary.clone(),
+                    }
                 }
                 TranslationEngine::Google => PreparedEngineKind::Google,
                 TranslationEngine::DeepL => {
@@ -291,6 +311,17 @@ impl PreparedJob {
             source_lang: crate::translation::lang_utils::to_code(self.languages.source()),
             target_lang: crate::translation::lang_utils::to_code(self.languages.target()),
             original: original.to_string(),
+        }
+    }
+
+    /// 엔진별 후처리를 번역 결과에 적용한다. 현재는 EzTrans 전용 사전만 사용한다.
+    pub(crate) fn postprocess(&self, translated: String) -> String {
+        match self.engine.kind() {
+            PreparedEngineKind::EzTrans {
+                postprocess_dictionary,
+                ..
+            } => super::postprocess::apply_eztrans_dictionary(translated, postprocess_dictionary),
+            _ => translated,
         }
     }
 }
