@@ -8,7 +8,6 @@ const APPEARANCE_IDS: &[u16] = &[
     ctrl_id::BACKGROUND_SWITCH,
     ctrl_id::BACKGROUND_EDIT,
     ctrl_id::TEXTSIZE_TRACKBAR,
-    ctrl_id::TEXTSIZE_TEXT,
     ctrl_id::TEXTSIZE_EDIT,
     ctrl_id::OUTLINE1_TRACKBAR,
     ctrl_id::OUTLINE1_EDIT,

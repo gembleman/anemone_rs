@@ -22,7 +22,6 @@ BEGIN
     GROUPBOX        "텍스트 크기", 2002, 140, 19, 131, 40
     CONTROL         "", 1010, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 146, 28, 82, 12
     EDITTEXT        1014, 232, 28, 30, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "크기:", 1013, 194, 44, 57, 10
 
     GROUPBOX        "외곽선 설정", 2003, 9, 61, 263, 40
     LTEXT           "외곽선1:", 2004, 14, 71, 37, 10

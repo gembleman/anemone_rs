@@ -11,7 +11,6 @@ pub const BACKGROUND_EDIT: u16 = 1004;
 
 // 텍스트 크기
 pub const TEXTSIZE_TRACKBAR: u16 = 1010;
-pub const TEXTSIZE_TEXT: u16 = 1013;
 pub const TEXTSIZE_EDIT: u16 = 1014;
 
 // 외곽선 크기
