@@ -136,19 +136,6 @@ fn record_last_applied(
     applied
 }
 
-/// +/- 버튼 처리 매크로: config에서 값을 읽고, 범위 내에서 증감 후, UI 업데이트
-macro_rules! handle_size_button {
-    ($self:expr, $get_field:expr, $set_color_type:expr, $delta:expr, $ui_update:expr) => {{
-        let requested = $get_field(&$self.draft.borrow()) + $delta;
-        $self.apply_settings_change(SettingsChange::Numeric {
-            setting: NumericSetting::TextSize($set_color_type),
-            value: requested,
-        });
-        let new_size = $get_field(&$self.draft.borrow());
-        $ui_update($self, new_size);
-    }};
-}
-
 /// 체크박스 토글 매크로: 컨트롤 ID와 독립적인 설정 명령으로 변환한다.
 macro_rules! toggle_field {
     ($self:expr, $setting:expr) => {{
@@ -297,54 +284,6 @@ impl SettingsDialog {
             }
             CLIPBOARD_CACHE_CLEAR => self.clear_translation_cache(),
             HOTKEYS_RESET => self.reset_hotkeys_to_default(),
-
-            // 텍스트 크기 +/-
-            TEXTSIZE_MINUS => handle_size_button!(
-                self,
-                |cfg: &crate::config::Config| cfg.translation_style.size,
-                ColorType::Primary,
-                -1,
-                |s: &Self, v| s.update_textsize_ui(v)
-            ),
-            TEXTSIZE_PLUS => handle_size_button!(
-                self,
-                |cfg: &crate::config::Config| cfg.translation_style.size,
-                ColorType::Primary,
-                1,
-                |s: &Self, v| s.update_textsize_ui(v)
-            ),
-
-            // 외곽선1 +/-
-            OUTLINE1_MINUS => handle_size_button!(
-                self,
-                |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
-                ColorType::Outline1,
-                -1,
-                |s: &Self, v| s.update_numeric_ui(OUTLINE1_TRACKBAR, OUTLINE1_EDIT, v)
-            ),
-            OUTLINE1_PLUS => handle_size_button!(
-                self,
-                |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
-                ColorType::Outline1,
-                1,
-                |s: &Self, v| s.update_numeric_ui(OUTLINE1_TRACKBAR, OUTLINE1_EDIT, v)
-            ),
-
-            // 외곽선2 +/-
-            OUTLINE2_MINUS => handle_size_button!(
-                self,
-                |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
-                ColorType::Outline2,
-                -1,
-                |s: &Self, v| s.update_numeric_ui(OUTLINE2_TRACKBAR, OUTLINE2_EDIT, v)
-            ),
-            OUTLINE2_PLUS => handle_size_button!(
-                self,
-                |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
-                ColorType::Outline2,
-                1,
-                |s: &Self, v| s.update_numeric_ui(OUTLINE2_TRACKBAR, OUTLINE2_EDIT, v)
-            ),
 
             // EzTrans DLL 찾아보기
             EZTRANS_DLL_BROWSE => match self.browse_dll_file("J2KEngine.dll 선택") {
@@ -859,11 +798,6 @@ impl SettingsDialog {
     fn update_numeric_ui(&self, trackbar_id: u16, edit_id: u16, value: i32) {
         self.update_trackbar_pos(trackbar_id, value);
         self.set_control_text(edit_id, &value.to_string());
-    }
-
-    /// 텍스트 크기 UI 업데이트 (트랙바 위치 및 숫자 입력란)
-    fn update_textsize_ui(&self, size: i32) {
-        self.update_numeric_ui(ctrl_id::TEXTSIZE_TRACKBAR, ctrl_id::TEXTSIZE_EDIT, size);
     }
 
     fn notify_preview(&self) {

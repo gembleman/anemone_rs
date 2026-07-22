@@ -11,20 +11,14 @@ pub const BACKGROUND_EDIT: u16 = 1004;
 
 // 텍스트 크기
 pub const TEXTSIZE_TRACKBAR: u16 = 1010;
-pub const TEXTSIZE_MINUS: u16 = 1011;
-pub const TEXTSIZE_PLUS: u16 = 1012;
 pub const TEXTSIZE_TEXT: u16 = 1013;
 pub const TEXTSIZE_EDIT: u16 = 1014;
 
 // 외곽선 크기
 pub const OUTLINE1_TRACKBAR: u16 = 1020;
-pub const OUTLINE1_MINUS: u16 = 1021;
-pub const OUTLINE1_PLUS: u16 = 1022;
 pub const OUTLINE1_EDIT: u16 = 1023;
 
 pub const OUTLINE2_TRACKBAR: u16 = 1030;
-pub const OUTLINE2_MINUS: u16 = 1031;
-pub const OUTLINE2_PLUS: u16 = 1032;
 pub const OUTLINE2_EDIT: u16 = 1033;
 
 // 그림자 오프셋

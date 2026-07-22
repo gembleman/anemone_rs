@@ -22,21 +22,15 @@ BEGIN
     GROUPBOX        "텍스트 크기", 2002, 140, 19, 131, 40
     CONTROL         "", 1010, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 146, 28, 82, 12
     EDITTEXT        1014, 232, 28, 30, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    PUSHBUTTON      "-", 1011, 146, 43, 20, 13
-    PUSHBUTTON      "+", 1012, 169, 43, 20, 13
     LTEXT           "크기:", 1013, 194, 44, 57, 10
 
     GROUPBOX        "외곽선 설정", 2003, 9, 61, 263, 40
     LTEXT           "외곽선1:", 2004, 14, 71, 37, 10
     CONTROL         "", 1020, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 51, 70, 33, 12
     EDITTEXT        1023, 86, 70, 22, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    PUSHBUTTON      "-", 1021, 110, 70, 13, 12
-    PUSHBUTTON      "+", 1022, 124, 70, 13, 12
     LTEXT           "외곽선2:", 2005, 146, 71, 37, 10
     CONTROL         "", 1030, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 183, 70, 33, 12
     EDITTEXT        1033, 218, 70, 22, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    PUSHBUTTON      "-", 1031, 242, 70, 13, 12
-    PUSHBUTTON      "+", 1032, 256, 70, 13, 12
     LTEXT           "그림자 X:", 2006, 14, 86, 37, 10
     CONTROL         "", 1040, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 51, 85, 57, 12
     EDITTEXT        1041, 110, 85, 25, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
