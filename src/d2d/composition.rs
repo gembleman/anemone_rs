@@ -211,6 +211,27 @@ impl CompositionRenderer {
         &self.d2d_context
     }
 
+    /// Render target의 논리 좌표계를 현재 모니터 DPI에 맞춘다.
+    ///
+    /// 반환값은 DPI가 실제로 바뀌었는지 나타내며, 호출자는 이때 DPI 종속 bitmap
+    /// cache를 비워야 한다.
+    pub fn set_dpi(&self, dpi: f32) -> bool {
+        let mut current_x = 0.0;
+        let mut current_y = 0.0;
+        // SAFETY: device context는 이 렌더러가 소유하며 DPI getter/setter는 draw 범위
+        // 밖에서도 호출할 수 있다.
+        unsafe {
+            self.d2d_context.GetDpi(&mut current_x, &mut current_y);
+        }
+        if (current_x - dpi).abs() < f32::EPSILON && (current_y - dpi).abs() < f32::EPSILON {
+            return false;
+        }
+        unsafe {
+            self.d2d_context.SetDpi(dpi, dpi);
+        }
+        true
+    }
+
     /// 그리기를 끝내고 swap chain을 제출한다. `sync_interval`은 DXGI Present 값이다.
     /// Device loss는 렌더 스택을 다시 만들 수 있도록 `Err`로 반환한다.
     #[allow(dead_code)]

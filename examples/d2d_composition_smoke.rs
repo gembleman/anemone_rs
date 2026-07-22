@@ -313,7 +313,7 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
 
         // 노란 외곽선 (4px 두께)
         let yellow = 0xFFFFD000;
-        d2d.draw_border(ctx, 640, 360, 4, yellow)?;
+        d2d.draw_border(ctx, 640.0, 360.0, 4, yellow)?;
 
         let base_style = TextRenderStyle {
             font_size: 24,

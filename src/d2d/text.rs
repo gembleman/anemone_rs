@@ -109,7 +109,7 @@ impl D2DRenderer {
                     Vector2::new(x, y),
                     &text_layout,
                     &text_brush,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
                 );
             }
             return Ok(());
@@ -140,8 +140,27 @@ impl D2DRenderer {
         }
 
         // 정상 경로는 실제 bitmap key로 hit를 판정하고 layout도 함께 얻는다.
-        let (hit, text_layout) =
-            self.ensure_outline_bitmap(target, &key_ref, text, style, max_width, max_height)?;
+        let (hit, text_layout) = match self
+            .ensure_outline_bitmap(target, &key_ref, text, style, max_width, max_height)
+        {
+            Ok(bitmap) => bitmap,
+            Err(error) => {
+                // 큰 overlay나 GPU 압박으로 compatible bitmap 생성이 실패해도 본문까지
+                // 멈추지 않는다. 반복 실패는 miss tracker가 direct 경로로 전환한다.
+                tracing::warn!(
+                    "outline bitmap build failed ({error}); falling back to direct rendering"
+                );
+                self.outline_bitmap = None;
+                self.miss_tracker.record(true);
+                let result = self.draw_text_direct(target, text, bbox, style);
+                if result.is_ok()
+                    && let Some(layout) = self.text_cache.as_ref()
+                {
+                    self.miss_tracker.last_key = Some(key_ref.to_owned_reusing_layout(&layout.key));
+                }
+                return result;
+            }
+        };
         self.miss_tracker.record(!hit);
         // last_key 도 hit 여부에 따라 alloc 회피.
         let need_update_last = self
@@ -183,7 +202,7 @@ impl D2DRenderer {
                 Vector2::new(x, y),
                 &text_layout,
                 &text_brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
             );
         }
 
@@ -250,7 +269,7 @@ impl D2DRenderer {
                 Vector2::new(x, y),
                 &text_layout,
                 &text_brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
             );
         }
 
@@ -376,80 +395,85 @@ impl D2DRenderer {
             let inner_rt: &ID2D1RenderTarget = &bm_rt;
 
             inner_rt.BeginDraw();
-            inner_rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            // 비트맵은 투명으로 시작 — Clear(0).
-            inner_rt.Clear(Some(&argb_to_color_f(0)));
+            // 중간 resource 생성이 실패하더라도 BeginDraw/EndDraw 짝은 반드시 닫는다.
+            let draw_result = (|| -> Result<()> {
+                inner_rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+                // 비트맵은 투명으로 시작 — Clear(0).
+                inner_rt.Clear(Some(&argb_to_color_f(0)));
 
-            // 비트맵 안의 layout 원점은 (pad_left, pad_top) — 본 RT 에 그리는
-            // outline / shadow 도 그 원점을 기준으로 한다.
-            let origin_x = pad_left;
-            let origin_y = pad_top;
+                // 비트맵 안의 layout 원점은 (pad_left, pad_top) — 본 RT 에 그리는
+                // outline / shadow 도 그 원점을 기준으로 한다.
+                let origin_x = pad_left;
+                let origin_y = pad_top;
 
-            // Brush는 target 종속이므로 외부 target의 cache를 쓰지 않는다.
+                // Brush는 target 종속이므로 외부 target의 cache를 쓰지 않는다.
 
-            // 1. 그림자
-            if effects.has_shadow {
-                let sx = origin_x + shadow_dx;
-                let sy = origin_y + shadow_dy;
-                let shadow_brush =
-                    inner_rt.CreateSolidColorBrush(&argb_to_color_f(effects.shadow_color), None)?;
+                // 1. 그림자
+                if effects.has_shadow {
+                    let sx = origin_x + shadow_dx;
+                    let sy = origin_y + shadow_dy;
+                    let shadow_brush = inner_rt
+                        .CreateSolidColorBrush(&argb_to_color_f(effects.shadow_color), None)?;
 
-                if outline_total > 0.0 {
+                    if outline_total > 0.0 {
+                        self.draw_outline_only(
+                            inner_rt,
+                            text,
+                            style,
+                            max_width,
+                            max_height,
+                            sx,
+                            sy,
+                            outline_total as i32,
+                            &shadow_brush,
+                        )?;
+                    }
+                    inner_rt.DrawTextLayout(
+                        Vector2::new(sx, sy),
+                        layout,
+                        &shadow_brush,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    );
+                }
+
+                // 2. 외곽선2 (OutlineOut)
+                if effects.outline2_size > 0 && outline_total > 0.0 {
+                    let brush = inner_rt
+                        .CreateSolidColorBrush(&argb_to_color_f(effects.outline2_color), None)?;
                     self.draw_outline_only(
                         inner_rt,
                         text,
                         style,
                         max_width,
                         max_height,
-                        sx,
-                        sy,
+                        origin_x,
+                        origin_y,
                         outline_total as i32,
-                        &shadow_brush,
+                        &brush,
                     )?;
                 }
-                inner_rt.DrawTextLayout(
-                    Vector2::new(sx, sy),
-                    layout,
-                    &shadow_brush,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
-                );
-            }
 
-            // 2. 외곽선2 (OutlineOut)
-            if effects.outline2_size > 0 && outline_total > 0.0 {
-                let brush = inner_rt
-                    .CreateSolidColorBrush(&argb_to_color_f(effects.outline2_color), None)?;
-                self.draw_outline_only(
-                    inner_rt,
-                    text,
-                    style,
-                    max_width,
-                    max_height,
-                    origin_x,
-                    origin_y,
-                    outline_total as i32,
-                    &brush,
-                )?;
-            }
-
-            // 3. 외곽선1 (OutlineIn)
-            if effects.outline1_size > 0 {
-                let brush = inner_rt
-                    .CreateSolidColorBrush(&argb_to_color_f(effects.outline1_color), None)?;
-                self.draw_outline_only(
-                    inner_rt,
-                    text,
-                    style,
-                    max_width,
-                    max_height,
-                    origin_x,
-                    origin_y,
-                    effects.outline1_size,
-                    &brush,
-                )?;
-            }
-
-            inner_rt.EndDraw(None, None)?;
+                // 3. 외곽선1 (OutlineIn)
+                if effects.outline1_size > 0 {
+                    let brush = inner_rt
+                        .CreateSolidColorBrush(&argb_to_color_f(effects.outline1_color), None)?;
+                    self.draw_outline_only(
+                        inner_rt,
+                        text,
+                        style,
+                        max_width,
+                        max_height,
+                        origin_x,
+                        origin_y,
+                        effects.outline1_size,
+                        &brush,
+                    )?;
+                }
+                Ok(())
+            })();
+            let end_result = inner_rt.EndDraw(None, None);
+            draw_result?;
+            end_result?;
 
             // bm_rt 에서 비트맵 추출. 부모 인터페이스 메서드 호출.
             let bitmap: ID2D1Bitmap = bm_rt.GetBitmap()?;

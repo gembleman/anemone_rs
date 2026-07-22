@@ -242,17 +242,17 @@ impl D2DRenderer {
     /// 테두리 그리기 (ARGB).
     ///
     /// `target` 은 BeginDraw/EndDraw 사이의 활성 render target.
-    /// `width` / `height` 는 그릴 영역 크기 (px).
+    /// `width` / `height` 는 그릴 영역 크기 (DIP).
     pub fn draw_border(
         &mut self,
         target: &ID2D1RenderTarget,
-        width: i32,
-        height: i32,
+        width: f32,
+        height: f32,
         thickness: i32,
         color: u32,
     ) -> Result<()> {
-        let w = width as f32;
-        let h = height as f32;
+        let w = width;
+        let h = height;
         let t = thickness as f32;
 
         // SAFETY: target is a valid render target between BeginDraw/EndDraw.

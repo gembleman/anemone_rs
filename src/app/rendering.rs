@@ -1,13 +1,8 @@
 use std::sync::Arc;
 
 use windows::{
-    Win32::{
-        Foundation::D2DERR_RECREATE_TARGET,
-        Graphics::Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET},
-        Graphics::Gdi::InvalidateRect,
-        UI::WindowsAndMessaging::SetTimer,
-    },
-    core::{Error, Result},
+    Win32::{Foundation::RECT, Graphics::Gdi::InvalidateRect, UI::WindowsAndMessaging::SetTimer},
+    core::Result,
 };
 
 use super::{App, COMPOSITION_RETRY_TIMER, state};
@@ -116,11 +111,40 @@ fn build_notice_render_blocks(config: &Config, text: &str) -> Vec<RenderBlock> {
     }]
 }
 
+#[inline]
+fn pixels_to_dips(value: i32, dpi: u32) -> f32 {
+    let dpi = if dpi == 0 { crate::dpi::BASE_DPI } else { dpi };
+    value as f32 * crate::dpi::BASE_DPI as f32 / dpi as f32
+}
+
+#[inline]
+fn dip_floor_to_pixels(value: i32, dpi: u32) -> i32 {
+    let dpi = if dpi == 0 { crate::dpi::BASE_DPI } else { dpi };
+    let scaled = value as i64 * dpi as i64;
+    scaled.div_euclid(crate::dpi::BASE_DPI as i64) as i32
+}
+
+#[inline]
+fn dip_ceil_to_pixels(value: i32, dpi: u32) -> i32 {
+    let dpi = if dpi == 0 { crate::dpi::BASE_DPI } else { dpi };
+    let scaled = value as i64 * dpi as i64;
+    (-(-scaled).div_euclid(crate::dpi::BASE_DPI as i64)) as i32
+}
+
+fn dip_rect_to_pixels(rect: &RECT, dpi: u32) -> RECT {
+    RECT {
+        left: dip_floor_to_pixels(rect.left, dpi),
+        top: dip_floor_to_pixels(rect.top, dpi),
+        right: dip_ceil_to_pixels(rect.right, dpi),
+        bottom: dip_ceil_to_pixels(rect.bottom, dpi),
+    }
+}
+
 impl App {
     const FRAME_WAIT_TIMEOUT_MS: u32 = 16;
 
-    fn text_layout_extent(size: i32, margin: i32) -> f32 {
-        size.saturating_sub(margin.saturating_mul(2)).max(1) as f32
+    fn text_layout_extent(size: f32, margin: i32) -> f32 {
+        (size - margin.saturating_mul(2) as f32).max(1.0)
     }
 
     pub(super) fn paint(&mut self) -> Result<()> {
@@ -188,11 +212,19 @@ impl App {
             Some(c) => c,
             None => return Ok(()),
         };
+        let dpi = crate::dpi::dpi_for_window(self.hwnd).max(1);
+        let dpi_changed = composition.set_dpi(dpi as f32);
         let renderer = match self.d2d_renderer.as_mut() {
             Some(r) => r,
             None => return Ok(()),
         };
-        let max_width = Self::text_layout_extent(self.model.runtime.client_size.width, margin_x);
+        if dpi_changed {
+            // Compatible render target bitmap은 생성 당시 DPI를 따르므로 다시 만든다.
+            renderer.invalidate_device_caches();
+        }
+        let client_width = pixels_to_dips(self.model.runtime.client_size.width, dpi);
+        let client_height = pixels_to_dips(self.model.runtime.client_size.height, dpi);
+        let max_width = Self::text_layout_extent(client_width, margin_x);
         if let Some(first) = render_blocks.first() {
             let mut top = first.top;
             for block in &mut render_blocks {
@@ -222,11 +254,7 @@ impl App {
             }
             WaitOutcome::Failed(e) => {
                 tracing::error!("DComp back buffer wait failed: {e}; recreating stack");
-                self.handle_device_lost();
-                // SAFETY: 새 스택을 다음 WM_PAINT에서 lazy-init하기 위해 예약.
-                unsafe {
-                    let _ = InvalidateRect(Some(self.hwnd), None, false);
-                }
+                self.recover_render_stack();
                 return Ok(());
             }
         }
@@ -253,13 +281,8 @@ impl App {
 
         // 테두리 그리기
         if border_visible
-            && let Err(e) = renderer.draw_border(
-                ctx,
-                self.model.runtime.client_size.width,
-                self.model.runtime.client_size.height,
-                border_width,
-                border_color,
-            )
+            && let Err(e) =
+                renderer.draw_border(ctx, client_width, client_height, border_width, border_color)
         {
             tracing::error!("D2D draw_border failed: {e}");
             frame_error = true;
@@ -269,10 +292,9 @@ impl App {
 
         // 텍스트 그리기
         for block in &render_blocks {
-            let max_height =
-                (self.model.runtime.client_size.height as f32 - block.top - margin_y as f32)
-                    .max(1.0)
-                    .min(block.height.max(1.0));
+            let max_height = (client_height - block.top - margin_y as f32)
+                .max(1.0)
+                .min(block.height.max(1.0));
             if let Err(e) = renderer.draw_text(
                 ctx,
                 &block.text,
@@ -292,32 +314,27 @@ impl App {
         let t = phase_record(PhaseField::Text, t);
 
         // EndDraw가 flush하므로 바로 Present한다. 이벤트 기반 paint라 vsync는 기다리지 않는다.
-        // Device loss면 캐시와 합성 스택을 버리고 다음 paint에서 다시 만든다.
+        // 이 단계의 실패는 render target 상태를 신뢰할 수 없으므로 종류와 무관하게 재생성한다.
         if let Err(e) = composition.end_draw() {
-            if Self::is_device_lost(&e) {
-                tracing::warn!("DComp end_draw: device lost ({e}), recreating stack");
-                self.handle_device_lost();
-                return Ok(());
-            }
-            tracing::error!("DComp end_draw failed: {e}");
-            // EndDraw가 실패한 frame은 완결되지 않았으므로 Present하지 않는다.
+            tracing::warn!("DComp end_draw failed ({e}); recreating stack");
+            self.recover_render_stack();
             return Ok(());
         }
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::EndDraw, t);
 
         if frame_error {
-            tracing::warn!("D2D frame contained draw errors; skipping present");
+            tracing::warn!("D2D frame contained draw errors; recreating stack");
+            self.recover_render_stack();
             return Ok(());
         }
 
         if let Err(e) = composition.present(0) {
-            if Self::is_device_lost(&e) {
-                tracing::warn!("DComp present: device lost ({e}), recreating stack");
-                self.handle_device_lost();
-                return Ok(());
-            }
-            tracing::error!("DComp present failed: {e}");
+            // 일부 드라이버는 D3DDDIERR_DEVICEREMOVED처럼 DXGI와 다른 HRESULT를
+            // 반환한다. Present 실패는 모두 동일한 안전한 복구 경로로 보낸다.
+            tracing::warn!("DComp present failed ({e}); recreating stack");
+            self.recover_render_stack();
+            return Ok(());
         }
         #[cfg(feature = "benchmark")]
         let t = phase_record(PhaseField::Present, t);
@@ -331,10 +348,9 @@ impl App {
             && let Some(d2d) = self.d2d_renderer.as_mut()
         {
             for block in &render_blocks {
-                let max_height =
-                    (self.model.runtime.client_size.height as f32 - block.top - margin_y as f32)
-                        .max(1.0)
-                        .min(block.height.max(1.0));
+                let max_height = (client_height - block.top - margin_y as f32)
+                    .max(1.0)
+                    .min(block.height.max(1.0));
                 let shadow_inflate = if block.style.shadow_enabled {
                     block
                         .style
@@ -361,7 +377,9 @@ impl App {
                     },
                     inflate,
                 ) {
-                    Ok(rects) => self.hit_region.extend_from_slice(rects),
+                    Ok(rects) => self
+                        .hit_region
+                        .extend(rects.iter().map(|rect| dip_rect_to_pixels(rect, dpi))),
                     Err(e) => tracing::warn!("compute_text_line_rects failed: {e}"),
                 }
             }
@@ -372,14 +390,6 @@ impl App {
         Ok(())
     }
 
-    /// EndDraw/Present 오류가 렌더 스택 재생성이 필요한 device loss인지 판정한다.
-    fn is_device_lost(e: &Error) -> bool {
-        let code = e.code();
-        code == D2DERR_RECREATE_TARGET
-            || code == DXGI_ERROR_DEVICE_REMOVED
-            || code == DXGI_ERROR_DEVICE_RESET
-    }
-
     /// Device loss 복구를 위해 합성 렌더러와 장치 종속 캐시를 비운다.
     fn handle_device_lost(&mut self) {
         self.composition = None;
@@ -388,11 +398,26 @@ impl App {
         }
     }
 
+    /// 렌더 스택을 비우고 다음 WM_PAINT에서 즉시 lazy-init하도록 예약한다.
+    fn recover_render_stack(&mut self) {
+        self.handle_device_lost();
+        // SAFETY: hwnd는 App이 소유한 유효한 top-level window handle이다.
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
     pub(super) fn resize(&mut self, width: i32, height: i32) -> Result<()> {
         // DXGI가 거부하는 최소화 상태의 0 크기는 무시한다.
         let Some(size) = state::ClientSize::drawable(width, height) else {
             return Ok(());
         };
+
+        // WM_DPICHANGED의 SetWindowPos가 WM_SIZE를 동기 발생시킨 뒤 client-size
+        // 동기화가 이어질 수 있다. 같은 크기라면 ResizeBuffers와 중복 paint를 피한다.
+        if self.model.runtime.client_size == size {
+            return Ok(());
+        }
 
         self.model.runtime.client_size = size;
 

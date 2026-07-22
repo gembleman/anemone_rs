@@ -6,13 +6,14 @@ use std::rc::Rc;
 
 use windows::{
     Win32::{
-        Foundation::{COLORREF, GetLastError, HMODULE, HWND},
+        Foundation::{COLORREF, GetLastError, HMODULE, HWND, RECT},
         Graphics::Gdi::{HBRUSH, UpdateWindow},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW,
-            HICON, IDC_ARROW, IsWindow, LWA_ALPHA, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
-            RegisterClassExW, SetLayeredWindowAttributes, TranslateMessage, WNDCLASSEXW, WNDPROC,
+            CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow, DispatchMessageW,
+            GetClientRect, GetMessageW, HICON, IDC_ARROW, IsWindow, LWA_ALPHA, LoadCursorW,
+            LoadIconW, MSG, PostQuitMessage, RegisterClassExW, SWP_NOACTIVATE, SWP_NOZORDER,
+            SetLayeredWindowAttributes, SetWindowPos, TranslateMessage, WNDCLASSEXW, WNDPROC,
             WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
@@ -128,10 +129,32 @@ impl App {
                 Some(instance.into()),
                 None,
             )?;
+            created_windows.main = Some(hwnd);
+
+            // CreateWindowEx의 좌표는 PMv2 프로세스에서 물리 pixel이다. 96-DPI 기준
+            // 초기 overlay 위치와 크기를 대상 모니터 DPI로 확장해 논리 값을 일정하게 둔다.
+            let initial_dpi = crate::dpi::dpi_for_window(hwnd);
+            let initial_x = crate::dpi::scale(INITIAL_WINDOW_X, initial_dpi);
+            let initial_y = crate::dpi::scale(INITIAL_WINDOW_Y, initial_dpi);
+            let initial_width = crate::dpi::scale(INITIAL_WINDOW_WIDTH, initial_dpi).max(1);
+            let initial_height = crate::dpi::scale(INITIAL_WINDOW_HEIGHT, initial_dpi).max(1);
+            SetWindowPos(
+                hwnd,
+                None,
+                initial_x,
+                initial_y,
+                initial_width,
+                initial_height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )?;
+            let mut client_rect = RECT::default();
+            GetClientRect(hwnd, &mut client_rect)?;
+            let initial_client_width = (client_rect.right - client_rect.left).max(1);
+            let initial_client_height = (client_rect.bottom - client_rect.top).max(1);
+
             // Top-level WS_EX_TRANSPARENT의 hit-test 통과는 layered window와 결합해야
             // 다른 process 창까지 보장된다. 불투명도는 DComp의 per-pixel alpha가 담당한다.
             SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
-            created_windows.main = Some(hwnd);
 
             // TaskbarCreated 메시지 등록
             let taskbar_created_msg = tray::register_taskbar_created_message();
@@ -153,8 +176,8 @@ impl App {
                     backlog: BacklogStore::new(),
                     runtime: state::AppState {
                         client_size: state::ClientSize::new(
-                            INITIAL_WINDOW_WIDTH,
-                            INITIAL_WINDOW_HEIGHT,
+                            initial_client_width,
+                            initial_client_height,
                         ),
                         original_text: String::new(),
                         translated_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),

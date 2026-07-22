@@ -130,7 +130,13 @@ impl App {
                 WM_DPICHANGED => {
                     // 권장 RECT 적용 후 WM_SIZE가 swap chain resize와 paint를 잇는다.
                     Self::apply_dpi_rect(hwnd, lparam);
-                    self.sync_client_size(hwnd);
+                    if !self.sync_client_size(hwnd)
+                        && let Err(e) = self.paint()
+                    {
+                        // 권장 rect가 위치만 바꾸거나 같은 pixel 크기여도 render target
+                        // DPI와 DPI 종속 cache는 반드시 갱신해야 한다.
+                        tracing::warn!("paint failed on DPI change: {e}");
+                    }
                     Some(LRESULT(0))
                 }
 
@@ -263,15 +269,21 @@ impl App {
         }
     }
 
-    fn sync_client_size(&mut self, hwnd: HWND) {
+    /// 실제 client 크기를 model/swap chain과 맞추고 크기가 바뀌었는지 반환한다.
+    fn sync_client_size(&mut self, hwnd: HWND) -> bool {
         let mut rect = RECT::default();
         match unsafe { GetClientRect(hwnd, &mut rect) } {
             Ok(()) => {
+                let previous = self.model.runtime.client_size;
                 if let Err(error) = self.resize(rect.right - rect.left, rect.bottom - rect.top) {
                     tracing::warn!("client-size synchronization failed: {error}");
                 }
+                self.model.runtime.client_size != previous
             }
-            Err(error) => tracing::warn!("GetClientRect failed after window resize: {error}"),
+            Err(error) => {
+                tracing::warn!("GetClientRect failed after window resize: {error}");
+                false
+            }
         }
     }
 
@@ -393,9 +405,9 @@ impl App {
                             return LRESULT(HTTRANSPARENT as isize);
                         }
                     }
-                    if let Some(hit) =
-                        window::hit_test_resize_border(hwnd, x, y, RESIZE_BORDER_WIDTH)
-                    {
+                    let dpi = crate::dpi::dpi_for_window(hwnd);
+                    let resize_border = crate::dpi::scale(RESIZE_BORDER_WIDTH, dpi).max(1);
+                    if let Some(hit) = window::hit_test_resize_border(hwnd, x, y, resize_border) {
                         return LRESULT(hit as isize);
                     }
                     return LRESULT(HTCAPTION as isize);
@@ -403,7 +415,9 @@ impl App {
 
                 WM_GETMINMAXINFO => {
                     let mm = &mut *(lparam.0 as *mut MINMAXINFO);
-                    window::set_min_track_size(mm, MIN_WINDOW_SIZE, MIN_WINDOW_SIZE);
+                    let dpi = crate::dpi::dpi_for_window(hwnd);
+                    let min_size = crate::dpi::scale(MIN_WINDOW_SIZE, dpi).max(1);
+                    window::set_min_track_size(mm, min_size, min_size);
                     return LRESULT(0);
                 }
                 _ => {}

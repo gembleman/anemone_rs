@@ -9,6 +9,33 @@ fn composition_retry_uses_bounded_exponential_backoff() {
 }
 
 #[test]
+fn physical_client_size_converts_to_dips() {
+    assert_eq!(pixels_to_dips(600, 144), 400.0);
+    assert_eq!(pixels_to_dips(400, 96), 400.0);
+    assert_eq!(pixels_to_dips(400, 0), 400.0);
+}
+
+#[test]
+fn dip_hit_rect_expands_outward_when_scaled_to_pixels() {
+    let rect = RECT {
+        left: -1,
+        top: 1,
+        right: 3,
+        bottom: 5,
+    };
+
+    assert_eq!(
+        dip_rect_to_pixels(&rect, 144),
+        RECT {
+            left: -2,
+            top: 1,
+            right: 5,
+            bottom: 8,
+        }
+    );
+}
+
+#[test]
 fn display_segments_apply_name_and_visibility_policies() {
     let config = crate::config::Config {
         show_name: true,
