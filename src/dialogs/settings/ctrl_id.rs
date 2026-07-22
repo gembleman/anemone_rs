@@ -119,6 +119,7 @@ pub const CUSTOM_API_SELECT: u16 = 1310;
 
 // 단축키 설정
 pub const HOTKEYS_LIST: u16 = 1400;
+pub const HOTKEYS_RESET: u16 = 1401;
 
 // 탭 컨트롤
 pub const TAB_CONTROL: u16 = 1290;

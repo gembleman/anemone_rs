@@ -91,7 +91,7 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::CUSTOM_API_SELECT,
 ];
 
-const HOTKEYS_IDS: &[u16] = &[ctrl_id::HOTKEYS_LIST];
+const HOTKEYS_IDS: &[u16] = &[ctrl_id::HOTKEYS_LIST, ctrl_id::HOTKEYS_RESET];
 
 impl SettingsDialog {
     /// 리소스에 정의된 컨트롤을 탭/엔진 그룹에 연결하고 설정값을 주입한다.

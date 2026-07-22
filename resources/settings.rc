@@ -154,6 +154,7 @@ BEGIN
     // 단축키 탭
     LTEXT           "바꿀 항목을 클릭한 뒤 원하는 단축키를 누르세요.", 2304, 14, 27, 249, 10
     CONTROL         "", 1400, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 14, 42, 249, 93
+    PUSHBUTTON      "기본값으로 초기화", 1401, 174, 141, 89, 14
 
     PUSHBUTTON      "적용", 1301, 149, 598, 57, 16
     DEFPUSHBUTTON   "닫기", 1300, 211, 598, 57, 16

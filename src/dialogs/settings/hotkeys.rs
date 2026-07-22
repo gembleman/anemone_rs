@@ -14,7 +14,7 @@ use windows::{
 };
 
 use super::{SettingsDialog, ctrl_id};
-use crate::config::{HotkeySlot, HotkeySpec};
+use crate::config::{HotkeyConfig, HotkeySlot, HotkeySpec};
 use crate::util::to_wide;
 
 pub(super) const WM_HOTKEY_CAPTURED: u32 = WM_APP + 0x31;
@@ -68,6 +68,16 @@ fn key_is_down(vk: VIRTUAL_KEY) -> bool {
 
 fn hotkey_from_state(vk: u32, ctrl: bool, shift: bool, alt: bool, win: bool) -> HotkeySpec {
     HotkeySpec::new(ctrl, shift, alt, win, vk)
+}
+
+fn reset_hotkeys(hotkeys: &mut HotkeyConfig) -> bool {
+    let defaults = HotkeyConfig::default();
+    if *hotkeys == defaults {
+        false
+    } else {
+        *hotkeys = defaults;
+        true
+    }
 }
 
 fn captured_hotkey(vk: u32) -> HotkeySpec {
@@ -254,6 +264,14 @@ impl SettingsDialog {
         self.refresh_hotkey_list();
     }
 
+    pub(super) fn reset_hotkeys_to_default(&mut self) {
+        let changed = reset_hotkeys(&mut self.draft.borrow_mut().hotkeys);
+        if changed {
+            self.has_unapplied_changes.set(true);
+            self.refresh_hotkey_list();
+        }
+    }
+
     pub(super) fn refresh_hotkey_list(&self) {
         let Ok(list) = self.control(ctrl_id::HOTKEYS_LIST) else {
             return;
@@ -316,5 +334,16 @@ mod tests {
         assert_eq!(slot_from_row(0), Some(HotkeySlot::ToggleWindow));
         assert_eq!(slot_from_row(3), Some(HotkeySlot::ClipboardWatch));
         assert_eq!(slot_from_row(4), None);
+    }
+
+    #[test]
+    fn reset_hotkeys_restores_defaults_only_when_needed() {
+        let defaults = HotkeyConfig::default();
+        let mut hotkeys = defaults.clone();
+        hotkeys.toggle_window = HotkeySpec::new(false, false, false, false, VK_F8.0 as u32);
+
+        assert!(reset_hotkeys(&mut hotkeys));
+        assert_eq!(hotkeys, defaults);
+        assert!(!reset_hotkeys(&mut hotkeys));
     }
 }

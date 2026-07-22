@@ -308,9 +308,10 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
 fn win32_hotkeys_tab_layout_smoke() {
     use super::ctrl_id;
     use crate::config::Config;
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         DestroyWindow, GetDesktopWindow, GetDlgItem, GetWindowRect, IsWindow, IsWindowVisible,
+        SendMessageW, WM_COMMAND,
     };
 
     struct DialogGuard(HWND);
@@ -329,8 +330,9 @@ fn win32_hotkeys_tab_layout_smoke() {
         unsafe { GetDlgItem(Some(dialog), id as i32).unwrap() }
     }
 
-    let hwnd =
-        SettingsDialog::show(unsafe { GetDesktopWindow() }, Config::default(), None).unwrap();
+    let mut config = Config::default();
+    config.hotkeys.toggle_window = "F8".parse().unwrap();
+    let hwnd = SettingsDialog::show(unsafe { GetDesktopWindow() }, config, None).unwrap();
     let _dialog = DialogGuard(hwnd);
     super::SETTINGS_INSTANCE.with(|slot| {
         let instance = slot.borrow().as_ref().expect("settings instance").clone();
@@ -338,15 +340,36 @@ fn win32_hotkeys_tab_layout_smoke() {
     });
 
     let mut list_rect = Default::default();
+    let mut reset_rect = Default::default();
     let mut tab_rect = Default::default();
     let mut apply_rect = Default::default();
     unsafe {
         GetWindowRect(control(hwnd, ctrl_id::HOTKEYS_LIST), &mut list_rect).unwrap();
+        GetWindowRect(control(hwnd, ctrl_id::HOTKEYS_RESET), &mut reset_rect).unwrap();
         GetWindowRect(control(hwnd, ctrl_id::TAB_CONTROL), &mut tab_rect).unwrap();
         GetWindowRect(control(hwnd, ctrl_id::APPLY), &mut apply_rect).unwrap();
     }
 
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::HOTKEYS_LIST)).as_bool() });
+    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::HOTKEYS_RESET)).as_bool() });
     assert!(list_rect.bottom <= tab_rect.bottom);
+    assert!(reset_rect.top > list_rect.bottom);
+    assert!(reset_rect.bottom <= tab_rect.bottom);
     assert!(list_rect.bottom < apply_rect.top);
+
+    let reset = control(hwnd, ctrl_id::HOTKEYS_RESET);
+    unsafe {
+        let _ = SendMessageW(
+            hwnd,
+            WM_COMMAND,
+            Some(WPARAM(usize::from(ctrl_id::HOTKEYS_RESET))),
+            Some(LPARAM(reset.0 as isize)),
+        );
+    }
+    super::SETTINGS_INSTANCE.with(|slot| {
+        let instance = slot.borrow().as_ref().expect("settings instance").clone();
+        let instance = instance.borrow();
+        assert_eq!(instance.draft.borrow().hotkeys, Default::default());
+        assert!(instance.has_unapplied_changes.get());
+    });
 }

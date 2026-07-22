@@ -206,6 +206,7 @@ impl SettingsDialog {
                 toggle_field!(self, BoolSetting::ClipboardCacheEnabled);
             }
             CLIPBOARD_CACHE_CLEAR => self.clear_translation_cache(),
+            HOTKEYS_RESET => self.reset_hotkeys_to_default(),
 
             // 텍스트 크기 +/-
             TEXTSIZE_MINUS => handle_size_button!(
