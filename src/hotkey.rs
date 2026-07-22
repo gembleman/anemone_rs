@@ -3,6 +3,7 @@ use windows::{
     core::*,
 };
 
+use crate::config::HotkeyConfig;
 use crate::menu;
 
 // 핫키 ID
@@ -10,6 +11,7 @@ pub mod id {
     pub const TOGGLE_WINDOW: i32 = 1;
     pub const TEXT_SIZE_UP: i32 = 2;
     pub const TEXT_SIZE_DOWN: i32 = 3;
+    pub const CLIPBOARD_WATCH: i32 = 4;
 }
 
 pub struct HotkeyManager {
@@ -25,22 +27,21 @@ impl HotkeyManager {
         }
     }
 
-    pub fn register_defaults(&mut self) -> Result<()> {
+    /// `HotkeyConfig`에 저장된 사용자 지정 단축키를 등록한다.
+    /// 하나라도 등록에 실패하면(다른 앱이 이미 점유 등) 이번 호출에서 등록한 것만 롤백한다.
+    pub fn register_from_config(&mut self, config: &HotkeyConfig) -> Result<()> {
         let registered_before = self.registered.len();
         let result = (|| {
-            // Ctrl+Shift+A: 윈도우 토글
-            self.register(id::TOGGLE_WINDOW, MOD_CONTROL | MOD_SHIFT, VK_A.0 as u32)?;
-
-            // Ctrl+Shift+Up: 텍스트 크기 증가
-            self.register(id::TEXT_SIZE_UP, MOD_CONTROL | MOD_SHIFT, VK_UP.0 as u32)?;
-
-            // Ctrl+Shift+Down: 텍스트 크기 감소
-            self.register(
-                id::TEXT_SIZE_DOWN,
-                MOD_CONTROL | MOD_SHIFT,
-                VK_DOWN.0 as u32,
-            )?;
-
+            use crate::config::HotkeySlot;
+            for (slot, spec) in config.entries() {
+                let hotkey_id = match slot {
+                    HotkeySlot::ToggleWindow => id::TOGGLE_WINDOW,
+                    HotkeySlot::TextSizeUp => id::TEXT_SIZE_UP,
+                    HotkeySlot::TextSizeDown => id::TEXT_SIZE_DOWN,
+                    HotkeySlot::ClipboardWatch => id::CLIPBOARD_WATCH,
+                };
+                self.register(hotkey_id, spec.modifiers(), spec.vk)?;
+            }
             Ok(())
         })();
         if result.is_err() {
@@ -80,6 +81,7 @@ impl HotkeyManager {
             id::TOGGLE_WINDOW => Some(menu::id::WINDOW_SHOW),
             id::TEXT_SIZE_UP => Some(menu::id::TEXT_SIZE_UP),
             id::TEXT_SIZE_DOWN => Some(menu::id::TEXT_SIZE_DOWN),
+            id::CLIPBOARD_WATCH => Some(menu::id::CLIPBOARD_WATCH),
             _ => None,
         }
     }

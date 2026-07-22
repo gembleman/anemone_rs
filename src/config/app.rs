@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ColorType, TextAlign, TextStyle, TextType, TranslationConfig};
+use super::{ColorType, HotkeyConfig, TextAlign, TextStyle, TextType, TranslationConfig};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
@@ -65,6 +65,10 @@ pub struct Config {
     // 번역 설정
     #[serde(default)]
     pub translation: TranslationConfig,
+
+    /// 전역 단축키 설정. 기존 config.toml(필드 없음)은 기본값(Ctrl+Shift+A/Up/Down/C)으로 채워진다.
+    #[serde(default)]
+    pub hotkeys: HotkeyConfig,
 }
 
 impl Default for Config {
@@ -113,6 +117,9 @@ impl Default for Config {
 
             // 번역
             translation: TranslationConfig::default(),
+
+            // 단축키
+            hotkeys: HotkeyConfig::default(),
         }
     }
 }

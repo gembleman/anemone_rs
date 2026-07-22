@@ -2,6 +2,7 @@
 
 mod ctrl_id;
 mod handlers;
+mod hotkeys;
 mod init;
 
 use std::cell::Cell;
@@ -32,6 +33,9 @@ use crate::util::to_wide;
 const TAB_APPEARANCE: usize = 0;
 const TAB_DISPLAY: usize = 1;
 const TAB_TRANSLATION: usize = 2;
+const TAB_HOTKEYS: usize = 3;
+/// 탭 개수. `tab_controls` 배열 크기와 일치해야 한다.
+const TAB_COUNT: usize = 4;
 
 /// 선택된 엔진 패널만 표시하기 위한 컨트롤 그룹.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +78,7 @@ pub struct SettingsDialog {
     last_applied: RefCell<SettingsDraft>,
     actions: Option<AppActionSender>,
     /// 각 탭에 속한 컨트롤 HWND 목록 (탭 전환 시 표시/숨김)
-    tab_controls: [Vec<HWND>; 3],
+    tab_controls: [Vec<HWND>; TAB_COUNT],
     current_tab: usize,
     applied_dpi: u32,
     scroll_pos: i32,
@@ -127,7 +131,7 @@ unsafe extern "system" fn settings_dialog_proc(
                 draft,
                 last_applied,
                 actions,
-                tab_controls: [Vec::new(), Vec::new(), Vec::new()],
+                tab_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
                 current_tab: TAB_APPEARANCE,
                 applied_dpi: crate::dpi::dpi_for_window(hwnd),
                 scroll_pos: 0,
@@ -590,6 +594,7 @@ impl SettingsDialog {
                 .get_engine()
                 .map(Self::translation_height_for_engine)
                 .unwrap_or(245),
+            TAB_HOTKEYS => 190,
             _ => 505,
         }
     }

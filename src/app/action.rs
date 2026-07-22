@@ -107,6 +107,7 @@ impl App {
                 }
                 Effect::SetClipboardWatch(enabled) => self.apply_clipboard_watch(enabled),
                 Effect::SetMagnetic(enabled) => self.apply_magnetic_request(enabled),
+                Effect::ReregisterHotkeys => self.reregister_hotkeys(),
                 Effect::OpenDialog(kind) => match kind {
                     DialogKind::Settings => self.open_settings_dialog(),
                     DialogKind::Translate => self.open_translate_dialog(),

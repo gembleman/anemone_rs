@@ -91,6 +91,33 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::CUSTOM_API_SELECT,
 ];
 
+const HOTKEYS_IDS: &[u16] = &[
+    ctrl_id::HOTKEY_TOGGLE_WINDOW_CTRL,
+    ctrl_id::HOTKEY_TOGGLE_WINDOW_SHIFT,
+    ctrl_id::HOTKEY_TOGGLE_WINDOW_ALT,
+    ctrl_id::HOTKEY_TOGGLE_WINDOW_WIN,
+    ctrl_id::HOTKEY_TOGGLE_WINDOW_KEY,
+    ctrl_id::HOTKEY_TOGGLE_WINDOW_PREVIEW,
+    ctrl_id::HOTKEY_TEXT_SIZE_UP_CTRL,
+    ctrl_id::HOTKEY_TEXT_SIZE_UP_SHIFT,
+    ctrl_id::HOTKEY_TEXT_SIZE_UP_ALT,
+    ctrl_id::HOTKEY_TEXT_SIZE_UP_WIN,
+    ctrl_id::HOTKEY_TEXT_SIZE_UP_KEY,
+    ctrl_id::HOTKEY_TEXT_SIZE_UP_PREVIEW,
+    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_CTRL,
+    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_SHIFT,
+    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_ALT,
+    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_WIN,
+    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_KEY,
+    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_PREVIEW,
+    ctrl_id::HOTKEY_CLIPBOARD_WATCH_CTRL,
+    ctrl_id::HOTKEY_CLIPBOARD_WATCH_SHIFT,
+    ctrl_id::HOTKEY_CLIPBOARD_WATCH_ALT,
+    ctrl_id::HOTKEY_CLIPBOARD_WATCH_WIN,
+    ctrl_id::HOTKEY_CLIPBOARD_WATCH_KEY,
+    ctrl_id::HOTKEY_CLIPBOARD_WATCH_PREVIEW,
+];
+
 impl SettingsDialog {
     /// 리소스에 정의된 컨트롤을 탭/엔진 그룹에 연결하고 설정값을 주입한다.
     pub(super) fn initialize_controls(&mut self) -> Result<()> {
@@ -100,15 +127,23 @@ impl SettingsDialog {
         self.register_ids(TAB_DISPLAY, DISPLAY_IDS)?;
         self.register_ids(TAB_TRANSLATION, ctrl_id::TRANSLATION_STATIC_IDS)?;
         self.register_ids(TAB_TRANSLATION, TRANSLATION_IDS)?;
+        self.register_ids(TAB_HOTKEYS, ctrl_id::HOTKEYS_STATIC_IDS)?;
+        self.register_ids(TAB_HOTKEYS, HOTKEYS_IDS)?;
         self.register_engine_controls()?;
         self.initialize_tab_titles()?;
         self.initialize_values()?;
+        self.initialize_hotkey_combos()?;
         for &hwnd in &self.tab_controls[TAB_DISPLAY] {
             unsafe {
                 let _ = ShowWindow(hwnd, SW_HIDE);
             }
         }
         for &hwnd in &self.tab_controls[TAB_TRANSLATION] {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        for &hwnd in &self.tab_controls[TAB_HOTKEYS] {
             unsafe {
                 let _ = ShowWindow(hwnd, SW_HIDE);
             }
@@ -385,7 +420,7 @@ impl SettingsDialog {
         Ok(())
     }
 
-    fn control(&self, id: u16) -> Result<HWND> {
+    pub(super) fn control(&self, id: u16) -> Result<HWND> {
         unsafe { GetDlgItem(Some(self.hwnd), id as i32) }
     }
 
@@ -409,7 +444,7 @@ impl SettingsDialog {
 
     fn initialize_tab_titles(&self) -> Result<()> {
         let tab = self.control(ctrl_id::TAB_CONTROL)?;
-        for (index, title) in ["외관", "표시·윈도우", "번역"].iter().enumerate() {
+        for (index, title) in ["외관", "표시·윈도우", "번역", "단축키"].iter().enumerate() {
             let mut wide = to_wide(title);
             let item = TCITEMW {
                 mask: TCIF_TEXT,
@@ -429,7 +464,7 @@ impl SettingsDialog {
         Ok(())
     }
 
-    fn initialize_combo(&self, id: u16, items: &[&str], selected: usize) -> Result<()> {
+    pub(super) fn initialize_combo(&self, id: u16, items: &[&str], selected: usize) -> Result<()> {
         let combo = self.control(id)?;
         for item in items {
             let wide = to_wide(item);
@@ -495,7 +530,7 @@ impl SettingsDialog {
         Ok(())
     }
 
-    fn set_checked(&self, id: u16, checked: bool) -> Result<()> {
+    pub(super) fn set_checked(&self, id: u16, checked: bool) -> Result<()> {
         let control = self.control(id)?;
         let state = if checked { BST_CHECKED } else { BST_UNCHECKED };
         unsafe {
@@ -509,7 +544,7 @@ impl SettingsDialog {
         Ok(())
     }
 
-    fn set_text(&self, id: u16, text: &str) -> Result<()> {
+    pub(super) fn set_text(&self, id: u16, text: &str) -> Result<()> {
         let control = self.control(id)?;
         unsafe { SetWindowTextW(control, &HSTRING::from(text)) }
     }

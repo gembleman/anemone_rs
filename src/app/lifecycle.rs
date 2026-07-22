@@ -196,9 +196,9 @@ impl App {
                 // 트레이 아이콘 생성
                 app_ref.tray.create(hwnd, APP_ICON_ID)?;
 
-                // 핫키 등록
+                // 핫키 등록 (config에 저장된 사용자 지정 단축키 사용)
                 let mut hotkey = HotkeyManager::new(hwnd);
-                if let Err(e) = hotkey.register_defaults() {
+                if let Err(e) = hotkey.register_from_config(&app_ref.model.config.hotkeys) {
                     tracing::warn!("Failed to register hotkeys: {e}");
                 }
                 app_ref.hotkey = Some(hotkey);

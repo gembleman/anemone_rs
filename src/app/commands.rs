@@ -328,6 +328,25 @@ impl App {
         }
     }
 
+    /// 설정 다이얼로그에서 단축키가 바뀐 뒤 호출된다. 기존 등록을 모두 해제하고
+    /// 현재 config 기준으로 다시 등록해 실행 중에도 즉시 새 단축키가 반영되게 한다.
+    pub(super) fn reregister_hotkeys(&mut self) {
+        let Some(hotkey) = self.hotkey.as_mut() else {
+            return;
+        };
+        hotkey.unregister_all();
+        if let Err(error) = hotkey.register_from_config(&self.model.config.hotkeys) {
+            tracing::warn!("단축키를 다시 등록하지 못했습니다: {error}");
+            crate::dialogs::helpers::show_error_message(
+                self.hwnd,
+                "단축키 등록 오류",
+                &format!(
+                    "단축키를 등록하지 못했습니다. 다른 프로그램이 이미 사용 중일 수 있습니다.\n\n{error}"
+                ),
+            );
+        }
+    }
+
     /// Idempotently synchronize the persisted setting and the live WinEvent hook.
     pub(super) fn set_magnetic_enabled(&mut self, enabled: bool) -> Result<()> {
         match state::magnetic_action(enabled, self.magnetic.is_some()) {

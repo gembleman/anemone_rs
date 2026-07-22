@@ -197,6 +197,8 @@ pub(super) enum Effect {
     SetClickThrough(bool),
     SetClipboardWatch(bool),
     SetMagnetic(bool),
+    /// 단축키 설정이 바뀌었으므로 App이 소유한 HotkeyManager를 config 기준으로 재등록해야 한다.
+    ReregisterHotkeys,
     ClearTranslationCache,
     OpenDialog(DialogKind),
     SettingsDialogClosed,
@@ -223,8 +225,14 @@ impl AppModel {
                 vec![Effect::SyncWindowState, Effect::Repaint]
             }
             AppAction::CommitSettings(draft) => {
+                let hotkeys_changed = self.config.hotkeys != draft.hotkeys;
                 self.config = draft.into_config();
-                vec![Effect::SyncWindowState, Effect::Repaint, Effect::SaveConfig]
+                let mut effects =
+                    vec![Effect::SyncWindowState, Effect::Repaint, Effect::SaveConfig];
+                if hotkeys_changed {
+                    effects.push(Effect::ReregisterHotkeys);
+                }
+                effects
             }
             AppAction::ClearBacklog => {
                 self.backlog.clear();
