@@ -14,29 +14,35 @@ BEGIN
     // 외관 탭
     GROUPBOX        "배경 설정", 2000, 9, 19, 126, 40
     LTEXT           "투명도:", 2001, 14, 29, 29, 10
-    CONTROL         "", 1001, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 43, 28, 86, 12
+    CONTROL         "", 1001, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 43, 28, 56, 12
+    EDITTEXT        1004, 102, 28, 27, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
     CONTROL         "배경색", 1002, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 14, 43, 40, 13
     CONTROL         "표시", 1003, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 60, 44, 46, 11
 
     GROUPBOX        "텍스트 크기", 2002, 140, 19, 131, 40
-    CONTROL         "", 1010, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 146, 28, 120, 12
+    CONTROL         "", 1010, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 146, 28, 82, 12
+    EDITTEXT        1014, 232, 28, 30, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
     PUSHBUTTON      "-", 1011, 146, 43, 20, 13
     PUSHBUTTON      "+", 1012, 169, 43, 20, 13
     LTEXT           "크기:", 1013, 194, 44, 57, 10
 
     GROUPBOX        "외곽선 설정", 2003, 9, 61, 263, 40
     LTEXT           "외곽선1:", 2004, 14, 71, 37, 10
-    CONTROL         "", 1020, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 51, 70, 51, 12
-    PUSHBUTTON      "-", 1021, 106, 70, 14, 12
-    PUSHBUTTON      "+", 1022, 122, 70, 14, 12
+    CONTROL         "", 1020, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 51, 70, 33, 12
+    EDITTEXT        1023, 86, 70, 22, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    PUSHBUTTON      "-", 1021, 110, 70, 13, 12
+    PUSHBUTTON      "+", 1022, 124, 70, 13, 12
     LTEXT           "외곽선2:", 2005, 146, 71, 37, 10
-    CONTROL         "", 1030, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 183, 70, 51, 12
-    PUSHBUTTON      "-", 1031, 237, 70, 14, 12
-    PUSHBUTTON      "+", 1032, 253, 70, 14, 12
+    CONTROL         "", 1030, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 183, 70, 33, 12
+    EDITTEXT        1033, 218, 70, 22, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    PUSHBUTTON      "-", 1031, 242, 70, 13, 12
+    PUSHBUTTON      "+", 1032, 256, 70, 13, 12
     LTEXT           "그림자 X:", 2006, 14, 86, 37, 10
     CONTROL         "", 1040, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 51, 85, 57, 12
+    EDITTEXT        1041, 110, 85, 25, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
     LTEXT           "그림자 Y:", 2007, 146, 86, 37, 10
     CONTROL         "", 1042, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 183, 85, 57, 12
+    EDITTEXT        1043, 242, 85, 25, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
 
     GROUPBOX        "이름 설정", 2008, 9, 104, 86, 67
     CONTROL         "주색상", 1100, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 11, 115, 38, 12
@@ -64,17 +70,21 @@ BEGIN
 
     GROUPBOX        "텍스트 여백", 2011, 9, 173, 263, 27
     LTEXT           "좌우:", 2012, 14, 185, 20, 10
-    CONTROL         "", 1050, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 34, 184, 51, 12
+    CONTROL         "", 1050, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 34, 184, 30, 12
+    EDITTEXT        1051, 66, 184, 25, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
     LTEXT           "상하:", 2013, 97, 185, 20, 10
-    CONTROL         "", 1052, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 117, 184, 51, 12
+    CONTROL         "", 1052, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 117, 184, 30, 12
+    EDITTEXT        1053, 149, 184, 25, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
     LTEXT           "이름:", 2014, 186, 185, 20, 10
-    CONTROL         "", 1054, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 206, 184, 51, 12
+    CONTROL         "", 1054, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 206, 184, 30, 12
+    EDITTEXT        1055, 238, 184, 25, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
 
     GROUPBOX        "테두리 설정", 2015, 9, 203, 263, 27
     CONTROL         "표시", 1130, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 214, 34, 11
     CONTROL         "테두리색", 1131, "BUTTON", BS_OWNERDRAW | WS_TABSTOP, 51, 213, 46, 13
     LTEXT           "두께:", 2016, 103, 214, 23, 10
     CONTROL         "", 1132, "msctls_trackbar32", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 126, 213, 86, 12
+    EDITTEXT        1133, 216, 213, 28, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
 
     // 표시·윈도우 탭
     GROUPBOX        "표시 옵션", 2100, 9, 19, 263, 53

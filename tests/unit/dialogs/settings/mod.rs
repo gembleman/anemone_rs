@@ -187,6 +187,23 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_SOURCE_LANG), 2);
     assert_eq!(combo_index(hwnd, ctrl_id::TRANS_TARGET_LANG), 5);
 
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::MARGIN_X_EDIT)),
+        config.text_margin_x.to_string()
+    );
+    unsafe {
+        SetWindowTextW(control(hwnd, ctrl_id::MARGIN_X_EDIT), w!("999")).unwrap();
+    }
+    send_killfocus(hwnd, ctrl_id::MARGIN_X_EDIT);
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::MARGIN_X_EDIT)),
+        "300"
+    );
+    super::SETTINGS_INSTANCE.with(|slot| {
+        let instance = slot.borrow().as_ref().expect("settings instance").clone();
+        assert_eq!(instance.borrow().draft.borrow().text_margin_x, 300);
+    });
+
     super::SETTINGS_INSTANCE.with(|slot| {
         let instance = slot.borrow().as_ref().expect("settings instance").clone();
         instance.borrow_mut().switch_tab(super::TAB_TRANSLATION);

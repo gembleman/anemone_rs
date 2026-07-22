@@ -20,6 +20,96 @@ use crate::translation::settings::{
 };
 use crate::util::to_wide;
 
+#[derive(Clone, Copy)]
+struct NumericControlBinding {
+    trackbar_id: u16,
+    edit_id: u16,
+    setting: NumericSetting,
+}
+
+const NUMERIC_CONTROL_BINDINGS: &[NumericControlBinding] = &[
+    NumericControlBinding {
+        trackbar_id: ctrl_id::BACKGROUND_TRACKBAR,
+        edit_id: ctrl_id::BACKGROUND_EDIT,
+        setting: NumericSetting::BackgroundAlpha,
+    },
+    NumericControlBinding {
+        trackbar_id: ctrl_id::TEXTSIZE_TRACKBAR,
+        edit_id: ctrl_id::TEXTSIZE_EDIT,
+        setting: NumericSetting::TextSize(ColorType::Primary),
+    },
+    NumericControlBinding {
+        trackbar_id: ctrl_id::OUTLINE1_TRACKBAR,
+        edit_id: ctrl_id::OUTLINE1_EDIT,
+        setting: NumericSetting::TextSize(ColorType::Outline1),
+    },
+    NumericControlBinding {
+        trackbar_id: ctrl_id::OUTLINE2_TRACKBAR,
+        edit_id: ctrl_id::OUTLINE2_EDIT,
+        setting: NumericSetting::TextSize(ColorType::Outline2),
+    },
+    NumericControlBinding {
+        trackbar_id: ctrl_id::SHADOW_X_TRACKBAR,
+        edit_id: ctrl_id::SHADOW_X_EDIT,
+        setting: NumericSetting::ShadowOffsetX,
+    },
+    NumericControlBinding {
+        trackbar_id: ctrl_id::SHADOW_Y_TRACKBAR,
+        edit_id: ctrl_id::SHADOW_Y_EDIT,
+        setting: NumericSetting::ShadowOffsetY,
+    },
+    NumericControlBinding {
+        trackbar_id: ctrl_id::MARGIN_X_TRACKBAR,
+        edit_id: ctrl_id::MARGIN_X_EDIT,
+        setting: NumericSetting::TextMarginX,
+    },
+    NumericControlBinding {
+        trackbar_id: ctrl_id::MARGIN_Y_TRACKBAR,
+        edit_id: ctrl_id::MARGIN_Y_EDIT,
+        setting: NumericSetting::TextMarginY,
+    },
+    NumericControlBinding {
+        trackbar_id: ctrl_id::MARGIN_NAME_TRACKBAR,
+        edit_id: ctrl_id::MARGIN_NAME_EDIT,
+        setting: NumericSetting::NameMargin,
+    },
+    NumericControlBinding {
+        trackbar_id: ctrl_id::BORDER_SIZE_TRACKBAR,
+        edit_id: ctrl_id::BORDER_SIZE_EDIT,
+        setting: NumericSetting::BorderWidth,
+    },
+];
+
+fn numeric_binding_for_trackbar(id: u16) -> Option<NumericControlBinding> {
+    NUMERIC_CONTROL_BINDINGS
+        .iter()
+        .copied()
+        .find(|binding| binding.trackbar_id == id)
+}
+
+fn numeric_binding_for_edit(id: u16) -> Option<NumericControlBinding> {
+    NUMERIC_CONTROL_BINDINGS
+        .iter()
+        .copied()
+        .find(|binding| binding.edit_id == id)
+}
+
+fn numeric_setting_value(config: &crate::config::Config, setting: NumericSetting) -> i32 {
+    match setting {
+        NumericSetting::BackgroundAlpha => ((config.background_color >> 24) & 0xff) as i32,
+        NumericSetting::TextSize(ColorType::Primary) => config.translation_style.size,
+        NumericSetting::TextSize(ColorType::Outline1) => config.translation_style.outline1_size,
+        NumericSetting::TextSize(ColorType::Outline2) => config.translation_style.outline2_size,
+        NumericSetting::TextSize(ColorType::Shadow) => 0,
+        NumericSetting::ShadowOffsetX => config.shadow_offset_x,
+        NumericSetting::ShadowOffsetY => config.shadow_offset_y,
+        NumericSetting::TextMarginX => config.text_margin_x,
+        NumericSetting::TextMarginY => config.text_margin_y,
+        NumericSetting::NameMargin => config.name_margin,
+        NumericSetting::BorderWidth => config.border_width,
+    }
+}
+
 fn take_unapplied_changes(pending: &std::cell::Cell<bool>) -> bool {
     pending.replace(false)
 }
@@ -230,14 +320,14 @@ impl SettingsDialog {
                 |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
                 ColorType::Outline1,
                 -1,
-                |s: &Self, v| s.update_trackbar_pos(OUTLINE1_TRACKBAR, v)
+                |s: &Self, v| s.update_numeric_ui(OUTLINE1_TRACKBAR, OUTLINE1_EDIT, v)
             ),
             OUTLINE1_PLUS => handle_size_button!(
                 self,
                 |cfg: &crate::config::Config| cfg.translation_style.outline1_size,
                 ColorType::Outline1,
                 1,
-                |s: &Self, v| s.update_trackbar_pos(OUTLINE1_TRACKBAR, v)
+                |s: &Self, v| s.update_numeric_ui(OUTLINE1_TRACKBAR, OUTLINE1_EDIT, v)
             ),
 
             // 외곽선2 +/-
@@ -246,14 +336,14 @@ impl SettingsDialog {
                 |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
                 ColorType::Outline2,
                 -1,
-                |s: &Self, v| s.update_trackbar_pos(OUTLINE2_TRACKBAR, v)
+                |s: &Self, v| s.update_numeric_ui(OUTLINE2_TRACKBAR, OUTLINE2_EDIT, v)
             ),
             OUTLINE2_PLUS => handle_size_button!(
                 self,
                 |cfg: &crate::config::Config| cfg.translation_style.outline2_size,
                 ColorType::Outline2,
                 1,
-                |s: &Self, v| s.update_trackbar_pos(OUTLINE2_TRACKBAR, v)
+                |s: &Self, v| s.update_numeric_ui(OUTLINE2_TRACKBAR, OUTLINE2_EDIT, v)
             ),
 
             // EzTrans DLL 찾아보기
@@ -481,32 +571,23 @@ impl SettingsDialog {
     pub(super) fn handle_trackbar(&mut self, id: u16, value: i32) {
         use ctrl_id::*;
 
-        let setting = match id {
-            BACKGROUND_TRACKBAR => NumericSetting::BackgroundAlpha,
-            TEXTSIZE_TRACKBAR => NumericSetting::TextSize(ColorType::Primary),
-            OUTLINE1_TRACKBAR => NumericSetting::TextSize(ColorType::Outline1),
-            OUTLINE2_TRACKBAR => NumericSetting::TextSize(ColorType::Outline2),
-            SHADOW_X_TRACKBAR => NumericSetting::ShadowOffsetX,
-            SHADOW_Y_TRACKBAR => NumericSetting::ShadowOffsetY,
-            MARGIN_X_TRACKBAR => NumericSetting::TextMarginX,
-            MARGIN_Y_TRACKBAR => NumericSetting::TextMarginY,
-            MARGIN_NAME_TRACKBAR => NumericSetting::NameMargin,
-            BORDER_SIZE_TRACKBAR => NumericSetting::BorderWidth,
-            LLM_TEMPERATURE_TRACKBAR => {
-                let _ = self.apply_translation_change(
-                    TranslationSettingChange::LlmTemperatureSlider(value),
-                );
-                let temp = self.draft.borrow().translation.llm.temperature;
-                self.set_control_text(LLM_TEMPERATURE_LABEL, &format!("{:.2}", temp));
-                return;
-            }
-            _ => return,
-        };
-        self.apply_settings_change(SettingsChange::Numeric { setting, value });
-        if id == TEXTSIZE_TRACKBAR {
-            let size = self.draft.borrow().translation_style.size;
-            self.set_control_text(TEXTSIZE_TEXT, &format!("크기: {size}"));
+        if id == LLM_TEMPERATURE_TRACKBAR {
+            let _ = self
+                .apply_translation_change(TranslationSettingChange::LlmTemperatureSlider(value));
+            let temp = self.draft.borrow().translation.llm.temperature;
+            self.set_control_text(LLM_TEMPERATURE_LABEL, &format!("{:.2}", temp));
+            return;
         }
+
+        let Some(binding) = numeric_binding_for_trackbar(id) else {
+            return;
+        };
+        self.apply_settings_change(SettingsChange::Numeric {
+            setting: binding.setting,
+            value,
+        });
+        let actual = numeric_setting_value(&self.draft.borrow(), binding.setting);
+        self.set_control_text(binding.edit_id, &actual.to_string());
     }
 
     /// ComboBox 선택 변경 처리
@@ -704,6 +785,18 @@ impl SettingsDialog {
     /// Edit 컨트롤 포커스 해제 시 값 저장
     fn handle_edit_killfocus(&mut self, ctrl_id: u16) {
         let text = self.get_control_text(ctrl_id);
+        if let Some(binding) = numeric_binding_for_edit(ctrl_id) {
+            if let Ok(value) = text.trim().parse::<i32>() {
+                self.apply_settings_change(SettingsChange::Numeric {
+                    setting: binding.setting,
+                    value,
+                });
+            }
+            let actual = numeric_setting_value(&self.draft.borrow(), binding.setting);
+            self.update_numeric_ui(binding.trackbar_id, binding.edit_id, actual);
+            return;
+        }
+
         use ctrl_id::*;
         let change = match ctrl_id {
             PAPAGO_ID_EDIT => TranslationSettingChange::PapagoClientId(text),
@@ -768,10 +861,14 @@ impl SettingsDialog {
         }
     }
 
-    /// 텍스트 크기 UI 업데이트 (트랙바 위치 및 레이블)
+    fn update_numeric_ui(&self, trackbar_id: u16, edit_id: u16, value: i32) {
+        self.update_trackbar_pos(trackbar_id, value);
+        self.set_control_text(edit_id, &value.to_string());
+    }
+
+    /// 텍스트 크기 UI 업데이트 (트랙바 위치 및 숫자 입력란)
     fn update_textsize_ui(&self, size: i32) {
-        self.update_trackbar_pos(ctrl_id::TEXTSIZE_TRACKBAR, size);
-        self.set_control_text(ctrl_id::TEXTSIZE_TEXT, &format!("크기: {}", size));
+        self.update_numeric_ui(ctrl_id::TEXTSIZE_TRACKBAR, ctrl_id::TEXTSIZE_EDIT, size);
     }
 
     fn notify_preview(&self) {

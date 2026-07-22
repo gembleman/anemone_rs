@@ -6,18 +6,24 @@ const APPEARANCE_IDS: &[u16] = &[
     ctrl_id::BACKGROUND_TRACKBAR,
     ctrl_id::BACKGROUND_COLOR,
     ctrl_id::BACKGROUND_SWITCH,
+    ctrl_id::BACKGROUND_EDIT,
     ctrl_id::TEXTSIZE_TRACKBAR,
     ctrl_id::TEXTSIZE_MINUS,
     ctrl_id::TEXTSIZE_PLUS,
     ctrl_id::TEXTSIZE_TEXT,
+    ctrl_id::TEXTSIZE_EDIT,
     ctrl_id::OUTLINE1_TRACKBAR,
     ctrl_id::OUTLINE1_MINUS,
     ctrl_id::OUTLINE1_PLUS,
+    ctrl_id::OUTLINE1_EDIT,
     ctrl_id::OUTLINE2_TRACKBAR,
     ctrl_id::OUTLINE2_MINUS,
     ctrl_id::OUTLINE2_PLUS,
+    ctrl_id::OUTLINE2_EDIT,
     ctrl_id::SHADOW_X_TRACKBAR,
+    ctrl_id::SHADOW_X_EDIT,
     ctrl_id::SHADOW_Y_TRACKBAR,
+    ctrl_id::SHADOW_Y_EDIT,
     ctrl_id::NAME_COLOR,
     ctrl_id::NAME_OUTLINE1,
     ctrl_id::NAME_OUTLINE2,
@@ -37,11 +43,15 @@ const APPEARANCE_IDS: &[u16] = &[
     ctrl_id::TRANS_FONT,
     ctrl_id::TRANS_SHADOW,
     ctrl_id::MARGIN_X_TRACKBAR,
+    ctrl_id::MARGIN_X_EDIT,
     ctrl_id::MARGIN_Y_TRACKBAR,
+    ctrl_id::MARGIN_Y_EDIT,
     ctrl_id::MARGIN_NAME_TRACKBAR,
+    ctrl_id::MARGIN_NAME_EDIT,
     ctrl_id::BORDER_MODE,
     ctrl_id::BORDER_COLOR,
     ctrl_id::BORDER_SIZE_TRACKBAR,
+    ctrl_id::BORDER_SIZE_EDIT,
 ];
 
 const DISPLAY_IDS: &[u16] = &[
@@ -193,6 +203,10 @@ impl SettingsDialog {
             255,
             ((config.background_color >> 24) & 0xff) as i32,
         )?;
+        self.set_text(
+            ctrl_id::BACKGROUND_EDIT,
+            &((config.background_color >> 24) & 0xff).to_string(),
+        )?;
         self.set_checked(ctrl_id::BACKGROUND_SWITCH, config.background_visible)?;
         self.initialize_trackbar(
             ctrl_id::TEXTSIZE_TRACKBAR,
@@ -201,8 +215,8 @@ impl SettingsDialog {
             config.translation_style.size,
         )?;
         self.set_text(
-            ctrl_id::TEXTSIZE_TEXT,
-            &format!("크기: {}", config.translation_style.size),
+            ctrl_id::TEXTSIZE_EDIT,
+            &config.translation_style.size.to_string(),
         )?;
         self.initialize_trackbar(
             ctrl_id::OUTLINE1_TRACKBAR,
@@ -210,14 +224,24 @@ impl SettingsDialog {
             20,
             config.translation_style.outline1_size,
         )?;
+        self.set_text(
+            ctrl_id::OUTLINE1_EDIT,
+            &config.translation_style.outline1_size.to_string(),
+        )?;
         self.initialize_trackbar(
             ctrl_id::OUTLINE2_TRACKBAR,
             0,
             20,
             config.translation_style.outline2_size,
         )?;
+        self.set_text(
+            ctrl_id::OUTLINE2_EDIT,
+            &config.translation_style.outline2_size.to_string(),
+        )?;
         self.initialize_trackbar(ctrl_id::SHADOW_X_TRACKBAR, 0, 20, config.shadow_offset_x)?;
+        self.set_text(ctrl_id::SHADOW_X_EDIT, &config.shadow_offset_x.to_string())?;
         self.initialize_trackbar(ctrl_id::SHADOW_Y_TRACKBAR, 0, 20, config.shadow_offset_y)?;
+        self.set_text(ctrl_id::SHADOW_Y_EDIT, &config.shadow_offset_y.to_string())?;
         self.set_checked(ctrl_id::NAME_SHADOW, config.name_style.shadow_enabled)?;
         self.set_checked(ctrl_id::ORG_SHADOW, config.original_style.shadow_enabled)?;
         self.set_checked(
@@ -225,10 +249,14 @@ impl SettingsDialog {
             config.translation_style.shadow_enabled,
         )?;
         self.initialize_trackbar(ctrl_id::MARGIN_X_TRACKBAR, 0, 300, config.text_margin_x)?;
+        self.set_text(ctrl_id::MARGIN_X_EDIT, &config.text_margin_x.to_string())?;
         self.initialize_trackbar(ctrl_id::MARGIN_Y_TRACKBAR, 0, 300, config.text_margin_y)?;
+        self.set_text(ctrl_id::MARGIN_Y_EDIT, &config.text_margin_y.to_string())?;
         self.initialize_trackbar(ctrl_id::MARGIN_NAME_TRACKBAR, 0, 300, config.name_margin)?;
+        self.set_text(ctrl_id::MARGIN_NAME_EDIT, &config.name_margin.to_string())?;
         self.set_checked(ctrl_id::BORDER_MODE, config.border_visible)?;
         self.initialize_trackbar(ctrl_id::BORDER_SIZE_TRACKBAR, 0, 10, config.border_width)?;
+        self.set_text(ctrl_id::BORDER_SIZE_EDIT, &config.border_width.to_string())?;
 
         self.set_checked(ctrl_id::PRINT_ORGTEXT, config.show_original)?;
         self.set_checked(ctrl_id::PRINT_TRANSTEXT, config.show_translation)?;

@@ -13,7 +13,7 @@ use windows::{
             CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW,
             HICON, IDC_ARROW, IsWindow, LWA_ALPHA, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
             RegisterClassExW, SetLayeredWindowAttributes, TranslateMessage, WNDCLASSEXW, WNDPROC,
-            WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{Error, HRESULT, PCWSTR, Result},
@@ -115,7 +115,7 @@ impl App {
 
             // Redirection surface 없이 DComp premultiplied-alpha visual을 노출한다.
             let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 CLASS_NAME,
                 WINDOW_TITLE,
                 WS_POPUP,

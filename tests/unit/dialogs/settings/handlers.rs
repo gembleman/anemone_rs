@@ -1,4 +1,7 @@
-use super::{record_last_applied, restore_last_applied, take_unapplied_changes};
+use super::{
+    numeric_binding_for_edit, numeric_binding_for_trackbar, record_last_applied,
+    restore_last_applied, take_unapplied_changes,
+};
 use crate::config::Config;
 use crate::dialogs::models::SettingsDraft;
 use std::cell::{Cell, RefCell};
@@ -52,4 +55,32 @@ fn closing_without_unapplied_changes_keeps_the_draft() {
 
     assert!(restore_last_applied(&pending, &draft, &last_applied).is_none());
     assert!(draft.borrow().window_topmost);
+}
+
+#[test]
+fn every_appearance_numeric_input_is_bound_to_its_trackbar() {
+    use super::ctrl_id;
+
+    let pairs = [
+        (ctrl_id::BACKGROUND_TRACKBAR, ctrl_id::BACKGROUND_EDIT),
+        (ctrl_id::TEXTSIZE_TRACKBAR, ctrl_id::TEXTSIZE_EDIT),
+        (ctrl_id::OUTLINE1_TRACKBAR, ctrl_id::OUTLINE1_EDIT),
+        (ctrl_id::OUTLINE2_TRACKBAR, ctrl_id::OUTLINE2_EDIT),
+        (ctrl_id::SHADOW_X_TRACKBAR, ctrl_id::SHADOW_X_EDIT),
+        (ctrl_id::SHADOW_Y_TRACKBAR, ctrl_id::SHADOW_Y_EDIT),
+        (ctrl_id::MARGIN_X_TRACKBAR, ctrl_id::MARGIN_X_EDIT),
+        (ctrl_id::MARGIN_Y_TRACKBAR, ctrl_id::MARGIN_Y_EDIT),
+        (ctrl_id::MARGIN_NAME_TRACKBAR, ctrl_id::MARGIN_NAME_EDIT),
+        (ctrl_id::BORDER_SIZE_TRACKBAR, ctrl_id::BORDER_SIZE_EDIT),
+    ];
+
+    for (trackbar_id, edit_id) in pairs {
+        let from_trackbar = numeric_binding_for_trackbar(trackbar_id).expect("trackbar binding");
+        let from_edit = numeric_binding_for_edit(edit_id).expect("edit binding");
+        assert_eq!(from_trackbar.trackbar_id, trackbar_id);
+        assert_eq!(from_trackbar.edit_id, edit_id);
+        assert_eq!(from_edit.trackbar_id, trackbar_id);
+        assert_eq!(from_edit.edit_id, edit_id);
+        assert_eq!(from_edit.setting, from_trackbar.setting);
+    }
 }

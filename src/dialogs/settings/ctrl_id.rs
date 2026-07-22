@@ -7,30 +7,39 @@ pub const DIALOG: u16 = 100;
 pub const BACKGROUND_TRACKBAR: u16 = 1001;
 pub const BACKGROUND_COLOR: u16 = 1002;
 pub const BACKGROUND_SWITCH: u16 = 1003;
+pub const BACKGROUND_EDIT: u16 = 1004;
 
 // 텍스트 크기
 pub const TEXTSIZE_TRACKBAR: u16 = 1010;
 pub const TEXTSIZE_MINUS: u16 = 1011;
 pub const TEXTSIZE_PLUS: u16 = 1012;
 pub const TEXTSIZE_TEXT: u16 = 1013;
+pub const TEXTSIZE_EDIT: u16 = 1014;
 
 // 외곽선 크기
 pub const OUTLINE1_TRACKBAR: u16 = 1020;
 pub const OUTLINE1_MINUS: u16 = 1021;
 pub const OUTLINE1_PLUS: u16 = 1022;
+pub const OUTLINE1_EDIT: u16 = 1023;
 
 pub const OUTLINE2_TRACKBAR: u16 = 1030;
 pub const OUTLINE2_MINUS: u16 = 1031;
 pub const OUTLINE2_PLUS: u16 = 1032;
+pub const OUTLINE2_EDIT: u16 = 1033;
 
 // 그림자 오프셋
 pub const SHADOW_X_TRACKBAR: u16 = 1040;
+pub const SHADOW_X_EDIT: u16 = 1041;
 pub const SHADOW_Y_TRACKBAR: u16 = 1042;
+pub const SHADOW_Y_EDIT: u16 = 1043;
 
 // 텍스트 여백
 pub const MARGIN_X_TRACKBAR: u16 = 1050;
+pub const MARGIN_X_EDIT: u16 = 1051;
 pub const MARGIN_Y_TRACKBAR: u16 = 1052;
+pub const MARGIN_Y_EDIT: u16 = 1053;
 pub const MARGIN_NAME_TRACKBAR: u16 = 1054;
+pub const MARGIN_NAME_EDIT: u16 = 1055;
 
 // NAME 설정
 pub const NAME_COLOR: u16 = 1100;
@@ -60,6 +69,7 @@ pub const TRANS_SHADOW: u16 = 1125;
 pub const BORDER_MODE: u16 = 1130;
 pub const BORDER_COLOR: u16 = 1131;
 pub const BORDER_SIZE_TRACKBAR: u16 = 1132;
+pub const BORDER_SIZE_EDIT: u16 = 1133;
 
 // 표시 옵션
 pub const PRINT_ORGTEXT: u16 = 1200;
