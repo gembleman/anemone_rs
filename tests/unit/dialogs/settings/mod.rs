@@ -35,6 +35,14 @@ fn deepl_key_labels_show_the_detected_api_tier() {
 }
 
 #[test]
+fn settings_tabs_include_information_tab() {
+    assert_eq!(super::TAB_INFO, 4);
+    assert_eq!(super::TAB_COUNT, 5);
+    assert_eq!(super::APP_VERSION, env!("CARGO_PKG_VERSION"));
+    assert!(!super::APP_VERSION.is_empty());
+}
+
+#[test]
 fn translation_panel_and_height_follow_the_selected_engine() {
     assert_eq!(
         SettingsDialog::engine_group(TranslationEngine::DeepL),

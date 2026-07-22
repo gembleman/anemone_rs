@@ -1,4 +1,4 @@
-//! 외관, 창, 번역 탭으로 구성된 Win32 설정 대화상자.
+//! 외관, 창, 번역, 단축키, 정보 탭으로 구성된 Win32 설정 대화상자.
 
 mod ctrl_id;
 mod handlers;
@@ -35,8 +35,10 @@ const TAB_APPEARANCE: usize = 0;
 const TAB_DISPLAY: usize = 1;
 const TAB_TRANSLATION: usize = 2;
 const TAB_HOTKEYS: usize = 3;
+const TAB_INFO: usize = 4;
 /// 탭 개수. `tab_controls` 배열 크기와 일치해야 한다.
-const TAB_COUNT: usize = 4;
+const TAB_COUNT: usize = 5;
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 선택된 엔진 패널만 표시하기 위한 컨트롤 그룹.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,7 +134,7 @@ unsafe extern "system" fn settings_dialog_proc(
                 draft,
                 last_applied,
                 actions,
-                tab_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+                tab_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
                 current_tab: TAB_APPEARANCE,
                 applied_dpi: crate::dpi::dpi_for_window(hwnd),
                 scroll_pos: 0,
@@ -605,6 +607,7 @@ impl SettingsDialog {
                 .map(Self::translation_height_for_engine)
                 .unwrap_or(245),
             TAB_HOTKEYS => 360,
+            TAB_INFO => 245,
             _ => 505,
         }
     }

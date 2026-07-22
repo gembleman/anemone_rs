@@ -97,6 +97,7 @@ const TRANSLATION_IDS: &[u16] = &[
 ];
 
 const HOTKEYS_IDS: &[u16] = &[ctrl_id::HOTKEYS_LIST, ctrl_id::HOTKEYS_RESET];
+const INFO_IDS: &[u16] = &[ctrl_id::APP_VERSION];
 
 impl SettingsDialog {
     /// 리소스에 정의된 컨트롤을 탭/엔진 그룹에 연결하고 설정값을 주입한다.
@@ -109,9 +110,12 @@ impl SettingsDialog {
         self.register_ids(TAB_TRANSLATION, TRANSLATION_IDS)?;
         self.register_ids(TAB_HOTKEYS, ctrl_id::HOTKEYS_STATIC_IDS)?;
         self.register_ids(TAB_HOTKEYS, HOTKEYS_IDS)?;
+        self.register_ids(TAB_INFO, ctrl_id::INFO_STATIC_IDS)?;
+        self.register_ids(TAB_INFO, INFO_IDS)?;
         self.register_engine_controls()?;
         self.initialize_tab_titles()?;
         self.initialize_values()?;
+        self.initialize_info()?;
         self.initialize_hotkey_list()?;
         for &hwnd in &self.tab_controls[TAB_DISPLAY] {
             unsafe {
@@ -124,6 +128,11 @@ impl SettingsDialog {
             }
         }
         for &hwnd in &self.tab_controls[TAB_HOTKEYS] {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        for &hwnd in &self.tab_controls[TAB_INFO] {
             unsafe {
                 let _ = ShowWindow(hwnd, SW_HIDE);
             }
@@ -428,6 +437,10 @@ impl SettingsDialog {
         Ok(())
     }
 
+    fn initialize_info(&self) -> Result<()> {
+        self.set_text(ctrl_id::APP_VERSION, APP_VERSION)
+    }
+
     pub(super) fn control(&self, id: u16) -> Result<HWND> {
         unsafe { GetDlgItem(Some(self.hwnd), id as i32) }
     }
@@ -452,7 +465,9 @@ impl SettingsDialog {
 
     fn initialize_tab_titles(&self) -> Result<()> {
         let tab = self.control(ctrl_id::TAB_CONTROL)?;
-        for (index, title) in ["외관", "표시·윈도우", "번역", "단축키"].iter().enumerate()
+        for (index, title) in ["외관", "표시·윈도우", "번역", "단축키", "정보"]
+            .iter()
+            .enumerate()
         {
             let mut wide = to_wide(title);
             let item = TCITEMW {

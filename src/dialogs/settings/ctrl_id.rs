@@ -127,6 +127,9 @@ pub const CUSTOM_API_SELECT: u16 = 1310;
 pub const HOTKEYS_LIST: u16 = 1400;
 pub const HOTKEYS_RESET: u16 = 1401;
 
+// 애플리케이션 정보
+pub const APP_VERSION: u16 = 1500;
+
 // 탭 컨트롤
 pub const TAB_CONTROL: u16 = 1290;
 
@@ -146,6 +149,7 @@ pub const TRANSLATION_STATIC_IDS: &[u16] = &[
     2235, 2236, 2237, 2238, 2240, 2241, 2242,
 ];
 pub const HOTKEYS_STATIC_IDS: &[u16] = &[2304];
+pub const INFO_STATIC_IDS: &[u16] = &[2400, 2401, 2402, 2403];
 
 pub const EZTRANS_STATIC_IDS: &[u16] = &[2204, 2205, EZTRANS_DICTIONARY_COUNT_LABEL];
 pub const DEEPL_STATIC_IDS: &[u16] = &[2213, 2214, 2215, 2216];
