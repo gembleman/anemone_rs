@@ -247,7 +247,7 @@ impl Config {
 
         // 교체 전에 정상본을 보존하며 손상된 파일로 backup을 덮지 않는다.
         if preserve_previous && path.is_file() && Self::load_from_file(path).is_ok() {
-            let backup_path = path.with_extension("toml.last-good");
+            let backup_path = path.with_extension("toml.backup");
             let previous = std::fs::read(path)?;
             crate::fs_util::atomic_write(&backup_path, &previous)?;
         }
@@ -297,7 +297,7 @@ impl Config {
                 tracing::error!("설정 파일을 파싱할 수 없습니다");
                 tracing::warn!("기본 설정으로 시작합니다.");
 
-                // 손상본을 격리해 원문이나 `.last-good`에서 복구할 수 있게 한다.
+                // 손상본을 격리해 원문이나 `.backup`에서 복구할 수 있게 한다.
                 match quarantine_corrupt_file(path) {
                     Ok(quarantine) => tracing::warn!(
                         "손상된 설정을 격리했습니다. 복구 파일: {}",

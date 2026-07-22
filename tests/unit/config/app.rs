@@ -404,7 +404,7 @@ fn relative_bundled_eztrans_paths_are_preserved_when_loading() {
 }
 
 #[test]
-fn save_is_atomic_and_preserves_last_known_good_generation() {
+fn save_is_atomic_and_preserves_previous_generation_as_backup() {
     let root = unique_test_dir("save");
     let path = root.join("config.toml");
     let mut first = Config::default();
@@ -419,7 +419,7 @@ fn save_is_atomic_and_preserves_last_known_good_generation() {
         "second"
     );
     assert_eq!(
-        Config::load_from_file(&path.with_extension("toml.last-good"))
+        Config::load_from_file(&path.with_extension("toml.backup"))
             .unwrap()
             .translation
             .llm

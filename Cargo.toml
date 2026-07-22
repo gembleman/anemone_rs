@@ -2,6 +2,8 @@
 name = "anemone_rs"
 version = "0.1.0"
 edition = "2024"
+authors = ["gembleman"]
+repository = "https://github.com/gembleman/anemone_rs.git"
 
 [features]
 default = []
@@ -47,7 +49,7 @@ toml = "1.1"
 windows-numerics = "0.3"
 # `windows::core::implement`의 COM 코드 생성물이 `::windows_core`를 참조한다.
 windows-core = "0.62"
-eztrans-rs = { path = "../eztrans-rs" }
+eztrans-rs = "0.2"
 time = { version = "0.3", default-features = false, features = [
     "local-offset",
 ] }
