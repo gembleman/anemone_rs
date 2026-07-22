@@ -341,6 +341,58 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
 
 #[test]
 #[ignore = "requires a Win32 desktop and embedded dialog resources"]
+fn win32_display_tab_keeps_cache_controls_visible() {
+    use super::ctrl_id;
+    use crate::config::Config;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DestroyWindow, GetDesktopWindow, GetDlgItem, GetWindowRect, IsWindow, IsWindowVisible,
+    };
+
+    struct DialogGuard(HWND);
+
+    impl Drop for DialogGuard {
+        fn drop(&mut self) {
+            if unsafe { IsWindow(Some(self.0)).as_bool() } {
+                unsafe {
+                    let _ = DestroyWindow(self.0);
+                }
+            }
+        }
+    }
+
+    fn control(dialog: HWND, id: u16) -> HWND {
+        unsafe { GetDlgItem(Some(dialog), id as i32).unwrap() }
+    }
+
+    let hwnd =
+        SettingsDialog::show(unsafe { GetDesktopWindow() }, Config::default(), None).unwrap();
+    let _dialog = DialogGuard(hwnd);
+    super::SETTINGS_INSTANCE.with(|slot| {
+        let instance = slot.borrow().as_ref().expect("settings instance").clone();
+        instance.borrow_mut().switch_tab(super::TAB_DISPLAY);
+    });
+
+    let cache_clear = control(hwnd, ctrl_id::CLIPBOARD_CACHE_CLEAR);
+    let mut group_rect = Default::default();
+    let mut cache_clear_rect = Default::default();
+    let mut tab_rect = Default::default();
+    let mut apply_rect = Default::default();
+    unsafe {
+        GetWindowRect(control(hwnd, 2101), &mut group_rect).unwrap();
+        GetWindowRect(cache_clear, &mut cache_clear_rect).unwrap();
+        GetWindowRect(control(hwnd, ctrl_id::TAB_CONTROL), &mut tab_rect).unwrap();
+        GetWindowRect(control(hwnd, ctrl_id::APPLY), &mut apply_rect).unwrap();
+    }
+
+    assert!(unsafe { IsWindowVisible(cache_clear).as_bool() });
+    assert!(cache_clear_rect.bottom < group_rect.bottom);
+    assert!(cache_clear_rect.bottom < tab_rect.bottom);
+    assert!(group_rect.bottom < apply_rect.top);
+}
+
+#[test]
+#[ignore = "requires a Win32 desktop and embedded dialog resources"]
 fn win32_hotkeys_tab_layout_smoke() {
     use super::ctrl_id;
     use crate::config::Config;

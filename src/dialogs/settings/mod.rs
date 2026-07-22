@@ -586,7 +586,7 @@ impl SettingsDialog {
     fn target_height_for_tab(&self, tab: usize) -> i32 {
         match tab {
             TAB_APPEARANCE => 505,
-            TAB_DISPLAY => 305,
+            TAB_DISPLAY => 330,
             TAB_TRANSLATION => self
                 .draft
                 .borrow()
