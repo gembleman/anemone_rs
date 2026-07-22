@@ -561,7 +561,7 @@ impl SettingsDialog {
             let _ = self
                 .apply_translation_change(TranslationSettingChange::LlmTemperatureSlider(value));
             let temp = self.draft.borrow().translation.llm.temperature;
-            self.set_control_text(LLM_TEMPERATURE_LABEL, &format!("{:.2}", temp));
+            self.set_control_text(LLM_TEMPERATURE_EDIT, &format!("{:.2}", temp));
             return;
         }
 
@@ -789,6 +789,7 @@ impl SettingsDialog {
             LLM_API_KEY_EDIT => TranslationSettingChange::LlmApiKey(text),
             LLM_SYSTEM_PROMPT_EDIT => TranslationSettingChange::LlmSystemPrompt(text),
             LLM_MAX_TOKENS_EDIT => TranslationSettingChange::LlmMaxTokensText(text),
+            LLM_TEMPERATURE_EDIT => TranslationSettingChange::LlmTemperatureText(text),
             LLM_DEBOUNCE_EDIT => TranslationSettingChange::LlmDebounceText(text),
             _ => return,
         };
@@ -799,12 +800,23 @@ impl SettingsDialog {
                     let value = self.draft.borrow().translation.llm.max_tokens;
                     self.set_control_text(ctrl_id, &value.to_string());
                 }
+                LLM_TEMPERATURE_EDIT => {
+                    let value = self.draft.borrow().translation.llm.temperature;
+                    self.set_control_text(ctrl_id, &format!("{value:.2}"));
+                }
                 LLM_DEBOUNCE_EDIT => {
                     let value = self.draft.borrow().translation.llm.debounce_ms;
                     self.set_control_text(ctrl_id, &value.to_string());
                 }
                 _ => {}
             }
+        } else if ctrl_id == LLM_TEMPERATURE_EDIT {
+            let value = self.draft.borrow().translation.llm.temperature;
+            self.update_trackbar_pos(
+                LLM_TEMPERATURE_TRACKBAR,
+                crate::config::limits::llm_temperature_to_slider(value),
+            );
+            self.set_control_text(ctrl_id, &format!("{value:.2}"));
         }
     }
 

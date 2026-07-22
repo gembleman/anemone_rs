@@ -80,6 +80,10 @@ pub fn llm_temperature_slider(value: i32) -> f32 {
     llm_temperature(value as f32 / 100.0)
 }
 
+pub fn llm_temperature_to_slider(value: f32) -> i32 {
+    (llm_temperature(value) * 100.0).round() as i32
+}
+
 pub fn llm_top_p(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(LLM_TOP_P_MIN, LLM_TOP_P_MAX)

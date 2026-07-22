@@ -419,7 +419,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         "anthropic prompt"
     );
     assert_eq!(
-        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_TEMPERATURE_LABEL)),
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_TEMPERATURE_EDIT)),
         "0.72"
     );
     assert_eq!(
@@ -458,7 +458,7 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         "openai-key"
     );
     assert_eq!(
-        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_TEMPERATURE_LABEL)),
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_TEMPERATURE_EDIT)),
         "0.21"
     );
     assert_eq!(combo_index(hwnd, ctrl_id::LLM_REASONING_EFFORT), 5);
@@ -503,6 +503,30 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     assert_eq!(
         crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_MAX_TOKENS_EDIT)),
         max_tokens.to_string()
+    );
+    unsafe {
+        SetWindowTextW(control(hwnd, ctrl_id::LLM_TEMPERATURE_EDIT), w!("0.73")).unwrap();
+    }
+    send_killfocus(hwnd, ctrl_id::LLM_TEMPERATURE_EDIT);
+    assert_eq!(
+        unsafe {
+            SendMessageW(
+                control(hwnd, ctrl_id::LLM_TEMPERATURE_TRACKBAR),
+                crate::dialogs::TBM_GETPOS,
+                None,
+                None,
+            )
+            .0
+        },
+        73
+    );
+    unsafe {
+        SetWindowTextW(control(hwnd, ctrl_id::LLM_TEMPERATURE_EDIT), w!("invalid")).unwrap();
+    }
+    send_killfocus(hwnd, ctrl_id::LLM_TEMPERATURE_EDIT);
+    assert_eq!(
+        crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::LLM_TEMPERATURE_EDIT)),
+        "0.73"
     );
     dialog.close();
 }

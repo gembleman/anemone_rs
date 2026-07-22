@@ -89,7 +89,7 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
     ctrl_id::LLM_MAX_TOKENS_EDIT,
     ctrl_id::LLM_TEMPERATURE_TRACKBAR,
-    ctrl_id::LLM_TEMPERATURE_LABEL,
+    ctrl_id::LLM_TEMPERATURE_EDIT,
     ctrl_id::LLM_DEBOUNCE_EDIT,
     ctrl_id::LLM_GLOSSARY_EDIT_BTN,
     ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
@@ -181,7 +181,7 @@ impl SettingsDialog {
                 ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
                 ctrl_id::LLM_MAX_TOKENS_EDIT,
                 ctrl_id::LLM_TEMPERATURE_TRACKBAR,
-                ctrl_id::LLM_TEMPERATURE_LABEL,
+                ctrl_id::LLM_TEMPERATURE_EDIT,
                 ctrl_id::LLM_DEBOUNCE_EDIT,
                 ctrl_id::LLM_GLOSSARY_EDIT_BTN,
                 ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
@@ -389,9 +389,9 @@ impl SettingsDialog {
             ctrl_id::LLM_TEMPERATURE_TRACKBAR,
             crate::config::limits::LLM_TEMPERATURE_SLIDER_MIN,
             crate::config::limits::LLM_TEMPERATURE_SLIDER_MAX,
-            (crate::config::limits::llm_temperature(temperature) * 100.0) as i32,
+            crate::config::limits::llm_temperature_to_slider(temperature),
         )?;
-        self.set_text(ctrl_id::LLM_TEMPERATURE_LABEL, &format!("{temperature:.2}"))?;
+        self.set_text(ctrl_id::LLM_TEMPERATURE_EDIT, &format!("{temperature:.2}"))?;
         self.set_text(
             ctrl_id::LLM_MAX_TOKENS_EDIT,
             &config.translation.llm.max_tokens.to_string(),
@@ -555,9 +555,9 @@ impl SettingsDialog {
             ctrl_id::LLM_TEMPERATURE_TRACKBAR,
             crate::config::limits::LLM_TEMPERATURE_SLIDER_MIN,
             crate::config::limits::LLM_TEMPERATURE_SLIDER_MAX,
-            (crate::config::limits::llm_temperature(temperature) * 100.0) as i32,
+            crate::config::limits::llm_temperature_to_slider(temperature),
         )?;
-        self.set_text(ctrl_id::LLM_TEMPERATURE_LABEL, &format!("{temperature:.2}"))?;
+        self.set_text(ctrl_id::LLM_TEMPERATURE_EDIT, &format!("{temperature:.2}"))?;
         self.set_text(ctrl_id::LLM_MAX_TOKENS_EDIT, &max_tokens.to_string())?;
         let reasoning_effort_index = reasoning_effort
             .and_then(|configured| {

@@ -101,6 +101,42 @@ fn auxiliary_deepl_keys_are_normalized_and_kept_unique() {
 }
 
 #[test]
+fn temperature_text_updates_and_clamps_to_the_slider_range() {
+    let mut config = TranslationConfig::default();
+
+    TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::LlmTemperatureText("0.726".into()),
+    )
+    .unwrap();
+    assert_eq!(config.llm.temperature, 0.73);
+
+    TranslationSettingsEditor::apply(
+        &mut config,
+        TranslationSettingChange::LlmTemperatureText("9".into()),
+    )
+    .unwrap();
+    assert_eq!(config.llm.temperature, 2.0);
+}
+
+#[test]
+fn invalid_temperature_text_leaves_config_unchanged() {
+    let mut config = TranslationConfig::default();
+    let temperature = config.llm.temperature;
+
+    assert_eq!(
+        TranslationSettingsEditor::apply(
+            &mut config,
+            TranslationSettingChange::LlmTemperatureText("NaN".into()),
+        ),
+        Err(TranslationSettingsError::InvalidFloatingPoint {
+            field: "temperature"
+        })
+    );
+    assert_eq!(config.llm.temperature, temperature);
+}
+
+#[test]
 fn reasoning_effort_selection_updates_llm_config() {
     use crate::translation::llm::ReasoningEffort;
 

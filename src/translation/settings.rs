@@ -22,6 +22,7 @@ pub enum TranslationSettingChange {
     LlmSystemPrompt(String),
     LlmMaxTokensText(String),
     LlmDebounceText(String),
+    LlmTemperatureText(String),
     LlmTemperatureSlider(i32),
     LlmReasoningEffort(Option<ReasoningEffort>),
     SelectCustomApi(String),
@@ -37,6 +38,8 @@ pub struct TranslationSettingsChangeResult {
 pub enum TranslationSettingsError {
     #[error("{field} 값은 부호 없는 정수여야 합니다.")]
     InvalidUnsignedInteger { field: &'static str },
+    #[error("{field} 값은 유한한 숫자여야 합니다.")]
+    InvalidFloatingPoint { field: &'static str },
     #[error("선택한 번역 엔진이 소스 언어를 지원하지 않습니다.")]
     UnsupportedSourceLanguage,
     #[error("선택한 번역 엔진이 대상 언어를 지원하지 않습니다.")]
@@ -216,6 +219,14 @@ impl TranslationSettingsEditor {
                 let value = parse_unsigned(&value, "debounce_ms")?;
                 set_if_changed(&mut config.llm.debounce_ms, limits::llm_debounce_ms(value))
             }
+            TranslationSettingChange::LlmTemperatureText(value) => {
+                let value = parse_finite_float(&value, "temperature")?;
+                let slider_value = limits::llm_temperature_to_slider(value);
+                set_if_changed(
+                    &mut config.llm.temperature,
+                    limits::llm_temperature_slider(slider_value),
+                )
+            }
             TranslationSettingChange::LlmTemperatureSlider(value) => set_if_changed(
                 &mut config.llm.temperature,
                 limits::llm_temperature_slider(value),
@@ -248,6 +259,15 @@ impl TranslationSettingsEditor {
             .prepare()
             .map_err(|error| error.to_string())
     }
+}
+
+fn parse_finite_float(value: &str, field: &'static str) -> Result<f32, TranslationSettingsError> {
+    value
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .ok_or(TranslationSettingsError::InvalidFloatingPoint { field })
 }
 
 fn normalize_language(

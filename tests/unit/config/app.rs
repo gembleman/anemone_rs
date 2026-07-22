@@ -147,7 +147,7 @@ fn llm_limits_are_normalized_at_every_config_boundary() {
 
     assert_eq!(normalized.translation.llm.max_tokens, 32_000);
     assert_eq!(normalized.translation.llm.debounce_ms, 10_000);
-    assert_eq!(normalized.translation.llm.temperature, 0.3);
+    assert_eq!(normalized.translation.llm.temperature, 1.0);
     assert_eq!(normalized.translation.llm.top_p, 1.0);
     assert_eq!(normalized.translation.llm.frequency_penalty, -2.0);
     assert_eq!(normalized.translation.llm.presence_penalty, 0.0);
