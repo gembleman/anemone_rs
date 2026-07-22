@@ -225,14 +225,6 @@ impl SettingsDialog {
         };
         let new_spec = captured_hotkey(vk);
 
-        if !(new_spec.ctrl || new_spec.shift || new_spec.alt || new_spec.win) {
-            crate::dialogs::helpers::show_error_message(
-                self.hwnd,
-                "단축키 오류",
-                "단축키는 Ctrl/Shift/Alt/Win 중 하나 이상을 포함해야 합니다.",
-            );
-            return;
-        }
         if !new_spec.is_valid() {
             crate::dialogs::helpers::show_error_message(
                 self.hwnd,

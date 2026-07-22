@@ -52,9 +52,9 @@ impl HotkeySpec {
         modifiers
     }
 
-    /// 최소 하나 이상의 수정자와 유효한 키가 있는지 확인.
+    /// 등록 가능한 키인지 확인.
     pub fn is_valid(&self) -> bool {
-        (self.ctrl || self.shift || self.alt || self.win) && key_name_from_vk(self.vk).is_some()
+        key_name_from_vk(self.vk).is_some()
     }
 }
 

@@ -30,6 +30,14 @@ fn parse_is_case_insensitive_for_modifiers_and_key() {
 }
 
 #[test]
+fn modifierless_hotkey_is_valid_and_roundtrips() {
+    let spec = HotkeySpec::from_str("F8").unwrap();
+    assert!(spec.is_valid());
+    assert_eq!(spec.modifiers(), HOT_KEY_MODIFIERS(0));
+    assert_eq!(spec.to_string(), "F8");
+}
+
+#[test]
 fn parse_rejects_empty_string() {
     assert_eq!(
         HotkeySpec::from_str("").unwrap_err(),
