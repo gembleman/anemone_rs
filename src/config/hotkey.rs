@@ -224,21 +224,6 @@ fn key_name_from_vk(vk: u32) -> Option<&'static str> {
         .map(|(name, _)| *name)
 }
 
-/// UI에 노출할 키 이름 목록 (콤보박스 채우기용). `KEY_TABLE`과 동일한 순서를 유지한다.
-pub fn key_names() -> impl Iterator<Item = &'static str> {
-    KEY_TABLE.iter().map(|(name, _)| *name)
-}
-
-/// 콤보박스 인덱스로부터 가상 키 코드를 가져온다.
-pub fn vk_from_key_index(index: usize) -> Option<u32> {
-    KEY_TABLE.get(index).map(|(_, vk)| *vk)
-}
-
-/// 가상 키 코드로부터 콤보박스 인덱스를 가져온다.
-pub fn key_index_from_vk(vk: u32) -> Option<usize> {
-    KEY_TABLE.iter().position(|(_, candidate)| *candidate == vk)
-}
-
 /// 등록된 4개 단축키.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]

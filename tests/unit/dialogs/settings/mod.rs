@@ -302,3 +302,51 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     );
     dialog.close();
 }
+
+#[test]
+#[ignore = "requires a Win32 desktop and embedded dialog resources"]
+fn win32_hotkeys_tab_layout_smoke() {
+    use super::ctrl_id;
+    use crate::config::Config;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DestroyWindow, GetDesktopWindow, GetDlgItem, GetWindowRect, IsWindow, IsWindowVisible,
+    };
+
+    struct DialogGuard(HWND);
+
+    impl Drop for DialogGuard {
+        fn drop(&mut self) {
+            if unsafe { IsWindow(Some(self.0)).as_bool() } {
+                unsafe {
+                    let _ = DestroyWindow(self.0);
+                }
+            }
+        }
+    }
+
+    fn control(dialog: HWND, id: u16) -> HWND {
+        unsafe { GetDlgItem(Some(dialog), id as i32).unwrap() }
+    }
+
+    let hwnd =
+        SettingsDialog::show(unsafe { GetDesktopWindow() }, Config::default(), None).unwrap();
+    let _dialog = DialogGuard(hwnd);
+    super::SETTINGS_INSTANCE.with(|slot| {
+        let instance = slot.borrow().as_ref().expect("settings instance").clone();
+        instance.borrow_mut().switch_tab(super::TAB_HOTKEYS);
+    });
+
+    let mut list_rect = Default::default();
+    let mut tab_rect = Default::default();
+    let mut apply_rect = Default::default();
+    unsafe {
+        GetWindowRect(control(hwnd, ctrl_id::HOTKEYS_LIST), &mut list_rect).unwrap();
+        GetWindowRect(control(hwnd, ctrl_id::TAB_CONTROL), &mut tab_rect).unwrap();
+        GetWindowRect(control(hwnd, ctrl_id::APPLY), &mut apply_rect).unwrap();
+    }
+
+    assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::HOTKEYS_LIST)).as_bool() });
+    assert!(list_rect.bottom <= tab_rect.bottom);
+    assert!(list_rect.bottom < apply_rect.top);
+}

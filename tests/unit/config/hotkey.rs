@@ -31,7 +31,10 @@ fn parse_is_case_insensitive_for_modifiers_and_key() {
 
 #[test]
 fn parse_rejects_empty_string() {
-    assert_eq!(HotkeySpec::from_str("").unwrap_err(), HotkeyParseError::Empty);
+    assert_eq!(
+        HotkeySpec::from_str("").unwrap_err(),
+        HotkeyParseError::Empty
+    );
     assert_eq!(
         HotkeySpec::from_str("   ").unwrap_err(),
         HotkeyParseError::Empty
@@ -73,7 +76,10 @@ fn find_conflict_detects_duplicate_assignment() {
     let mut config = HotkeyConfig::default();
     config.text_size_up = config.toggle_window;
     let conflict = config.find_conflict();
-    assert_eq!(conflict, Some((HotkeySlot::ToggleWindow, HotkeySlot::TextSizeUp)));
+    assert_eq!(
+        conflict,
+        Some((HotkeySlot::ToggleWindow, HotkeySlot::TextSizeUp))
+    );
 }
 
 #[test]
@@ -82,7 +88,10 @@ fn toml_roundtrip_preserves_hotkeys() {
     config.hotkeys.toggle_window = HotkeySpec::from_str("Alt+F4").unwrap();
 
     let toml = toml::to_string(&config).expect("serialize config");
-    assert!(toml.contains("Alt+F4"), "TOML에 사람이 읽을 수 있는 문자열이 없습니다:\n{toml}");
+    assert!(
+        toml.contains("Alt+F4"),
+        "TOML에 사람이 읽을 수 있는 문자열이 없습니다:\n{toml}"
+    );
 
     let loaded: Config = toml::from_str(&toml).expect("deserialize config");
     assert_eq!(loaded.hotkeys.toggle_window, config.hotkeys.toggle_window);
@@ -118,11 +127,12 @@ fn remove_toml_section(toml: &str, header: &str) -> String {
 }
 
 #[test]
-fn key_index_and_vk_roundtrip_for_all_keys() {
-    let mut index = 0;
-    while let Some(vk) = vk_from_key_index(index) {
-        assert_eq!(key_index_from_vk(vk), Some(index));
-        index += 1;
+fn every_supported_key_parses_and_displays() {
+    for &(name, vk) in KEY_TABLE {
+        let spec = HotkeySpec::from_str(&format!("Ctrl+{name}"))
+            .unwrap_or_else(|error| panic!("{name} 파싱 실패: {error}"));
+        assert_eq!(spec.vk, vk);
+        assert_eq!(spec.to_string(), format!("Ctrl+{name}"));
     }
-    assert!(index > 0, "키 테이블이 비어 있습니다");
+    assert!(!KEY_TABLE.is_empty(), "키 테이블이 비어 있습니다");
 }

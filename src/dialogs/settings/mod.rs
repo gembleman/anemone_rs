@@ -594,7 +594,7 @@ impl SettingsDialog {
                 .get_engine()
                 .map(Self::translation_height_for_engine)
                 .unwrap_or(245),
-            TAB_HOTKEYS => 190,
+            TAB_HOTKEYS => 360,
             _ => 505,
         }
     }
@@ -951,6 +951,10 @@ impl SettingsDialog {
     /// 커스텀 메시지 핸들러
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         match msg {
+            hotkeys::WM_HOTKEY_CAPTURED => {
+                self.handle_hotkey_capture(wparam.0, lparam.0 as u32);
+                Some(LRESULT(0))
+            }
             WM_GETMINMAXINFO => {
                 // SAFETY: LPARAM은 WM_GETMINMAXINFO 처리 중 유효한 MINMAXINFO 포인터다.
                 unsafe {

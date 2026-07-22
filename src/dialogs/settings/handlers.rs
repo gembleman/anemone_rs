@@ -69,12 +69,6 @@ macro_rules! toggle_field {
 impl SettingsDialog {
     /// 명령 처리
     pub(super) fn handle_command(&mut self, cmd: u16, notify_code: u32) {
-        // 단축키 탭의 체크박스(BN_CLICKED)/키 콤보(CBN_SELCHANGE)는 별도 처리한다.
-        // 충돌 검사와 되돌리기를 한 곳에서 다루기 위해 다른 분기보다 먼저 확인한다.
-        if self.handle_hotkey_command(cmd, notify_code) {
-            return;
-        }
-
         // 편집 가능한 모델 콤보의 직접 입력은 포커스를 잃을 때 확정한다.
         if cmd == ctrl_id::LLM_MODEL_EDIT && notify_code == CBN_KILLFOCUS {
             self.handle_edit_killfocus(cmd);

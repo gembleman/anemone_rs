@@ -91,32 +91,7 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::CUSTOM_API_SELECT,
 ];
 
-const HOTKEYS_IDS: &[u16] = &[
-    ctrl_id::HOTKEY_TOGGLE_WINDOW_CTRL,
-    ctrl_id::HOTKEY_TOGGLE_WINDOW_SHIFT,
-    ctrl_id::HOTKEY_TOGGLE_WINDOW_ALT,
-    ctrl_id::HOTKEY_TOGGLE_WINDOW_WIN,
-    ctrl_id::HOTKEY_TOGGLE_WINDOW_KEY,
-    ctrl_id::HOTKEY_TOGGLE_WINDOW_PREVIEW,
-    ctrl_id::HOTKEY_TEXT_SIZE_UP_CTRL,
-    ctrl_id::HOTKEY_TEXT_SIZE_UP_SHIFT,
-    ctrl_id::HOTKEY_TEXT_SIZE_UP_ALT,
-    ctrl_id::HOTKEY_TEXT_SIZE_UP_WIN,
-    ctrl_id::HOTKEY_TEXT_SIZE_UP_KEY,
-    ctrl_id::HOTKEY_TEXT_SIZE_UP_PREVIEW,
-    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_CTRL,
-    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_SHIFT,
-    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_ALT,
-    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_WIN,
-    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_KEY,
-    ctrl_id::HOTKEY_TEXT_SIZE_DOWN_PREVIEW,
-    ctrl_id::HOTKEY_CLIPBOARD_WATCH_CTRL,
-    ctrl_id::HOTKEY_CLIPBOARD_WATCH_SHIFT,
-    ctrl_id::HOTKEY_CLIPBOARD_WATCH_ALT,
-    ctrl_id::HOTKEY_CLIPBOARD_WATCH_WIN,
-    ctrl_id::HOTKEY_CLIPBOARD_WATCH_KEY,
-    ctrl_id::HOTKEY_CLIPBOARD_WATCH_PREVIEW,
-];
+const HOTKEYS_IDS: &[u16] = &[ctrl_id::HOTKEYS_LIST];
 
 impl SettingsDialog {
     /// 리소스에 정의된 컨트롤을 탭/엔진 그룹에 연결하고 설정값을 주입한다.
@@ -132,7 +107,7 @@ impl SettingsDialog {
         self.register_engine_controls()?;
         self.initialize_tab_titles()?;
         self.initialize_values()?;
-        self.initialize_hotkey_combos()?;
+        self.initialize_hotkey_list()?;
         for &hwnd in &self.tab_controls[TAB_DISPLAY] {
             unsafe {
                 let _ = ShowWindow(hwnd, SW_HIDE);
@@ -444,7 +419,8 @@ impl SettingsDialog {
 
     fn initialize_tab_titles(&self) -> Result<()> {
         let tab = self.control(ctrl_id::TAB_CONTROL)?;
-        for (index, title) in ["외관", "표시·윈도우", "번역", "단축키"].iter().enumerate() {
+        for (index, title) in ["외관", "표시·윈도우", "번역", "단축키"].iter().enumerate()
+        {
             let mut wide = to_wide(title);
             let item = TCITEMW {
                 mask: TCIF_TEXT,
