@@ -366,20 +366,22 @@ impl ColorDialog {
                 WM_HSCROLL | WM_VSCROLL => {
                     // 트랙바 스크롤 처리
                     let code = (wparam.0 & 0xFFFF) as u32;
-                    let alpha = match code {
-                        TB_THUMBTRACK => ((wparam.0 >> 16) & 0xFFFF) as i32,
-                        TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP | TB_BOTTOM
-                        | TB_ENDTRACK => {
-                            SendDlgItemMessageW(
-                                hdlg,
-                                IDC_ALPHA_TRACKBAR as i32,
-                                TBM_GETPOS_VAL,
-                                WPARAM(0),
-                                LPARAM(0),
-                            )
-                            .0 as i32
-                        }
-                        _ => return 0,
+                    let alpha = match super::trackbar_thumb_position(code, wparam.0) {
+                        Some(alpha) => alpha,
+                        None => match code {
+                            TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP
+                            | TB_BOTTOM | TB_ENDTRACK => {
+                                SendDlgItemMessageW(
+                                    hdlg,
+                                    IDC_ALPHA_TRACKBAR as i32,
+                                    TBM_GETPOS_VAL,
+                                    WPARAM(0),
+                                    LPARAM(0),
+                                )
+                                .0 as i32
+                            }
+                            _ => return 0,
+                        },
                     };
 
                     // 에디트 업데이트

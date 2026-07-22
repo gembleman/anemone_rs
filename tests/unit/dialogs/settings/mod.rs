@@ -2,6 +2,25 @@ use super::{EngineGroup, SettingsDialog, format_deepl_key, mask_secret};
 use crate::translation::TranslationEngine;
 
 #[test]
+fn trackbar_thumb_notifications_apply_the_reported_position() {
+    use windows::Win32::UI::Controls::{TB_ENDTRACK, TB_THUMBPOSITION, TB_THUMBTRACK};
+
+    let wparam = 173usize << 16;
+    assert_eq!(
+        crate::dialogs::trackbar_thumb_position(TB_THUMBTRACK, wparam),
+        Some(173)
+    );
+    assert_eq!(
+        crate::dialogs::trackbar_thumb_position(TB_THUMBPOSITION, wparam),
+        Some(173)
+    );
+    assert_eq!(
+        crate::dialogs::trackbar_thumb_position(TB_ENDTRACK, wparam),
+        None
+    );
+}
+
+#[test]
 fn secret_mask_never_contains_the_complete_secret() {
     let masked = mask_secret("super-secret-1234");
     assert_eq!(masked, "••••1234");

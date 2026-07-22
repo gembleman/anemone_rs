@@ -19,3 +19,12 @@ pub use backlog::BacklogDialog;
 pub use file_trans::FileTransDialog;
 pub use settings::SettingsDialog;
 pub use translate::TranslateDialog;
+
+fn trackbar_thumb_position(code: u32, wparam: usize) -> Option<i32> {
+    use windows::Win32::UI::Controls::{TB_THUMBPOSITION, TB_THUMBTRACK};
+
+    match code {
+        TB_THUMBPOSITION | TB_THUMBTRACK => Some(((wparam >> 16) & 0xffff) as i32),
+        _ => None,
+    }
+}

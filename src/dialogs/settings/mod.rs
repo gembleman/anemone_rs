@@ -1007,19 +1007,21 @@ impl SettingsDialog {
                     let trackbar_hwnd = HWND(lparam.0 as *mut _);
 
                     let id = GetDlgCtrlID(trackbar_hwnd) as u16;
-                    let value = match code {
-                        TB_THUMBTRACK => ((wparam.0 >> 16) & 0xFFFF) as i32,
-                        TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP | TB_BOTTOM
-                        | TB_ENDTRACK => {
-                            SendMessageW(
-                                trackbar_hwnd,
-                                TBM_GETPOS_VAL,
-                                Some(WPARAM(0)),
-                                Some(LPARAM(0)),
-                            )
-                            .0 as i32
-                        }
-                        _ => return Some(LRESULT(0)),
+                    let value = match super::trackbar_thumb_position(code, wparam.0) {
+                        Some(value) => value,
+                        None => match code {
+                            TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP
+                            | TB_BOTTOM | TB_ENDTRACK => {
+                                SendMessageW(
+                                    trackbar_hwnd,
+                                    TBM_GETPOS_VAL,
+                                    Some(WPARAM(0)),
+                                    Some(LPARAM(0)),
+                                )
+                                .0 as i32
+                            }
+                            _ => return Some(LRESULT(0)),
+                        },
                     };
 
                     self.handle_trackbar(id, value);
