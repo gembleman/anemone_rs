@@ -20,7 +20,7 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 버전 검증을 가장 먼저 한다. 버전 bump를 잊고 태그만 올리면 앱은
       # 영원히 새 버전을 찾지 못하는데, 증상이 "아무 일도 안 일어남"이라
@@ -94,7 +94,7 @@ jobs:
 
       # full zip은 사람이 나중에 같은 릴리스에 추가한다.
       # action-gh-release는 기존 asset을 지우지 않으므로 순서는 상관없다.
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/${{ steps.names.outputs.asset }}
