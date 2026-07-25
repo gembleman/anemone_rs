@@ -666,7 +666,8 @@ impl SettingsDialog {
                 .map(Self::translation_height_for_engine)
                 .unwrap_or(245),
             TAB_HOTKEYS => 360,
-            TAB_INFO => 280,
+            // 업데이트 UI가 들어오며 정보 그룹박스가 71 → 158 DLU로 커졌다.
+            TAB_INFO => 417,
             _ => 505,
         }
     }
