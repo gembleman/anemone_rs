@@ -9,6 +9,7 @@
 // 이 허용을 제거한다.
 #![allow(dead_code)]
 
+pub mod apply;
 pub mod check;
 pub mod download;
 pub mod sha256;
@@ -89,6 +90,23 @@ pub enum UpdateError {
     ChecksumMismatch,
     #[error("해시를 계산할 수 없습니다: {0}")]
     Hash(#[from] sha256::HashError),
+    #[error(
+        "이 폴더에 쓸 수 없어 자동 업데이트를 적용할 수 없습니다. \
+         릴리스 페이지에서 직접 내려받아주세요. ({0})"
+    )]
+    NotWritable(std::path::PathBuf),
+    /// 교체에 실패한 뒤 되돌리기까지 실패한 상태.
+    ///
+    /// 실행 파일이 백업 이름으로만 남아 있어 다음 실행이 불가능하다.
+    /// UI는 이 경우 반드시 `backup` 경로를 사용자에게 그대로 보여줘야 한다.
+    #[error(
+        "업데이트에 실패했고 이전 버전으로 되돌리지도 못했습니다. \
+         {backup} 파일의 확장자를 .exe로 바꿔주세요. (원인: {cause})"
+    )]
+    RollbackFailed {
+        backup: std::path::PathBuf,
+        cause: String,
+    },
     #[error("파일을 저장할 수 없습니다: {0}")]
     Io(#[from] std::io::Error),
 }
