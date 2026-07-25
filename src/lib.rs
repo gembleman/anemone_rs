@@ -74,6 +74,15 @@ pub fn run() {
         logging::report_init_failure(error.as_ref());
     }
 
+    // GUI 시작 경로에서만, 프로세스당 한 번 호출한다. `runtime::initialize()`에
+    // 넣으면 안 되는 이유는 `update::apply::cleanup_backup`의 문서를 참고 —
+    // EzTrans helper 서브커맨드(`cli::run`이 위에서 이미 처리했다)도 그 경로를
+    // 타면 helper가 뜰 때마다 삭제를 시도하게 된다.
+    //
+    // logging::init() 뒤여야 한다. 이 함수의 로그는 업데이트가 실제로 적용됐는지
+    // 알려주는 유일한 단서인데, subscriber 설치 전에 부르면 통째로 버려진다.
+    update::apply::cleanup_backup();
+
     // UI 스레드 COM(STA) 1회 초기화 — 모든 다이얼로그/셸 호출의 공통 전제.
     init_com_sta();
 

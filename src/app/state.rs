@@ -165,6 +165,10 @@ pub(super) enum AppAction {
     SettingsDialogClosed,
     TranslateDialogClosed(u64),
     FileTransDialogClosed(u64),
+    /// 업데이트 확인이 끝났다. `last_update_check`를 갱신할지는 오류 종류에 달려
+    /// 있으므로 갱신할 시각(성공/스킵 불가 오류)만 담아 보낸다. `None`이면 이번
+    /// 결과로는 시각을 갱신하지 않는다(네트워크 실패 등).
+    UpdateCheckSettled(Option<i64>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,6 +240,15 @@ impl AppModel {
             }
             AppAction::FileTransDialogClosed(session) => {
                 vec![Effect::FileTransDialogClosed(session)]
+            }
+            AppAction::UpdateCheckSettled(new_last_check) => {
+                let Some(timestamp) = new_last_check else {
+                    // 네트워크 실패·타임아웃: 지금 갱신하면 오프라인이었던 하루 때문에
+                    // 다음 24시간을 더 놓칠 수 있으므로 값을 그대로 둔다.
+                    return Vec::new();
+                };
+                self.config.last_update_check = timestamp;
+                vec![Effect::SaveConfig]
             }
         }
     }

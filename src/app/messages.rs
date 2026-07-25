@@ -10,3 +10,5 @@ pub(crate) const WM_DEFERRED_RESIZE: u32 = WM_APP + 3;
 pub(crate) const WM_DEFERRED_PAINT: u32 = WM_APP + 4;
 pub(crate) const WM_APP_ACTION: u32 = WM_APP + 5;
 pub(crate) const WM_APP_MAGNETIC_TARGET_SELECTED: u32 = WM_APP + 6;
+/// 업데이트 워커가 확인·다운로드 결과를 다 채운 뒤 게시하는 알림.
+pub(crate) const WM_UPDATE_RESULT: u32 = WM_APP + 40;

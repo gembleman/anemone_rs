@@ -31,6 +31,7 @@ pub(crate) mod services;
 mod state;
 mod translation;
 mod translation_cache;
+mod update;
 mod window_proc;
 
 const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");

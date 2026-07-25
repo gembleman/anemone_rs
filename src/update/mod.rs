@@ -12,8 +12,10 @@
 pub mod apply;
 pub mod check;
 pub mod download;
+pub(crate) mod schedule;
 pub mod sha256;
 pub mod version;
+pub mod worker;
 
 use std::time::Duration;
 
