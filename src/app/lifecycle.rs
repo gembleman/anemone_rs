@@ -170,7 +170,7 @@ impl App {
 
             // 설정 로드 (파일이 없으면 기본값)
             let config = Config::load_or_default();
-            let services = AppServices::new();
+            let services = AppServices::new(hwnd);
             let action_queue = Rc::new(RefCell::new(VecDeque::new()));
 
             let app = Rc::new(RefCell::new(App {
@@ -209,6 +209,8 @@ impl App {
                 composition_retry_scheduled: false,
                 hit_region: Vec::new(),
                 full_hit_region: true,
+                pending_update: None,
+                update_operation_in_progress: false,
             }));
 
             // 전역 인스턴스 설정
@@ -272,6 +274,13 @@ impl App {
                 }
             }
             Self::drain_deferred_messages(&app);
+
+            // 조건을 통과하면 확인 요청만 보내고 즉시 반환한다 — 시작을 지연시키지 않는다.
+            {
+                let app_ref = app.borrow();
+                app_ref.maybe_start_auto_update_check();
+            }
+
             let _ = UpdateWindow(hwnd);
 
             // Release smoke test는 GUI 초기화 뒤 자동 종료한다.

@@ -61,6 +61,14 @@ impl AppActionSender {
     pub(crate) fn file_trans_dialog_closed(&self, session: u64) {
         self.send(AppAction::FileTransDialogClosed(session));
     }
+
+    pub(crate) fn request_update_check(&self) {
+        self.send(AppAction::RequestUpdateCheck);
+    }
+
+    pub(crate) fn request_update_apply(&self) {
+        self.send(AppAction::RequestUpdateApply);
+    }
 }
 
 impl App {
@@ -130,6 +138,8 @@ impl App {
                         tracing::error!("WM_CLOSE 게시 실패: {error}");
                     }
                 }
+                Effect::RequestUpdateCheck => self.start_manual_update_check(),
+                Effect::RequestUpdateApply => self.start_update_apply(),
             }
         }
     }

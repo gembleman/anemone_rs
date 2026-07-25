@@ -13,8 +13,11 @@ use crate::translation::worker::{
     TranslationResponse,
 };
 use crate::translation::{PreparedJob, TranslationService};
+use crate::update::worker::{
+    CheckTrigger, UpdateOutcome, UpdateRequest, UpdateRequestError, UpdateWorker,
+};
 
-use super::messages::WM_TRANSLATION_COMPLETE;
+use super::messages::{WM_TRANSLATION_COMPLETE, WM_UPDATE_RESULT};
 use super::translation_cache::TranslationCacheStore;
 
 /// GUI bootstrap에서 생성해 App과 dialog에 주입하는 장수명 서비스 집합.
@@ -22,20 +25,23 @@ pub(crate) struct AppServices {
     pub translation_ui: Rc<GuiTranslationHost>,
     pub file_translation: Rc<FileTranslationSupervisor>,
     pub translation_cache: Rc<TranslationCacheStore>,
+    pub update: Rc<UpdateWorker>,
 }
 
 impl AppServices {
-    pub fn new() -> Self {
+    pub fn new(hwnd: HWND) -> Self {
         let translation = TranslationService::new();
         let http_client = translation.http_client();
         let translation_ui = Rc::new(GuiTranslationHost::new(http_client.clone()));
         let file_translation = Rc::new(FileTranslationSupervisor::with_http_client(http_client));
         let translation_cache =
             Rc::new(TranslationCacheStore::open(&crate::runtime::cache_db_file()));
+        let update = Rc::new(UpdateWorker::spawn(hwnd, WM_UPDATE_RESULT));
         Self {
             translation_ui,
             file_translation,
             translation_cache,
+            update,
         }
     }
 
@@ -48,6 +54,43 @@ impl AppServices {
                 "file translation tasks exceeded shutdown grace"
             );
         }
+        self.update.shutdown();
+    }
+}
+
+/// 업데이트 확인/다운로드 요청 편의 함수. 워커가 사라졌으면 조용히 로그만 남긴다
+/// — 자동 확인 실패로 사용자를 방해하지 않는다는 정책과 같은 이유다.
+impl AppServices {
+    pub(crate) fn request_update_check(
+        &self,
+        current: crate::update::Version,
+        trigger: CheckTrigger,
+    ) {
+        if let Err(UpdateRequestError::WorkerUnavailable) = self
+            .update
+            .request(UpdateRequest::Check { current, trigger })
+        {
+            tracing::warn!("업데이트 워커가 종료되어 확인 요청을 보낼 수 없습니다");
+        }
+    }
+
+    pub(crate) fn request_update_download(
+        &self,
+        update: crate::update::AvailableUpdate,
+        destination: std::path::PathBuf,
+    ) {
+        if let Err(UpdateRequestError::WorkerUnavailable) =
+            self.update.request(UpdateRequest::Download {
+                update,
+                destination,
+            })
+        {
+            tracing::warn!("업데이트 워커가 종료되어 다운로드 요청을 보낼 수 없습니다");
+        }
+    }
+
+    pub(crate) fn drain_update_results(&self) -> Vec<UpdateOutcome> {
+        self.update.drain_results()
     }
 }
 

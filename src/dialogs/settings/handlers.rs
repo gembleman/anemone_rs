@@ -324,6 +324,11 @@ impl SettingsDialog {
             // 글로서리 편집 다이얼로그
             LLM_GLOSSARY_EDIT_BTN => self.open_glossary_editor(),
 
+            // 업데이트 확인 / 릴리스 페이지 열기 / 자동 확인 체크박스
+            UPDATE_CHECK_BTN => self.handle_update_button(),
+            UPDATE_RELEASE_PAGE => crate::app::open_release_page(self.hwnd),
+            UPDATE_AUTO_CHECK => toggle_field!(self, BoolSetting::UpdateCheckEnabled),
+
             _ => {}
         }
     }
@@ -439,6 +444,19 @@ impl SettingsDialog {
         }
         if let Some(actions) = &self.actions {
             actions.clear_translation_cache();
+        }
+    }
+
+    /// "업데이트 확인" 버튼 처리. 직전 수동 확인이 새 버전을 찾아 두었다면
+    /// 다운로드·적용을 요청하고, 그렇지 않으면 새로 확인을 요청한다.
+    fn handle_update_button(&mut self) {
+        let Some(actions) = &self.actions else {
+            return;
+        };
+        if self.update_available.get() {
+            actions.request_update_apply();
+        } else {
+            actions.request_update_check();
         }
     }
 

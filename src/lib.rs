@@ -14,6 +14,7 @@ mod menu;
 mod runtime;
 pub mod translation;
 mod tray;
+mod update;
 mod win32;
 mod window;
 
@@ -73,6 +74,15 @@ pub fn run() {
         logging::report_init_failure(error.as_ref());
     }
 
+    // GUI 시작 경로에서만, 프로세스당 한 번 호출한다. `runtime::initialize()`에
+    // 넣으면 안 되는 이유는 `update::apply::cleanup_backup`의 문서를 참고 —
+    // EzTrans helper 서브커맨드(`cli::run`이 위에서 이미 처리했다)도 그 경로를
+    // 타면 helper가 뜰 때마다 삭제를 시도하게 된다.
+    //
+    // logging::init() 뒤여야 한다. 이 함수의 로그는 업데이트가 실제로 적용됐는지
+    // 알려주는 유일한 단서인데, subscriber 설치 전에 부르면 통째로 버려진다.
+    update::apply::cleanup_backup();
+
     // UI 스레드 COM(STA) 1회 초기화 — 모든 다이얼로그/셸 호출의 공통 전제.
     init_com_sta();
 
@@ -90,4 +100,9 @@ pub fn run() {
         }
         std::process::exit(1);
     }
+
+    // App::run()이 반환한 시점에는 AppCleanupGuard::drop이 이미 config를 저장하고
+    // AppServices::shutdown()까지 끝냈다. 업데이트 적용 중 재시작이 요청됐다면
+    // 그 뒤에야 새 exe를 띄워, 두 프로세스가 config.toml을 동시에 만지지 않게 한다.
+    app::restart_after_update_if_requested();
 }

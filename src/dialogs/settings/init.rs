@@ -2,7 +2,7 @@
 
 use super::*;
 
-const APPEARANCE_IDS: &[u16] = &[
+pub(super) const APPEARANCE_IDS: &[u16] = &[
     ctrl_id::BACKGROUND_TRACKBAR,
     ctrl_id::BACKGROUND_COLOR,
     ctrl_id::BACKGROUND_SWITCH,
@@ -47,7 +47,7 @@ const APPEARANCE_IDS: &[u16] = &[
     ctrl_id::BORDER_SIZE_EDIT,
 ];
 
-const DISPLAY_IDS: &[u16] = &[
+pub(super) const DISPLAY_IDS: &[u16] = &[
     ctrl_id::PRINT_ORGTEXT,
     ctrl_id::PRINT_TRANSTEXT,
     ctrl_id::PRINT_ORGNAME,
@@ -64,7 +64,7 @@ const DISPLAY_IDS: &[u16] = &[
     ctrl_id::CLIPBOARD_CACHE_CLEAR,
 ];
 
-const TRANSLATION_IDS: &[u16] = &[
+pub(super) const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::TRANS_ENGINE,
     ctrl_id::TRANS_SOURCE_LANG,
     ctrl_id::TRANS_TARGET_LANG,
@@ -96,8 +96,14 @@ const TRANSLATION_IDS: &[u16] = &[
     ctrl_id::CUSTOM_API_SELECT,
 ];
 
-const HOTKEYS_IDS: &[u16] = &[ctrl_id::HOTKEYS_LIST, ctrl_id::HOTKEYS_RESET];
-const INFO_IDS: &[u16] = &[ctrl_id::APP_VERSION];
+pub(super) const HOTKEYS_IDS: &[u16] = &[ctrl_id::HOTKEYS_LIST, ctrl_id::HOTKEYS_RESET];
+pub(super) const INFO_IDS: &[u16] = &[
+    ctrl_id::APP_VERSION,
+    ctrl_id::UPDATE_CHECK_BTN,
+    ctrl_id::UPDATE_STATUS,
+    ctrl_id::UPDATE_AUTO_CHECK,
+    ctrl_id::UPDATE_RELEASE_PAGE,
+];
 
 impl SettingsDialog {
     /// 리소스에 정의된 컨트롤을 탭/엔진 그룹에 연결하고 설정값을 주입한다.
@@ -438,7 +444,12 @@ impl SettingsDialog {
     }
 
     fn initialize_info(&self) -> Result<()> {
-        self.set_text(ctrl_id::APP_VERSION, APP_VERSION)
+        self.set_text(ctrl_id::APP_VERSION, APP_VERSION)?;
+        self.set_checked(
+            ctrl_id::UPDATE_AUTO_CHECK,
+            self.draft.borrow().update_check_enabled,
+        )?;
+        self.set_text(ctrl_id::UPDATE_STATUS, "")
     }
 
     pub(super) fn control(&self, id: u16) -> Result<HWND> {

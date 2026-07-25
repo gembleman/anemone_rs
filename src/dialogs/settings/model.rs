@@ -17,6 +17,7 @@ pub enum BoolSetting {
     ClipboardWatch,
     ClipboardCacheEnabled,
     ClickThrough,
+    UpdateCheckEnabled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +128,7 @@ fn toggle(config: &mut Config, setting: BoolSetting) -> bool {
         BoolSetting::ClipboardWatch => &mut config.clipboard_watch,
         BoolSetting::ClipboardCacheEnabled => &mut config.clipboard_cache_enabled,
         BoolSetting::ClickThrough => &mut config.click_through,
+        BoolSetting::UpdateCheckEnabled => &mut config.update_check_enabled,
     };
     *target = !*target;
     true

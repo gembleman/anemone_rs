@@ -165,6 +165,14 @@ pub(super) enum AppAction {
     SettingsDialogClosed,
     TranslateDialogClosed(u64),
     FileTransDialogClosed(u64),
+    /// 업데이트 확인이 끝났다. `last_update_check`를 갱신할지는 오류 종류에 달려
+    /// 있으므로 갱신할 시각(성공/스킵 불가 오류)만 담아 보낸다. `None`이면 이번
+    /// 결과로는 시각을 갱신하지 않는다(네트워크 실패 등).
+    UpdateCheckSettled(Option<i64>),
+    /// 설정 창의 "업데이트 확인" 버튼이 눌렸다.
+    RequestUpdateCheck,
+    /// 설정 창에서 발견한 업데이트의 다운로드·적용을 요청했다.
+    RequestUpdateApply,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +192,8 @@ pub(super) enum Effect {
     TranslateDialogClosed(u64),
     FileTransDialogClosed(u64),
     Close,
+    RequestUpdateCheck,
+    RequestUpdateApply,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,12 +210,24 @@ impl AppModel {
         match action {
             AppAction::Command(command) => self.update_command(command),
             AppAction::PreviewSettings(draft) => {
+                // draft는 설정 창을 열 때 만든 스냅샷이라 last_update_check가 없다(0).
+                // 미리보기에서 그대로 반영하면 이후 CommitSettings까지 갱신된 값이
+                // 사라진 채로 이어지므로, 여기서도 기존 값을 보존해 둔다.
+                let last_update_check = self.config.last_update_check;
                 self.config = draft.into_config();
+                self.config.last_update_check = last_update_check;
                 vec![Effect::SyncWindowState, Effect::Repaint]
             }
             AppAction::CommitSettings(draft) => {
                 let hotkeys_changed = self.config.hotkeys != draft.hotkeys;
+                // last_update_check는 설정 UI가 편집하는 필드가 아니라 업데이트
+                // 워커가 백그라운드에서 갱신하는 값이다. draft는 설정 창을 열 때의
+                // config 스냅샷이므로, 창이 열려 있는 동안 워커가 값을 갱신했다면
+                // draft로 그대로 덮어쓸 경우 그 갱신이 사라진다. 그래서 이 필드만은
+                // draft가 아니라 현재 self.config 값을 유지한다.
+                let last_update_check = self.config.last_update_check;
                 self.config = draft.into_config();
+                self.config.last_update_check = last_update_check;
                 let mut effects =
                     vec![Effect::SyncWindowState, Effect::Repaint, Effect::SaveConfig];
                 if hotkeys_changed {
@@ -225,6 +247,17 @@ impl AppModel {
             AppAction::FileTransDialogClosed(session) => {
                 vec![Effect::FileTransDialogClosed(session)]
             }
+            AppAction::UpdateCheckSettled(new_last_check) => {
+                let Some(timestamp) = new_last_check else {
+                    // 네트워크 실패·타임아웃: 지금 갱신하면 오프라인이었던 하루 때문에
+                    // 다음 24시간을 더 놓칠 수 있으므로 값을 그대로 둔다.
+                    return Vec::new();
+                };
+                self.config.last_update_check = timestamp;
+                vec![Effect::SaveConfig]
+            }
+            AppAction::RequestUpdateCheck => vec![Effect::RequestUpdateCheck],
+            AppAction::RequestUpdateApply => vec![Effect::RequestUpdateApply],
         }
     }
 
