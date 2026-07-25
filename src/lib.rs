@@ -14,6 +14,7 @@ mod menu;
 mod runtime;
 pub mod translation;
 mod tray;
+mod update;
 mod win32;
 mod window;
 
