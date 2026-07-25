@@ -164,7 +164,10 @@ BEGIN
 
     // 정보 탭
     GROUPBOX        "아네모네", 2400, 9, 19, 263, 71
-    LTEXT           "anemone_rs 버전:", 2402, 17, 51, 29, 10
+    LTEXT           "윈도우 오버레이 번역 도구", 2401, 17, 34, 246, 10
+    LTEXT           "anemone_rs 버전:", 2402, 17, 51, 66, 10
+    LTEXT           "", 1500, 86, 51, 80, 10
+    LTEXT           "https://github.com/gembleman/anemone_rs", 2403, 17, 68, 246, 10
 
     PUSHBUTTON      "적용", 1301, 149, 598, 57, 16
     DEFPUSHBUTTON   "닫기", 1300, 211, 598, 57, 16

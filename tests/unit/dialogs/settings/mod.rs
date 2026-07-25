@@ -42,6 +42,74 @@ fn settings_tabs_include_information_tab() {
     assert!(!super::APP_VERSION.is_empty());
 }
 
+/// `settings.rc`의 컨트롤 정의에서 나타나는 모든 10진수를 모은다.
+///
+/// 리소스 문법을 완전히 해석하지 않는다. `EDITTEXT 1004, ...`처럼 ID가 첫
+/// 인자인 형태와 `LTEXT "...", 2402, ...`처럼 문자열 뒤에 오는 형태가 섞여
+/// 있으므로, 콤마와 공백 양쪽으로 쪼개 숫자만 취한다. 좌표값까지 섞이지만
+/// 이 집합은 "선언된 ID의 상위 집합"이면 충분하다 — 목적이 **누락 검출**이라
+/// 상위 집합이어도 거짓 통과만 없으면 된다.
+fn declared_control_ids(rc: &str) -> std::collections::HashSet<u16> {
+    let mut ids = std::collections::HashSet::new();
+    for line in rc.lines() {
+        let line = line.trim();
+        if line.starts_with("//") || line.starts_with('#') {
+            continue;
+        }
+        for token in line.split([',', ' ', '\t']) {
+            if let Ok(value) = token.trim().parse::<u16>() {
+                ids.insert(value);
+            }
+        }
+    }
+    ids
+}
+
+/// 컨트롤 ID 상수와 `settings.rc`가 어긋나면 `GetDlgItem`이 실패하고
+/// `register_ids`가 그 오류를 전파해 **설정 창 전체가 열리지 않는다.**
+///
+/// Win32 데스크톱이 필요한 스모크 테스트는 모두 `#[ignore]`라 CI에서 돌지
+/// 않으므로, 리소스 텍스트를 직접 대조해 같은 사고를 막는다.
+#[test]
+fn every_registered_control_id_exists_in_the_resource_script() {
+    use super::ctrl_id;
+
+    const SETTINGS_RC: &str = include_str!("../../../../resources/settings.rc");
+    let declared = declared_control_ids(SETTINGS_RC);
+
+    let groups: &[(&str, &[u16])] = &[
+        ("APPEARANCE_STATIC_IDS", ctrl_id::APPEARANCE_STATIC_IDS),
+        ("DISPLAY_STATIC_IDS", ctrl_id::DISPLAY_STATIC_IDS),
+        ("TRANSLATION_STATIC_IDS", ctrl_id::TRANSLATION_STATIC_IDS),
+        ("HOTKEYS_STATIC_IDS", ctrl_id::HOTKEYS_STATIC_IDS),
+        ("INFO_STATIC_IDS", ctrl_id::INFO_STATIC_IDS),
+        ("EZTRANS_STATIC_IDS", ctrl_id::EZTRANS_STATIC_IDS),
+        ("DEEPL_STATIC_IDS", ctrl_id::DEEPL_STATIC_IDS),
+        ("PAPAGO_STATIC_IDS", ctrl_id::PAPAGO_STATIC_IDS),
+        ("LLM_STATIC_IDS", ctrl_id::LLM_STATIC_IDS),
+        ("CUSTOM_STATIC_IDS", ctrl_id::CUSTOM_STATIC_IDS),
+        ("APPEARANCE_IDS", super::init::APPEARANCE_IDS),
+        ("DISPLAY_IDS", super::init::DISPLAY_IDS),
+        ("TRANSLATION_IDS", super::init::TRANSLATION_IDS),
+        ("HOTKEYS_IDS", super::init::HOTKEYS_IDS),
+        ("INFO_IDS", super::init::INFO_IDS),
+    ];
+
+    let mut missing = Vec::new();
+    for (name, ids) in groups {
+        for &id in *ids {
+            if !declared.contains(&id) {
+                missing.push(format!("{name}: {id}"));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "settings.rc에 없는 컨트롤 ID가 등록되어 설정 창이 열리지 않습니다: {missing:?}"
+    );
+}
+
 #[test]
 fn translation_panel_and_height_follow_the_selected_engine() {
     assert_eq!(
