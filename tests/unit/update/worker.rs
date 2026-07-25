@@ -9,13 +9,13 @@ fn null_hwnd() -> HWND {
 
 #[test]
 fn shutdown_without_any_request_does_not_hang() {
-    let worker = UpdateWorker::spawn(null_hwnd(), 0x8000);
+    let worker = UpdateWorker::spawn(null_hwnd(), 0x8000, 0x8001);
     worker.shutdown();
 }
 
 #[test]
 fn request_after_shutdown_reports_worker_unavailable() {
-    let worker = UpdateWorker::spawn(null_hwnd(), 0x8000);
+    let worker = UpdateWorker::spawn(null_hwnd(), 0x8000, 0x8001);
     worker.shutdown();
 
     let result = worker.request(UpdateRequest::Check {
@@ -27,7 +27,7 @@ fn request_after_shutdown_reports_worker_unavailable() {
 
 #[test]
 fn drain_results_is_empty_when_nothing_has_completed_yet() {
-    let worker = UpdateWorker::spawn(null_hwnd(), 0x8000);
+    let worker = UpdateWorker::spawn(null_hwnd(), 0x8000, 0x8001);
     assert!(worker.drain_results().is_empty());
     worker.shutdown();
 }

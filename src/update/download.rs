@@ -46,15 +46,26 @@ impl Drop for StagedUpdate {
     }
 }
 
+/// 다운로드 진행 상황. `total`은 서버가 Content-Length를 주지 않으면 `None`이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadProgress {
+    pub received: u64,
+    pub total: Option<u64>,
+}
+
 /// asset을 받아 `destination`에 저장하고 해시를 검증한다.
 ///
 /// `destination`은 교체 대상 exe와 **같은 볼륨**이어야 한다. 그래야 이후 교체가
 /// 볼륨 간 복사 없이 rename으로 끝난다.
+///
+/// `on_progress`는 청크를 받을 때마다 호출된다. 다운로드 스레드에서 동기로
+/// 불리므로 **블로킹하면 안 된다** — 호출자는 값만 남기고 즉시 반환해야 한다.
 pub async fn download(
     update: &AvailableUpdate,
     destination: PathBuf,
+    on_progress: impl FnMut(DownloadProgress),
 ) -> Result<StagedUpdate, UpdateError> {
-    download_with_asset_name(update, destination, UPDATE_ASSET_NAME).await
+    download_with_asset_name(update, destination, UPDATE_ASSET_NAME, on_progress).await
 }
 
 /// 체크섬 매니페스트에서 찾을 파일명을 지정할 수 있는 형태.
@@ -63,6 +74,7 @@ pub(super) async fn download_with_asset_name(
     update: &AvailableUpdate,
     destination: PathBuf,
     asset_name: &str,
+    mut on_progress: impl FnMut(DownloadProgress),
 ) -> Result<StagedUpdate, UpdateError> {
     let expected = fetch_expected_digest(&update.checksum_url, asset_name).await?;
 
@@ -82,10 +94,8 @@ pub(super) async fn download_with_asset_name(
             code: response.status().as_u16(),
         });
     }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_ASSET_BYTES)
-    {
+    let total = response.content_length();
+    if total.is_some_and(|length| length > MAX_ASSET_BYTES) {
         return Err(UpdateError::TooLarge {
             limit: MAX_ASSET_BYTES,
         });
@@ -100,6 +110,10 @@ pub(super) async fn download_with_asset_name(
     let mut hasher = Hasher::new()?;
     let mut written: u64 = 0;
 
+    // 0%를 먼저 알려 총량을 UI가 알 수 있게 한다. 첫 청크까지 시간이 걸려도
+    // "다운로드 중..."에서 멈춰 있는 것처럼 보이지 않는다.
+    on_progress(DownloadProgress { received: 0, total });
+
     while let Some(chunk) = response
         .chunk()
         .await
@@ -113,6 +127,10 @@ pub(super) async fn download_with_asset_name(
         }
         hasher.update(&chunk)?;
         file.write_all(&chunk)?;
+        on_progress(DownloadProgress {
+            received: written,
+            total,
+        });
     }
 
     file.flush()?;

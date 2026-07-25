@@ -15,7 +15,8 @@ use windows::Win32::{
 
 use super::messages::{
     WM_APP_ACTION, WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH, WM_APP_SET_MAGNETIC,
-    WM_DEFERRED_PAINT, WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON, WM_UPDATE_RESULT,
+    WM_DEFERRED_PAINT, WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
+    WM_UPDATE_PROGRESS, WM_UPDATE_RESULT,
 };
 use super::{
     APP, App, CLIPBOARD_DEBOUNCE_TIMER, CLIPBOARD_READ_RETRY_TIMER, COMPOSITION_RETRY_TIMER,
@@ -70,6 +71,7 @@ fn reentry_policy(msg: u32, taskbar_created_msg: u32) -> ReentryPolicy {
                 | WM_DEFERRED_PAINT
                 | WM_TRANSLATION_COMPLETE
                 | WM_UPDATE_RESULT
+                | WM_UPDATE_PROGRESS
         ) =>
         {
             ReentryPolicy::DeferOwned
@@ -251,6 +253,11 @@ impl App {
 
                 _ if msg == WM_UPDATE_RESULT => {
                     self.handle_update_result();
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_UPDATE_PROGRESS => {
+                    self.handle_update_progress();
                     Some(LRESULT(0))
                 }
 

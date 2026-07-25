@@ -13,6 +13,7 @@
 //! 슬롯에서 결과를 꺼내 간다.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -22,7 +23,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 use super::check::UpdateCheck;
-use super::download::StagedUpdate;
+use super::download::{DownloadProgress, StagedUpdate};
 use super::{AvailableUpdate, UpdateError, Version};
 
 /// 확인 요청이 시작 시 자동으로 걸린 것인지, 사용자가 버튼을 눌러 요청한
@@ -63,6 +64,59 @@ pub(crate) enum UpdateOutcome {
 /// 도착할 수 있으므로 FIFO 큐로 둔다.
 type ResultSlot = Arc<Mutex<Vec<UpdateOutcome>>>;
 
+/// 다운로드 진행도를 UI 스레드에 전하는 슬롯.
+///
+/// 결과와 달리 최신 값 하나만 의미가 있으므로 큐가 아니라 덮어쓰기다. 청크마다
+/// 값이 갱신되는데 UI가 그보다 느리게 읽어도 중간 값을 놓칠 뿐 문제가 없다.
+///
+/// `Mutex` 대신 원자값을 쓴다. 다운로드 스레드가 청크마다 갱신하므로 UI 스레드의
+/// 읽기와 경합하는데, 잠금을 두면 그 경합이 다운로드 루프를 직접 느리게 만든다.
+/// `received`와 `total`을 따로 읽어 둘이 한 시점의 짝이 아닐 수 있지만, 진행률
+/// 표시에서 한 프레임 어긋나는 것은 무해하다.
+#[derive(Debug)]
+pub(crate) struct ProgressSlot {
+    received: AtomicU64,
+    /// `u64::MAX`는 "총량 모름"(Content-Length 없음)을 뜻한다.
+    total: AtomicU64,
+}
+
+/// `total`이 이 값이면 총량 미상이다.
+const TOTAL_UNKNOWN: u64 = u64::MAX;
+
+impl ProgressSlot {
+    fn new() -> Self {
+        Self {
+            received: AtomicU64::new(0),
+            total: AtomicU64::new(TOTAL_UNKNOWN),
+        }
+    }
+
+    fn store(&self, progress: DownloadProgress) {
+        self.total
+            .store(progress.total.unwrap_or(TOTAL_UNKNOWN), Ordering::Relaxed);
+        self.received.store(progress.received, Ordering::Relaxed);
+    }
+
+    /// 현재 진행도를 읽는다. 다운로드 중이 아니면 직전 값이 남아 있으므로,
+    /// 호출자는 다운로드가 진행 중일 때만 의미 있게 해석해야 한다.
+    pub(crate) fn load(&self) -> DownloadProgress {
+        let total = match self.total.load(Ordering::Relaxed) {
+            TOTAL_UNKNOWN => None,
+            value => Some(value),
+        };
+        DownloadProgress {
+            received: self.received.load(Ordering::Relaxed),
+            total,
+        }
+    }
+
+    /// 새 다운로드를 시작하기 전에 이전 값을 지운다.
+    fn reset(&self) {
+        self.received.store(0, Ordering::Relaxed);
+        self.total.store(TOTAL_UNKNOWN, Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum UpdateRequestError {
     #[error("업데이트 워커가 종료되어 요청을 받을 수 없습니다.")]
@@ -77,6 +131,7 @@ pub(crate) struct UpdateWorker {
     sender: Mutex<Option<Sender<UpdateRequest>>>,
     handle: Mutex<Option<JoinHandle<()>>>,
     results: ResultSlot,
+    progress: Arc<ProgressSlot>,
 }
 
 impl UpdateWorker {
@@ -85,16 +140,29 @@ impl UpdateWorker {
     /// `hwnd`는 결과 도착을 알릴 창이다. HWND 자체는 `!Send`이므로 포인터 값을
     /// `usize`로 옮겨 스레드 경계를 넘고, 워커 스레드 안에서 다시 `HWND`로
     /// 복원해 `PostMessageW`를 호출한다.
-    pub(crate) fn spawn(hwnd: HWND, message: u32) -> Self {
+    ///
+    /// `progress_message`는 다운로드 진행도가 갱신됐을 때 게시할 메시지다.
+    /// 결과용 `message`와 구분해, UI가 결과 큐를 비우지 않고도 진행도만 다시
+    /// 그릴 수 있게 한다.
+    pub(crate) fn spawn(hwnd: HWND, message: u32, progress_message: u32) -> Self {
         let (tx, rx) = mpsc::channel::<UpdateRequest>();
         let results: ResultSlot = Arc::new(Mutex::new(Vec::new()));
         let worker_results = results.clone();
+        let progress = Arc::new(ProgressSlot::new());
+        let worker_progress = progress.clone();
         let hwnd_raw = hwnd.0 as usize;
 
         let handle = thread::Builder::new()
             .name("anemone-update".to_string())
             .spawn(move || {
-                Self::worker_thread(rx, worker_results, hwnd_raw, message);
+                Self::worker_thread(
+                    rx,
+                    worker_results,
+                    worker_progress,
+                    hwnd_raw,
+                    message,
+                    progress_message,
+                );
             })
             .map_err(|error| {
                 tracing::error!("업데이트 워커 스레드를 시작하지 못했습니다: {error}");
@@ -105,7 +173,13 @@ impl UpdateWorker {
             sender: Mutex::new(Some(tx)),
             handle: Mutex::new(handle),
             results,
+            progress,
         }
+    }
+
+    /// 현재 다운로드 진행도. `WM_UPDATE_PROGRESS`를 받은 UI가 호출한다.
+    pub(crate) fn progress(&self) -> DownloadProgress {
+        self.progress.load()
     }
 
     /// 요청을 큐에 넣고 즉시 반환한다. UI 스레드를 블로킹하지 않는다.
@@ -155,8 +229,10 @@ impl UpdateWorker {
     fn worker_thread(
         rx: Receiver<UpdateRequest>,
         results: ResultSlot,
+        progress: Arc<ProgressSlot>,
         hwnd_raw: usize,
         message: u32,
+        progress_message: u32,
     ) {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -170,7 +246,12 @@ impl UpdateWorker {
         };
 
         while let Ok(request) = rx.recv() {
-            let outcome = rt.block_on(Self::handle_request(request));
+            let outcome = rt.block_on(Self::handle_request(
+                request,
+                &progress,
+                hwnd_raw,
+                progress_message,
+            ));
             {
                 let mut results = results.lock().expect("update results poisoned");
                 results.push(outcome);
@@ -179,7 +260,12 @@ impl UpdateWorker {
         }
     }
 
-    async fn handle_request(request: UpdateRequest) -> UpdateOutcome {
+    async fn handle_request(
+        request: UpdateRequest,
+        progress: &ProgressSlot,
+        hwnd_raw: usize,
+        progress_message: u32,
+    ) -> UpdateOutcome {
         match request {
             UpdateRequest::Check { current, trigger } => UpdateOutcome::Check {
                 result: super::check::fetch_latest(&current).await,
@@ -188,7 +274,30 @@ impl UpdateWorker {
             UpdateRequest::Download {
                 update,
                 destination,
-            } => UpdateOutcome::Download(super::download::download(&update, destination).await),
+            } => {
+                progress.reset();
+                // 청크마다 PostMessageW를 보내면 UI 메시지 큐가 잠긴다. 슬롯은
+                // 매번 갱신하되 알림은 시간으로 제한한다 — UI는 알림을 받을 때
+                // 슬롯에서 최신 값을 읽으므로 중간 알림이 빠져도 손해가 없다.
+                const NOTIFY_INTERVAL: Duration = Duration::from_millis(100);
+                let mut last_notify: Option<std::time::Instant> = None;
+                let on_progress = |value: super::download::DownloadProgress| {
+                    progress.store(value);
+                    let now = std::time::Instant::now();
+                    let due = last_notify
+                        .is_none_or(|previous| now.duration_since(previous) >= NOTIFY_INTERVAL);
+                    if due {
+                        last_notify = Some(now);
+                        Self::notify(hwnd_raw, progress_message);
+                    }
+                };
+
+                let result = super::download::download(&update, destination, on_progress).await;
+                // 마지막 상태를 반드시 한 번 더 알린다. 위 제한 때문에 100%가
+                // 통째로 누락된 채 끝날 수 있다.
+                Self::notify(hwnd_raw, progress_message);
+                UpdateOutcome::Download(result)
+            }
         }
     }
 

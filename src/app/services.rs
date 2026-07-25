@@ -17,7 +17,7 @@ use crate::update::worker::{
     CheckTrigger, UpdateOutcome, UpdateRequest, UpdateRequestError, UpdateWorker,
 };
 
-use super::messages::{WM_TRANSLATION_COMPLETE, WM_UPDATE_RESULT};
+use super::messages::{WM_TRANSLATION_COMPLETE, WM_UPDATE_PROGRESS, WM_UPDATE_RESULT};
 use super::translation_cache::TranslationCacheStore;
 
 /// GUI bootstrap에서 생성해 App과 dialog에 주입하는 장수명 서비스 집합.
@@ -36,7 +36,11 @@ impl AppServices {
         let file_translation = Rc::new(FileTranslationSupervisor::with_http_client(http_client));
         let translation_cache =
             Rc::new(TranslationCacheStore::open(&crate::runtime::cache_db_file()));
-        let update = Rc::new(UpdateWorker::spawn(hwnd, WM_UPDATE_RESULT));
+        let update = Rc::new(UpdateWorker::spawn(
+            hwnd,
+            WM_UPDATE_RESULT,
+            WM_UPDATE_PROGRESS,
+        ));
         Self {
             translation_ui,
             file_translation,
@@ -91,6 +95,10 @@ impl AppServices {
 
     pub(crate) fn drain_update_results(&self) -> Vec<UpdateOutcome> {
         self.update.drain_results()
+    }
+
+    pub(crate) fn update_download_progress(&self) -> crate::update::download::DownloadProgress {
+        self.update.progress()
     }
 }
 

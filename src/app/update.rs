@@ -88,6 +88,40 @@ fn manual_check_failure_text(error: &UpdateError) -> String {
     }
 }
 
+/// 바이트 수를 사람이 읽는 크기로 바꾼다.
+///
+/// MB 미만은 KB로, 그 이상은 소수 첫째 자리까지의 MB로 보여준다. 업데이트 exe는
+/// 수 MB 수준이라 GB 단위는 다루지 않는다.
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    if bytes < MB {
+        format!("{} KB", bytes.div_ceil(KB))
+    } else {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    }
+}
+
+/// 다운로드 진행도를 정보 탭 상태 텍스트 한 줄로 만든다.
+///
+/// 총량을 아는 경우에만 퍼센트를 낸다. GitHub은 사실상 항상 Content-Length를
+/// 주지만, 없을 때 0%에 멈춘 것처럼 보이느니 받은 용량만 보여주는 편이 낫다.
+fn download_progress_text(progress: crate::update::download::DownloadProgress) -> String {
+    match progress.total {
+        // 총량이 0이면 나눗셈이 무의미하다. 빈 asset은 정상 릴리스에서 나올 수
+        // 없지만, 여기서 0으로 나눠 NaN을 보여주면 원인 파악이 어려워진다.
+        Some(total) if total > 0 => {
+            let percent = (progress.received as f64 / total as f64 * 100.0).min(100.0);
+            format!(
+                "다운로드 중... {percent:.0}% ({} / {})",
+                format_size(progress.received),
+                format_size(total)
+            )
+        }
+        _ => format!("다운로드 중... ({})", format_size(progress.received)),
+    }
+}
+
 impl App {
     /// GUI 진입 시점에 한 번 호출한다. 조건을 통과하면 확인 요청만 보내고 즉시
     /// 반환한다 — 시작을 지연시키지 않는다.
@@ -170,6 +204,20 @@ impl App {
         let destination = current_exe.with_extension("exe.download");
 
         self.services.request_update_download(update, destination);
+    }
+
+    /// `WM_UPDATE_PROGRESS` 수신 시 호출된다. 슬롯의 최신 진행도만 읽어 상태
+    /// 텍스트를 갱신한다.
+    ///
+    /// 알림이 밀려 다운로드가 끝난 뒤 도착할 수 있다. 그때 진행도를 덮어쓰면
+    /// "적용 완료..." 같은 최종 문구가 "다운로드 중..."으로 되돌아가므로,
+    /// 작업이 진행 중일 때만 그린다.
+    pub(super) fn handle_update_progress(&mut self) {
+        if !self.update_operation_in_progress {
+            return;
+        }
+        let progress = self.services.update_download_progress();
+        SettingsDialog::update_status_text(&download_progress_text(progress));
     }
 
     /// `WM_UPDATE_RESULT` 수신 시 호출된다. 워커가 채워 둔 결과를 모두 꺼내 처리한다.
@@ -344,6 +392,10 @@ pub fn restart_after_update_if_requested() {
         Err(error) => tracing::error!("업데이트 후 재시작에 실패했습니다: {error}"),
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/app/update.rs"]
+mod tests;
 
 /// 릴리스 페이지를 기본 브라우저로 연다. 자동 업데이트 경로가 막혀도 항상
 /// 남아 있는 수동 탈출구다.
