@@ -240,6 +240,31 @@ fn settings_draft_distinguishes_preview_from_commit_effects() {
 }
 
 #[test]
+fn committing_settings_keeps_the_update_check_timestamp() {
+    let mut model = app_model();
+    // 설정 창을 열 때 draft를 스냅샷으로 뜬 상황을 재현한다.
+    let draft = SettingsDraft::new(model.config.clone());
+
+    // 설정 창이 열려 있는 동안 업데이트 워커가 last_update_check를 갱신한다.
+    model.config.last_update_check = 1_700_000_000;
+
+    // 사용자가 옛 draft로 적용을 눌러도 워커가 갱신한 값이 살아남아야 한다.
+    model.update(AppAction::CommitSettings(draft));
+    assert_eq!(model.config.last_update_check, 1_700_000_000);
+}
+
+#[test]
+fn previewing_settings_keeps_the_update_check_timestamp() {
+    let mut model = app_model();
+    let draft = SettingsDraft::new(model.config.clone());
+
+    model.config.last_update_check = 1_700_000_000;
+
+    model.update(AppAction::PreviewSettings(draft));
+    assert_eq!(model.config.last_update_check, 1_700_000_000);
+}
+
+#[test]
 fn clear_backlog_action_mutates_the_app_owned_store() {
     let mut model = app_model();
     model.backlog.push(LogEntry::new("line".into()));

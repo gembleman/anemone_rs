@@ -200,12 +200,24 @@ impl AppModel {
         match action {
             AppAction::Command(command) => self.update_command(command),
             AppAction::PreviewSettings(draft) => {
+                // draft는 설정 창을 열 때 만든 스냅샷이라 last_update_check가 없다(0).
+                // 미리보기에서 그대로 반영하면 이후 CommitSettings까지 갱신된 값이
+                // 사라진 채로 이어지므로, 여기서도 기존 값을 보존해 둔다.
+                let last_update_check = self.config.last_update_check;
                 self.config = draft.into_config();
+                self.config.last_update_check = last_update_check;
                 vec![Effect::SyncWindowState, Effect::Repaint]
             }
             AppAction::CommitSettings(draft) => {
                 let hotkeys_changed = self.config.hotkeys != draft.hotkeys;
+                // last_update_check는 설정 UI가 편집하는 필드가 아니라 업데이트
+                // 워커가 백그라운드에서 갱신하는 값이다. draft는 설정 창을 열 때의
+                // config 스냅샷이므로, 창이 열려 있는 동안 워커가 값을 갱신했다면
+                // draft로 그대로 덮어쓸 경우 그 갱신이 사라진다. 그래서 이 필드만은
+                // draft가 아니라 현재 self.config 값을 유지한다.
+                let last_update_check = self.config.last_update_check;
                 self.config = draft.into_config();
+                self.config.last_update_check = last_update_check;
                 let mut effects =
                     vec![Effect::SyncWindowState, Effect::Repaint, Effect::SaveConfig];
                 if hotkeys_changed {

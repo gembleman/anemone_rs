@@ -69,6 +69,14 @@ pub struct Config {
     /// 전역 단축키 설정. 기존 config.toml(필드 없음)은 기본값(Ctrl+Shift+A/Up/Down/C)으로 채워진다.
     #[serde(default)]
     pub hotkeys: HotkeyConfig,
+
+    // 업데이트
+    /// GitHub 릴리스를 자동으로 확인할지 여부.
+    #[serde(default = "default_update_check_enabled")]
+    pub update_check_enabled: bool,
+    /// 마지막 업데이트 확인 시각 (Unix epoch 초). 0이면 확인한 적이 없다.
+    #[serde(default)]
+    pub last_update_check: i64,
 }
 
 impl Default for Config {
@@ -120,11 +128,19 @@ impl Default for Config {
 
             // 단축키
             hotkeys: HotkeyConfig::default(),
+
+            // 업데이트
+            update_check_enabled: true,
+            last_update_check: 0,
         }
     }
 }
 
 fn default_clipboard_cache_enabled() -> bool {
+    true
+}
+
+fn default_update_check_enabled() -> bool {
     true
 }
 
