@@ -11,3 +11,5 @@ nul
 bench_pid.txt
 bench_paint.log
 *.png
+!README.md
+*.jpg
