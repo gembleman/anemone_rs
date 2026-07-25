@@ -163,11 +163,15 @@ BEGIN
     PUSHBUTTON      "기본값으로 초기화", 1401, 174, 141, 89, 14
 
     // 정보 탭
-    GROUPBOX        "아네모네", 2400, 9, 19, 263, 71
-    LTEXT           "윈도우 오버레이 번역 도구", 2401, 17, 34, 246, 10
-    LTEXT           "anemone_rs 버전:", 2402, 17, 51, 66, 10
-    LTEXT           "", 1500, 86, 51, 80, 10
-    LTEXT           "https://github.com/gembleman/anemone_rs", 2403, 17, 68, 246, 10
+    GROUPBOX        "아네모네", 2400, 9, 19, 263, 158
+    LTEXT           "윈도우 오버레이 번역 도구", 2401, 20, 36, 246, 10
+    LTEXT           "anemone_rs 버전:", 2402, 20, 54, 66, 10
+    LTEXT           "", 1500, 89, 54, 80, 10
+    LTEXT           "https://github.com/gembleman/anemone_rs", 2403, 20, 72, 246, 10
+    CONTROL         "자동으로 업데이트 확인", 1503, "BUTTON", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 96, 150, 11
+    PUSHBUTTON      "업데이트 확인", 1501, 20, 113, 80, 15
+    PUSHBUTTON      "릴리스 페이지 열기", 1504, 104, 113, 90, 15
+    LTEXT           "", 1502, 20, 134, 244, 38
 
     PUSHBUTTON      "적용", 1301, 149, 598, 57, 16
     DEFPUSHBUTTON   "닫기", 1300, 211, 598, 57, 16

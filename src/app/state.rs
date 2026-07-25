@@ -169,6 +169,10 @@ pub(super) enum AppAction {
     /// 있으므로 갱신할 시각(성공/스킵 불가 오류)만 담아 보낸다. `None`이면 이번
     /// 결과로는 시각을 갱신하지 않는다(네트워크 실패 등).
     UpdateCheckSettled(Option<i64>),
+    /// 설정 창의 "업데이트 확인" 버튼이 눌렸다.
+    RequestUpdateCheck,
+    /// 설정 창에서 발견한 업데이트의 다운로드·적용을 요청했다.
+    RequestUpdateApply,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +192,8 @@ pub(super) enum Effect {
     TranslateDialogClosed(u64),
     FileTransDialogClosed(u64),
     Close,
+    RequestUpdateCheck,
+    RequestUpdateApply,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,6 +256,8 @@ impl AppModel {
                 self.config.last_update_check = timestamp;
                 vec![Effect::SaveConfig]
             }
+            AppAction::RequestUpdateCheck => vec![Effect::RequestUpdateCheck],
+            AppAction::RequestUpdateApply => vec![Effect::RequestUpdateApply],
         }
     }
 

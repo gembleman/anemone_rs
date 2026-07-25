@@ -97,7 +97,13 @@ pub(super) const TRANSLATION_IDS: &[u16] = &[
 ];
 
 pub(super) const HOTKEYS_IDS: &[u16] = &[ctrl_id::HOTKEYS_LIST, ctrl_id::HOTKEYS_RESET];
-pub(super) const INFO_IDS: &[u16] = &[ctrl_id::APP_VERSION];
+pub(super) const INFO_IDS: &[u16] = &[
+    ctrl_id::APP_VERSION,
+    ctrl_id::UPDATE_CHECK_BTN,
+    ctrl_id::UPDATE_STATUS,
+    ctrl_id::UPDATE_AUTO_CHECK,
+    ctrl_id::UPDATE_RELEASE_PAGE,
+];
 
 impl SettingsDialog {
     /// 리소스에 정의된 컨트롤을 탭/엔진 그룹에 연결하고 설정값을 주입한다.
@@ -438,7 +444,12 @@ impl SettingsDialog {
     }
 
     fn initialize_info(&self) -> Result<()> {
-        self.set_text(ctrl_id::APP_VERSION, APP_VERSION)
+        self.set_text(ctrl_id::APP_VERSION, APP_VERSION)?;
+        self.set_checked(
+            ctrl_id::UPDATE_AUTO_CHECK,
+            self.draft.borrow().update_check_enabled,
+        )?;
+        self.set_text(ctrl_id::UPDATE_STATUS, "")
     }
 
     pub(super) fn control(&self, id: u16) -> Result<HWND> {

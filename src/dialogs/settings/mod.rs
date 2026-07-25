@@ -89,6 +89,9 @@ pub struct SettingsDialog {
     has_unapplied_changes: Cell<bool>,
     /// 엔진별 컨트롤 (선택 엔진 패널 표시/숨김용)
     pub(super) engine_controls: [Vec<HWND>; 5],
+    /// 직전 수동 확인이 새 버전을 찾았는지. `true`이면 "업데이트 확인" 버튼을
+    /// 다시 누르면 확인이 아니라 다운로드·적용을 요청한다.
+    update_available: Cell<bool>,
 }
 
 define_dialog_instance!(SETTINGS_INSTANCE: SettingsDialog);
@@ -141,6 +144,7 @@ unsafe extern "system" fn settings_dialog_proc(
                 scroll_max: 0,
                 has_unapplied_changes: Cell::new(false),
                 engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+                update_available: Cell::new(false),
             }));
             SETTINGS_INSTANCE.with(|slot| {
                 *slot.borrow_mut() = Some(dialog.clone());
@@ -370,6 +374,61 @@ impl SettingsDialog {
                 ctrl_id::CLIPBOARD_WATCH as i32,
                 if enabled { BST_CHECKED } else { BST_UNCHECKED },
             );
+        }
+    }
+
+    /// 설정 창이 열려 있으면(정보 탭이 안 보이는 상태여도) 업데이트 상태 텍스트와
+    /// 버튼 활성 상태를 갱신한다. 창이 닫혀 있으면 조용히 무시한다 — 업데이트
+    /// 워커 결과는 창 수명과 독립적으로 도착할 수 있다.
+    pub(crate) fn update_status_text(text: &str) {
+        let Some(hwnd) = Self::current_hwnd() else {
+            return;
+        };
+        unsafe {
+            if let Ok(control) = GetDlgItem(Some(hwnd), ctrl_id::UPDATE_STATUS as i32) {
+                let _ = SetWindowTextW(control, &HSTRING::from(text));
+            }
+        }
+    }
+
+    /// 확인이 진행 중인 동안 "업데이트 확인" 버튼을 비활성화해 중복 요청을 막는다.
+    pub(crate) fn set_update_check_button_enabled(enabled: bool) {
+        let Some(hwnd) = Self::current_hwnd() else {
+            return;
+        };
+        unsafe {
+            if let Ok(control) = GetDlgItem(Some(hwnd), ctrl_id::UPDATE_CHECK_BTN as i32) {
+                let _ = EnableWindow(control, enabled);
+            }
+        }
+    }
+
+    /// 직전 수동 확인이 새 버전을 찾았는지 기록한다. "업데이트 확인" 버튼 클릭을
+    /// 확인 요청과 다운로드·적용 요청 중 어느 쪽으로 해석할지 이 값으로 정한다.
+    ///
+    /// 같은 버튼이 두 가지 일을 하므로 레이블도 함께 바꾼다. 레이블이 "업데이트
+    /// 확인"인 채로 다운로드가 시작되면 사용자는 자기가 무엇을 눌렀는지 알 수 없다.
+    pub(crate) fn set_update_available(available: bool) {
+        SETTINGS_INSTANCE.with(|slot| {
+            if let Some(dialog) = slot.borrow().as_ref()
+                && let Ok(dialog) = dialog.try_borrow()
+            {
+                dialog.update_available.set(available);
+            }
+        });
+
+        let Some(hwnd) = Self::current_hwnd() else {
+            return;
+        };
+        let label = if available {
+            "지금 업데이트"
+        } else {
+            "업데이트 확인"
+        };
+        unsafe {
+            if let Ok(control) = GetDlgItem(Some(hwnd), ctrl_id::UPDATE_CHECK_BTN as i32) {
+                let _ = SetWindowTextW(control, &HSTRING::from(label));
+            }
         }
     }
 
@@ -607,7 +666,7 @@ impl SettingsDialog {
                 .map(Self::translation_height_for_engine)
                 .unwrap_or(245),
             TAB_HOTKEYS => 360,
-            TAB_INFO => 245,
+            TAB_INFO => 280,
             _ => 505,
         }
     }

@@ -100,4 +100,9 @@ pub fn run() {
         }
         std::process::exit(1);
     }
+
+    // App::run()이 반환한 시점에는 AppCleanupGuard::drop이 이미 config를 저장하고
+    // AppServices::shutdown()까지 끝냈다. 업데이트 적용 중 재시작이 요청됐다면
+    // 그 뒤에야 새 exe를 띄워, 두 프로세스가 config.toml을 동시에 만지지 않게 한다.
+    app::restart_after_update_if_requested();
 }

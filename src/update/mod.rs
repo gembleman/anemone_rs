@@ -5,10 +5,6 @@
 //! 캐시 DB가 실행 파일과 같은 폴더에 있으므로 **exe 파일 하나만** 교체한다.
 //! `eztrans_dll/`은 사용자가 수정하는 사전을 담고 있어 대상에서 제외한다.
 
-// 이 모듈은 아직 앱에 배선되지 않았다. check/download/apply와 UI가 붙으면
-// 이 허용을 제거한다.
-#![allow(dead_code)]
-
 pub mod apply;
 pub mod check;
 pub mod download;

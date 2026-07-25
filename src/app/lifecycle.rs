@@ -209,6 +209,8 @@ impl App {
                 composition_retry_scheduled: false,
                 hit_region: Vec::new(),
                 full_hit_region: true,
+                pending_update: None,
+                update_operation_in_progress: false,
             }));
 
             // 전역 인스턴스 설정

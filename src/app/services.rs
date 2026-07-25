@@ -13,7 +13,9 @@ use crate::translation::worker::{
     TranslationResponse,
 };
 use crate::translation::{PreparedJob, TranslationService};
-use crate::update::worker::{UpdateOutcome, UpdateRequest, UpdateRequestError, UpdateWorker};
+use crate::update::worker::{
+    CheckTrigger, UpdateOutcome, UpdateRequest, UpdateRequestError, UpdateWorker,
+};
 
 use super::messages::{WM_TRANSLATION_COMPLETE, WM_UPDATE_RESULT};
 use super::translation_cache::TranslationCacheStore;
@@ -59,17 +61,19 @@ impl AppServices {
 /// 업데이트 확인/다운로드 요청 편의 함수. 워커가 사라졌으면 조용히 로그만 남긴다
 /// — 자동 확인 실패로 사용자를 방해하지 않는다는 정책과 같은 이유다.
 impl AppServices {
-    pub(crate) fn request_update_check(&self, current: crate::update::Version) {
-        if let Err(UpdateRequestError::WorkerUnavailable) =
-            self.update.request(UpdateRequest::Check { current })
+    pub(crate) fn request_update_check(
+        &self,
+        current: crate::update::Version,
+        trigger: CheckTrigger,
+    ) {
+        if let Err(UpdateRequestError::WorkerUnavailable) = self
+            .update
+            .request(UpdateRequest::Check { current, trigger })
         {
             tracing::warn!("업데이트 워커가 종료되어 확인 요청을 보낼 수 없습니다");
         }
     }
 
-    /// 다운로드를 트리거하는 UI는 다음 작업에서 붙는다. 그때까지 워커의 Download
-    /// 요청 경로는 이 메서드를 통해서만 호출되므로 미리 준비해 둔다.
-    #[allow(dead_code)]
     pub(crate) fn request_update_download(
         &self,
         update: crate::update::AvailableUpdate,

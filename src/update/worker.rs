@@ -25,10 +25,22 @@ use super::check::UpdateCheck;
 use super::download::StagedUpdate;
 use super::{AvailableUpdate, UpdateError, Version};
 
+/// 확인 요청이 시작 시 자동으로 걸린 것인지, 사용자가 버튼을 눌러 요청한
+/// 것인지 구분한다. UI 정책이 이 둘을 다르게 다룬다 —
+/// `src/app/update.rs`의 모듈 문서를 참고.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckTrigger {
+    Auto,
+    Manual,
+}
+
 /// 워커에 보낼 수 있는 요청.
 pub(crate) enum UpdateRequest {
     /// 최신 릴리스를 조회한다.
-    Check { current: Version },
+    Check {
+        current: Version,
+        trigger: CheckTrigger,
+    },
     /// asset을 내려받아 `destination`에 저장하고 검증한다.
     Download {
         update: AvailableUpdate,
@@ -38,7 +50,10 @@ pub(crate) enum UpdateRequest {
 
 /// 워커가 UI 스레드에 돌려주는 결과.
 pub(crate) enum UpdateOutcome {
-    Check(Result<UpdateCheck, UpdateError>),
+    Check {
+        result: Result<UpdateCheck, UpdateError>,
+        trigger: CheckTrigger,
+    },
     Download(Result<StagedUpdate, UpdateError>),
 }
 
@@ -166,9 +181,10 @@ impl UpdateWorker {
 
     async fn handle_request(request: UpdateRequest) -> UpdateOutcome {
         match request {
-            UpdateRequest::Check { current } => {
-                UpdateOutcome::Check(super::check::fetch_latest(&current).await)
-            }
+            UpdateRequest::Check { current, trigger } => UpdateOutcome::Check {
+                result: super::check::fetch_latest(&current).await,
+                trigger,
+            },
             UpdateRequest::Download {
                 update,
                 destination,

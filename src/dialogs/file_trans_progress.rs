@@ -338,6 +338,18 @@ impl FileTransProgressDialog {
         Ok(hwnd)
     }
 
+    /// 파일 번역이 진행 중인지만 판정한다. 창을 앞으로 가져오지 않는다.
+    ///
+    /// [`Self::activate_existing`]은 판정과 동시에 `SetForegroundWindow`를
+    /// 호출하므로, 단순히 "진행 중인가"를 묻는 곳에서 쓰면 사용자가 보던 창이
+    /// 뜻밖에 뒤로 밀린다. 업데이트 적용 거부 판정처럼 부작용이 없어야 하는
+    /// 곳에서는 이 함수를 쓴다.
+    pub(crate) fn is_running() -> bool {
+        PROGRESS_INSTANCE
+            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd))
+            .is_some_and(|hwnd| unsafe { IsWindow(Some(hwnd)).as_bool() })
+    }
+
     /// 이미 진행 중인 작업이 있으면 그 진행창을 앞으로 가져온다.
     pub(crate) fn activate_existing() -> bool {
         let existing = PROGRESS_INSTANCE

@@ -34,6 +34,8 @@ mod translation_cache;
 mod update;
 mod window_proc;
 
+pub(crate) use update::{open_release_page, restart_after_update_if_requested};
+
 const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
 const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
 const WINDOW_TITLE: PCWSTR = w!("아네모네");
@@ -72,6 +74,11 @@ pub struct App {
     /// 배경/테두리가 있어 text 사각형과 무관하게 전체 창을 조작할 수 있는지 여부.
     /// `false`이면서 `hit_region`도 비어 있으면 완전히 빈 프레임이므로 입력을 통과시킨다.
     full_hit_region: bool,
+    /// 마지막으로 확인해 발견한 업데이트. 사용자가 "업데이트 확인" 버튼으로
+    /// 다운로드·적용을 요청할 때 다시 조회하지 않고 이 값을 사용한다.
+    pending_update: Option<crate::update::AvailableUpdate>,
+    /// 확인/다운로드가 진행 중이라 설정 창의 버튼을 다시 눌러도 무시해야 하는지.
+    update_operation_in_progress: bool,
 }
 
 // 전역 앱 인스턴스 (WndProc에서 접근용)

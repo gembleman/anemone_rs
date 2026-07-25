@@ -118,6 +118,11 @@ impl Hasher {
 }
 
 /// 한 번에 전체 버퍼를 해시한다.
+///
+/// 프로덕션 경로(`download.rs`)는 스트리밍 `Hasher`를 쓰므로 이 함수는 현재
+/// 단위 테스트(`tests/unit/update/sha256.rs`)에서만 쓰인다. 공개 API로 남겨
+/// 두는 게 자연스러운 one-shot 헬퍼라 `#[allow(dead_code)]`만 붙인다.
+#[allow(dead_code)]
 pub fn digest(data: &[u8]) -> Result<Digest, HashError> {
     let mut hasher = Hasher::new()?;
     hasher.update(data)?;

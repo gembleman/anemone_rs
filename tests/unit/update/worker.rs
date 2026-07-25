@@ -20,6 +20,7 @@ fn request_after_shutdown_reports_worker_unavailable() {
 
     let result = worker.request(UpdateRequest::Check {
         current: Version::current(),
+        trigger: CheckTrigger::Auto,
     });
     assert!(matches!(result, Err(UpdateRequestError::WorkerUnavailable)));
 }

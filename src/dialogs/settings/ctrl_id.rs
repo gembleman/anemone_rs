@@ -129,6 +129,10 @@ pub const HOTKEYS_RESET: u16 = 1401;
 
 // 애플리케이션 정보
 pub const APP_VERSION: u16 = 1500;
+pub const UPDATE_CHECK_BTN: u16 = 1501;
+pub const UPDATE_STATUS: u16 = 1502;
+pub const UPDATE_AUTO_CHECK: u16 = 1503;
+pub const UPDATE_RELEASE_PAGE: u16 = 1504;
 
 // 탭 컨트롤
 pub const TAB_CONTROL: u16 = 1290;
