@@ -96,6 +96,16 @@ fn numeric_binding_for_edit(id: u16) -> Option<NumericControlBinding> {
         .find(|binding| binding.edit_id == id)
 }
 
+pub(super) fn commits_on_enter(id: u16) -> bool {
+    numeric_binding_for_edit(id).is_some()
+        || matches!(
+            id,
+            ctrl_id::LLM_MAX_TOKENS_EDIT
+                | ctrl_id::LLM_TEMPERATURE_EDIT
+                | ctrl_id::LLM_DEBOUNCE_EDIT
+        )
+}
+
 fn numeric_setting_value(config: &crate::config::Config, setting: NumericSetting) -> i32 {
     match setting {
         NumericSetting::BackgroundAlpha => ((config.background_color >> 24) & 0xff) as i32,

@@ -13,7 +13,7 @@ use windows::{
         UI::Input::KeyboardAndMouse::EnableWindow,
         UI::WindowsAndMessaging::{
             CreateDialogParamW, DWL_USER, DestroyWindow, GetWindowLongPtrW, GetWindowRect,
-            IsWindow, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
+            IsWindow, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
             SetWindowLongPtrW, SetWindowPos, WINDOW_LONG_PTR_INDEX, WM_CLOSE, WM_DESTROY,
             WM_DPICHANGED,
         },
@@ -112,6 +112,12 @@ pub(crate) trait HostedDialog: Sized + 'static {
         _lparam: LPARAM,
     ) -> Option<isize> {
         None
+    }
+
+    /// `IsDialogMessageW`가 Enter/Tab 등을 기본 dialog 동작으로 바꾸기 전에
+    /// dialog별로 가로챌 메시지를 처리한다.
+    unsafe fn pretranslate_message(_hwnd: HWND, _msg: &MSG) -> bool {
+        false
     }
 }
 
@@ -313,7 +319,7 @@ impl<T: HostedDialog> DialogHost<T> {
                     HOSTED_DIALOGS.with(|dialogs| {
                         dialogs.borrow_mut().insert(TypeId::of::<T>(), hwnd);
                     });
-                    register_resource_dialog(hwnd);
+                    register_resource_dialog(hwnd, T::pretranslate_message);
                     return 1;
                 }
                 Err(create_error) => {

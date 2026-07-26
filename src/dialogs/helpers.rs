@@ -83,21 +83,31 @@ pub unsafe fn defer_dialog_dpi_change(hwnd: HWND, wparam: WPARAM, lparam: LPARAM
 }
 
 thread_local! {
-    static RESOURCE_DIALOGS: std::cell::RefCell<Vec<isize>> = const { std::cell::RefCell::new(Vec::new()) };
+    static RESOURCE_DIALOGS: std::cell::RefCell<Vec<ResourceDialogRegistration>> =
+        const { std::cell::RefCell::new(Vec::new()) };
     static DEFERRED_DIALOG_MESSAGES: std::cell::RefCell<VecDeque<(isize, u32, usize, isize)>> =
         const { std::cell::RefCell::new(VecDeque::new()) };
 }
 
+#[derive(Clone, Copy)]
+struct ResourceDialogRegistration {
+    hwnd: isize,
+    pretranslate_message: unsafe fn(HWND, &MSG) -> bool,
+}
+
 /// 열린 리소스 기반 모델리스 다이얼로그를 메시지 루프에 등록한다.
-pub fn register_resource_dialog(hwnd: HWND) {
+pub fn register_resource_dialog(hwnd: HWND, pretranslate_message: unsafe fn(HWND, &MSG) -> bool) {
     if hwnd.is_invalid() {
         return;
     }
     RESOURCE_DIALOGS.with(|dialogs| {
         let mut dialogs = dialogs.borrow_mut();
         let raw = hwnd.0 as isize;
-        if !dialogs.contains(&raw) {
-            dialogs.push(raw);
+        if !dialogs.iter().any(|dialog| dialog.hwnd == raw) {
+            dialogs.push(ResourceDialogRegistration {
+                hwnd: raw,
+                pretranslate_message,
+            });
         }
     });
 }
@@ -105,7 +115,9 @@ pub fn register_resource_dialog(hwnd: HWND) {
 /// 닫힌 리소스 기반 모델리스 다이얼로그를 메시지 루프에서 해제한다.
 pub fn unregister_resource_dialog(hwnd: HWND) {
     RESOURCE_DIALOGS.with(|dialogs| {
-        dialogs.borrow_mut().retain(|&raw| raw != hwnd.0 as isize);
+        dialogs
+            .borrow_mut()
+            .retain(|dialog| dialog.hwnd != hwnd.0 as isize);
     });
     DEFERRED_DIALOG_MESSAGES.with(|queue| {
         queue
@@ -121,13 +133,14 @@ pub fn unregister_resource_dialog(hwnd: HWND) {
 pub unsafe fn dispatch_resource_dialog_message(msg: &MSG) -> bool {
     let dialogs = RESOURCE_DIALOGS.with(|dialogs| {
         let mut dialogs = dialogs.borrow_mut();
-        dialogs.retain(|&raw| unsafe { IsWindow(Some(HWND(raw as *mut _))).as_bool() });
+        dialogs.retain(|dialog| unsafe { IsWindow(Some(HWND(dialog.hwnd as *mut _))).as_bool() });
         dialogs.clone()
     });
 
-    dialogs
-        .into_iter()
-        .any(|raw| unsafe { IsDialogMessageW(HWND(raw as *mut _), msg).as_bool() })
+    dialogs.into_iter().any(|dialog| unsafe {
+        let hwnd = HWND(dialog.hwnd as *mut _);
+        (dialog.pretranslate_message)(hwnd, msg) || IsDialogMessageW(hwnd, msg).as_bool()
+    })
 }
 
 /// 부모 윈도우가 있는 모니터의 작업 영역 중앙에 다이얼로그를 배치한다.

@@ -12,8 +12,11 @@ use std::rc::Rc;
 
 use windows::{
     Win32::{
-        Foundation::*, Graphics::Gdi::*, UI::Controls::*,
-        UI::Input::KeyboardAndMouse::EnableWindow, UI::WindowsAndMessaging::*,
+        Foundation::*,
+        Graphics::Gdi::*,
+        UI::Controls::*,
+        UI::Input::KeyboardAndMouse::{EnableWindow, VK_RETURN},
+        UI::WindowsAndMessaging::*,
     },
     core::*,
 };
@@ -159,6 +162,33 @@ impl HostedDialog for SettingsDialog {
             }
             Some(GetSysColorBrush(COLOR_WINDOW).0 as isize)
         }
+    }
+
+    unsafe fn pretranslate_message(hwnd: HWND, msg: &MSG) -> bool {
+        if msg.message != WM_KEYDOWN
+            || msg.wParam.0 != VK_RETURN.0 as usize
+            || unsafe { GetParent(msg.hwnd) } != Ok(hwnd)
+        {
+            return false;
+        }
+
+        let control_id = unsafe { GetDlgCtrlID(msg.hwnd) } as u16;
+        if !handlers::commits_on_enter(control_id) {
+            return false;
+        }
+
+        // 단일 행 숫자 입력의 Enter는 현재 값을 draft/preview에 확정한다.
+        // IsDialogMessageW까지 넘기면 dialog 기본 버튼 클릭으로 바뀐다.
+        let command = usize::from(control_id) | ((EN_KILLFOCUS as usize) << 16);
+        unsafe {
+            let _ = SendMessageW(
+                hwnd,
+                WM_COMMAND,
+                Some(WPARAM(command)),
+                Some(LPARAM(msg.hwnd.0 as isize)),
+            );
+        }
+        true
     }
 
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> DialogResult {

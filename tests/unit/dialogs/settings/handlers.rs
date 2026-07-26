@@ -1,5 +1,5 @@
 use super::{
-    numeric_binding_for_edit, numeric_binding_for_trackbar, record_last_applied,
+    commits_on_enter, numeric_binding_for_edit, numeric_binding_for_trackbar, record_last_applied,
     restore_last_applied, take_unapplied_changes,
 };
 use crate::config::Config;
@@ -83,4 +83,30 @@ fn every_appearance_numeric_input_is_bound_to_its_trackbar() {
         assert_eq!(from_edit.edit_id, edit_id);
         assert_eq!(from_edit.setting, from_trackbar.setting);
     }
+}
+
+#[test]
+fn enter_commits_numeric_edits_without_invoking_a_dialog_button() {
+    use super::ctrl_id;
+
+    for id in [
+        ctrl_id::BACKGROUND_EDIT,
+        ctrl_id::TEXTSIZE_EDIT,
+        ctrl_id::OUTLINE1_EDIT,
+        ctrl_id::OUTLINE2_EDIT,
+        ctrl_id::SHADOW_X_EDIT,
+        ctrl_id::SHADOW_Y_EDIT,
+        ctrl_id::MARGIN_X_EDIT,
+        ctrl_id::MARGIN_Y_EDIT,
+        ctrl_id::MARGIN_NAME_EDIT,
+        ctrl_id::BORDER_SIZE_EDIT,
+        ctrl_id::LLM_MAX_TOKENS_EDIT,
+        ctrl_id::LLM_TEMPERATURE_EDIT,
+        ctrl_id::LLM_DEBOUNCE_EDIT,
+    ] {
+        assert!(commits_on_enter(id), "numeric edit {id} must consume Enter");
+    }
+
+    assert!(!commits_on_enter(ctrl_id::LLM_SYSTEM_PROMPT_EDIT));
+    assert!(!commits_on_enter(ctrl_id::APPLY));
 }
