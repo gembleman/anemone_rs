@@ -2,14 +2,10 @@
 //!
 //! 번역 진행 상황 표시 및 취소 기능.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use windows::{
     Win32::{
         Foundation::*,
         System::Com::{CLSCTX_ALL, CoCreateInstance},
-        System::LibraryLoader::GetModuleHandleW,
         UI::Controls::*,
         UI::Input::KeyboardAndMouse::EnableWindow,
         UI::Shell::{
@@ -20,11 +16,8 @@ use windows::{
     core::*,
 };
 
-use super::helpers::{
-    register_resource_dialog, rescale_dialog_children_for_dpi, set_window_text, show_dialog_window,
-    unregister_resource_dialog,
-};
-use crate::define_dialog_instance;
+use super::helpers::set_window_text;
+use super::host::{DialogHost, DialogPlacement, DialogResult, HostedDialog, ReopenPolicy};
 use crate::file_trans::{FileTransTask, ProgressEvent};
 
 // 컨트롤 ID
@@ -89,152 +82,71 @@ pub struct FileTransProgressDialog {
     taskbar: Option<ITaskbarList3>,
 }
 
-define_dialog_instance!(PROGRESS_INSTANCE: FileTransProgressDialog);
-
-struct PendingProgress {
+pub(crate) struct ProgressInit {
     parent: HWND,
     task: FileTransTask,
 }
 
-thread_local! {
-    static PROGRESS_PENDING: RefCell<Option<PendingProgress>> = const { RefCell::new(None) };
-    static PROGRESS_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
-}
+impl HostedDialog for FileTransProgressDialog {
+    type Init = ProgressInit;
+    const RESOURCE_ID: u16 = ctrl_id::DIALOG;
+    /// 번역이 도는 동안 부모를 가리므로 부모 사각형 기준으로 중앙에 놓는다.
+    const PLACEMENT: DialogPlacement = DialogPlacement::ParentCenter;
+    /// 진행 중에는 주 창 입력을 막는다. host가 WM_DESTROY에서 되살린다.
+    const DISABLE_PARENT: bool = true;
+    /// 같은 작업을 두 번 시작하지 않도록 호출자에게 오류를 돌려준다.
+    const REOPEN: ReopenPolicy = ReopenPolicy::Reject("파일 번역 진행률 창이 이미 열려 있습니다");
 
-/// `resources/file_trans_progress.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
-unsafe extern "system" fn file_trans_progress_dialog_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> isize {
-    if msg == WM_INITDIALOG {
-        let pending = PROGRESS_PENDING.with(|slot| slot.borrow_mut().take());
-        let Some(PendingProgress { parent, task }) = pending else {
-            PROGRESS_INIT_ERROR.with(|slot| {
-                *slot.borrow_mut() = Some("파일 번역 진행률 창 초기화 인자가 없습니다".into());
-            });
-            return 0;
-        };
-
-        let dialog = Rc::new(RefCell::new(FileTransProgressDialog::new(
-            hwnd, parent, task,
-        )));
-        PROGRESS_INSTANCE.with(|slot| {
-            *slot.borrow_mut() = Some(dialog.clone());
-        });
-
-        let initialization = dialog.borrow_mut().initialize_controls();
-        if let Err(error) = initialization {
-            dialog.borrow().clear_taskbar_progress();
-            PROGRESS_INSTANCE.with(|slot| {
-                slot.borrow_mut().take();
-            });
-            PROGRESS_INIT_ERROR.with(|slot| {
-                *slot.borrow_mut() = Some(error.to_string());
-            });
-            return 0;
+    fn create(hwnd: HWND, init: Self::Init) -> Result<Self> {
+        let mut dialog = Self::new(hwnd, init.parent, init.task);
+        if let Err(error) = dialog.initialize_controls() {
+            dialog.clear_taskbar_progress();
+            return Err(error);
         }
-        register_resource_dialog(hwnd);
-        return 1;
+        Ok(dialog)
     }
 
-    let instance = PROGRESS_INSTANCE.with(|slot| {
-        let Ok(guard) = slot.try_borrow() else {
-            return None;
-        };
-        guard.clone()
-    });
-    let Some(dialog) = instance else {
-        return 0;
-    };
-
-    if msg == WM_TIMER && wparam.0 == PROGRESS_POLL_TIMER {
-        let mut can_flush = false;
-        if let Ok(mut dialog) = dialog.try_borrow_mut() {
-            dialog.drain_progress_events();
-            can_flush = true;
-        } else {
-            unsafe {
-                super::helpers::defer_dialog_message(hwnd, msg, wparam, LPARAM(0));
+    fn handle_message(&mut self, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> DialogResult {
+        match msg {
+            WM_TIMER if wparam.0 == PROGRESS_POLL_TIMER => {
+                self.drain_progress_events();
+                DialogResult::Handled(LRESULT(1))
             }
+            WM_COMMAND => {
+                let id = (wparam.0 & 0xFFFF) as u16;
+                if id == ctrl_id::BTN_CANCEL || id == IDCANCEL.0 as u16 {
+                    self.handle_cancel();
+                }
+                DialogResult::Handled(LRESULT(1))
+            }
+            // 닫기 요청도 취소와 동일하게 처리해 워커가 임시 파일을 정리하게 한다.
+            // 창은 워커가 종료 이벤트를 보낼 때 WM_PROGRESS_FINISH로 닫는다.
+            WM_CLOSE => {
+                self.handle_cancel();
+                DialogResult::Handled(LRESULT(1))
+            }
+            WM_PROGRESS_FINISH => DialogResult::Close(LRESULT(1)),
+            _ => DialogResult::Unhandled,
         }
-        if can_flush {
-            super::helpers::flush_deferred_dialog_messages(hwnd);
-        }
-        return 1;
     }
 
-    let mut can_flush = false;
-    let result = match msg {
-        WM_DPICHANGED => {
-            if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                dialog.handle_dpi_changed(wparam, lparam);
-                can_flush = true;
-            } else {
-                unsafe {
-                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
-                }
-            }
-            1
-        }
-        WM_COMMAND => {
-            let id = (wparam.0 & 0xFFFF) as u16;
-            if (id == ctrl_id::BTN_CANCEL || id == IDCANCEL.0 as u16)
-                && let Ok(mut dialog) = dialog.try_borrow_mut()
-            {
-                dialog.handle_cancel();
-                can_flush = true;
-            } else if id == ctrl_id::BTN_CANCEL || id == IDCANCEL.0 as u16 {
-                unsafe {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
-                }
-            }
-            1
-        }
-        // 닫기 요청도 취소와 동일하게 처리해 워커가 임시 파일을 정리하게 한다.
-        WM_CLOSE => {
-            if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                dialog.handle_cancel();
-                can_flush = true;
-            } else {
-                unsafe {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
-                }
-            }
-            1
-        }
-        WM_DESTROY => {
-            if let Ok(dialog) = dialog.try_borrow() {
-                dialog.clear_taskbar_progress();
-                unsafe {
-                    let _ = EnableWindow(dialog.parent_hwnd, true);
-                    let _ = SetForegroundWindow(dialog.parent_hwnd);
-                }
-            }
-            unsafe {
-                let _ = KillTimer(Some(hwnd), PROGRESS_POLL_TIMER);
-            }
-            unregister_resource_dialog(hwnd);
-            PROGRESS_INSTANCE.with(|slot| {
-                if let Ok(mut guard) = slot.try_borrow_mut() {
-                    *guard = None;
-                }
-            });
-            1
-        }
-        WM_PROGRESS_FINISH => {
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-            1
-        }
-        _ => 0,
-    };
-    if can_flush {
-        super::helpers::flush_deferred_dialog_messages(hwnd);
+    fn applied_dpi(&mut self) -> Option<&mut u32> {
+        Some(&mut self.applied_dpi)
     }
-    result
+
+    fn destroy(&mut self) {
+        self.clear_taskbar_progress();
+        // SAFETY: self.hwnd는 아직 파괴 중인 유효한 창이다.
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), PROGRESS_POLL_TIMER);
+        }
+    }
+
+    fn can_defer(msg: u32) -> bool {
+        // WM_CLOSE는 재예약하지 않는다. 이 창에서 닫기는 "작업 취소"를 뜻하므로
+        // 재진입 중이면 host의 기본 파괴 경로로 넘겨 창이 남지 않게 한다.
+        msg == WM_COMMAND
+    }
 }
 
 impl FileTransProgressDialog {
@@ -278,64 +190,7 @@ impl FileTransProgressDialog {
 
     /// `resources/file_trans_progress.rc`의 모델리스 DIALOGEX 리소스를 연다.
     pub(crate) fn show(parent: HWND, task: FileTransTask) -> Result<HWND> {
-        let existing = PROGRESS_INSTANCE
-            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
-        if let Some(hwnd) = existing
-            && unsafe { IsWindow(Some(hwnd)).as_bool() }
-        {
-            unsafe {
-                let _ = SetForegroundWindow(hwnd);
-            }
-            return Err(Error::new(
-                E_FAIL,
-                "파일 번역 진행률 창이 이미 열려 있습니다",
-            ));
-        }
-
-        let instance = unsafe { GetModuleHandleW(None)? };
-        PROGRESS_INIT_ERROR.with(|slot| {
-            slot.borrow_mut().take();
-        });
-        PROGRESS_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingProgress { parent, task });
-        });
-
-        let result = unsafe {
-            CreateDialogParamW(
-                Some(instance.into()),
-                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
-                Some(parent),
-                Some(file_trans_progress_dialog_proc),
-                LPARAM(0),
-            )
-        };
-
-        let hwnd = match result {
-            Ok(hwnd) => hwnd,
-            Err(error) => {
-                PROGRESS_PENDING.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                PROGRESS_INIT_ERROR.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                return Err(error);
-            }
-        };
-
-        if let Some(message) = PROGRESS_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-            return Err(Error::new(E_FAIL, message));
-        }
-
-        unsafe {
-            Self::center_on_parent(hwnd, parent);
-            let _ = EnableWindow(parent, false);
-            show_dialog_window(hwnd);
-        }
-        Ok(hwnd)
+        DialogHost::<Self>::show(parent, ProgressInit { parent, task })
     }
 
     /// 파일 번역이 진행 중인지만 판정한다. 창을 앞으로 가져오지 않는다.
@@ -345,25 +200,19 @@ impl FileTransProgressDialog {
     /// 뜻밖에 뒤로 밀린다. 업데이트 적용 거부 판정처럼 부작용이 없어야 하는
     /// 곳에서는 이 함수를 쓴다.
     pub(crate) fn is_running() -> bool {
-        PROGRESS_INSTANCE
-            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd))
-            .is_some_and(|hwnd| unsafe { IsWindow(Some(hwnd)).as_bool() })
+        DialogHost::<Self>::current_hwnd().is_some()
     }
 
     /// 이미 진행 중인 작업이 있으면 그 진행창을 앞으로 가져온다.
     pub(crate) fn activate_existing() -> bool {
-        let existing = PROGRESS_INSTANCE
-            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
-        if let Some(hwnd) = existing
-            && unsafe { IsWindow(Some(hwnd)).as_bool() }
-        {
-            unsafe {
-                let _ = SetForegroundWindow(hwnd);
-            }
-            true
-        } else {
-            false
+        let Some(hwnd) = DialogHost::<Self>::current_hwnd() else {
+            return false;
+        };
+        // SAFETY: current_hwnd는 IsWindow로 검증된 핸들만 돌려준다.
+        unsafe {
+            let _ = SetForegroundWindow(hwnd);
         }
+        true
     }
 
     fn initialize_controls(&mut self) -> Result<()> {
@@ -390,52 +239,6 @@ impl FileTransProgressDialog {
             ));
         }
         Ok(())
-    }
-
-    unsafe fn center_on_parent(hwnd: HWND, parent: HWND) {
-        unsafe {
-            let mut dialog_rect = RECT::default();
-            let mut parent_rect = RECT::default();
-            if GetWindowRect(hwnd, &mut dialog_rect).is_err()
-                || GetWindowRect(parent, &mut parent_rect).is_err()
-            {
-                return;
-            }
-            let width = dialog_rect.right - dialog_rect.left;
-            let height = dialog_rect.bottom - dialog_rect.top;
-            let x = parent_rect.left + (parent_rect.right - parent_rect.left - width) / 2;
-            let y = parent_rect.top + (parent_rect.bottom - parent_rect.top - height) / 2;
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                x,
-                y,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-        }
-    }
-
-    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
-        let new_dpi = (wparam.0 & 0xFFFF) as u32;
-        rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
-        self.applied_dpi = new_dpi;
-
-        if lparam.0 != 0 {
-            unsafe {
-                let rect = &*(lparam.0 as *const RECT);
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    None,
-                    rect.left,
-                    rect.top,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-        }
     }
 
     fn clear_taskbar_progress(&self) {

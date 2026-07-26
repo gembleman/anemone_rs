@@ -751,14 +751,7 @@ impl SettingsDialog {
 
     /// 컨트롤 텍스트 설정 헬퍼
     pub(super) fn set_control_text(&self, ctrl_id: u16, text: &str) {
-        // SAFETY: self.hwnd is valid; GetDlgItem returns a valid control handle.
-        unsafe {
-            if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32)
-                && !ctrl.is_invalid()
-            {
-                let _ = SetWindowTextW(ctrl, &HSTRING::from(text));
-            }
-        }
+        crate::dialogs::helpers::set_dlg_item_text(self.hwnd, ctrl_id, text);
     }
 
     /// 제목 지정 폴더 브라우저 열기
@@ -881,20 +874,7 @@ impl SettingsDialog {
 
     /// Edit 컨트롤에서 텍스트 가져오기
     fn get_control_text(&self, ctrl_id: u16) -> String {
-        // SAFETY: self.hwnd is valid; GetDlgItem returns a valid control handle.
-        unsafe {
-            let ctrl = match GetDlgItem(Some(self.hwnd), ctrl_id as i32) {
-                Ok(h) if !h.is_invalid() => h,
-                _ => return String::new(),
-            };
-            let len = GetWindowTextLengthW(ctrl);
-            if len == 0 {
-                return String::new();
-            }
-            let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
-            GetWindowTextW(ctrl, &mut buffer);
-            String::from_utf16_lossy(&buffer[..len as usize])
-        }
+        crate::dialogs::helpers::get_dlg_item_text(self.hwnd, ctrl_id)
     }
 
     /// 트랙바 위치 업데이트

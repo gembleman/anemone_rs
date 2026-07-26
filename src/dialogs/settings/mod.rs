@@ -12,21 +12,17 @@ use std::rc::Rc;
 
 use windows::{
     Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW, UI::Controls::*,
+        Foundation::*, Graphics::Gdi::*, UI::Controls::*,
         UI::Input::KeyboardAndMouse::EnableWindow, UI::WindowsAndMessaging::*,
     },
     core::*,
 };
 
 use super::TBM_GETPOS;
-use super::helpers::{
-    center_dialog_on_monitor, register_resource_dialog, show_dialog_window,
-    unregister_resource_dialog,
-};
+use super::host::{DialogHost, DialogResult, HostedDialog};
 use super::models::SettingsDraft;
 use crate::app::action::AppActionSender;
 use crate::config::{Config, TextAlign};
-use crate::define_dialog_instance;
 use crate::translation::{TranslationEngine, lang_utils};
 use crate::win32::to_wide;
 
@@ -109,29 +105,49 @@ pub struct SettingsDialog {
     update_available: Cell<bool>,
 }
 
-define_dialog_instance!(SETTINGS_INSTANCE: SettingsDialog);
-
-struct PendingSettings {
+pub(crate) struct SettingsInit {
     draft: Rc<RefCell<SettingsDraft>>,
     actions: Option<AppActionSender>,
 }
 
-thread_local! {
-    static SETTINGS_PENDING: RefCell<Option<PendingSettings>> = const { RefCell::new(None) };
-    static SETTINGS_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
-}
+impl HostedDialog for SettingsDialog {
+    type Init = SettingsInit;
+    const RESOURCE_ID: u16 = ctrl_id::DIALOG;
 
-/// `resources/settings.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
-unsafe extern "system" fn settings_dialog_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> isize {
-    unsafe {
-        if msg == WM_CTLCOLORSTATIC {
-            // SetWindowTextW가 정적 컨트롤을 동기적으로 다시 그릴 때도 설정 상태의
-            // RefCell 대여 여부와 무관하게 탭 본문 배경색을 유지한다.
+    fn create(hwnd: HWND, init: Self::Init) -> Result<Self> {
+        let last_applied = RefCell::new(init.draft.borrow().clone());
+        let mut dialog = SettingsDialog {
+            hwnd,
+            draft: init.draft,
+            last_applied,
+            actions: init.actions,
+            tab_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            current_tab: TAB_APPEARANCE,
+            applied_dpi: crate::dpi::dpi_for_window(hwnd),
+            scroll_pos: 0,
+            scroll_max: 0,
+            has_unapplied_changes: Cell::new(false),
+            engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            update_available: Cell::new(false),
+        };
+        dialog.initialize_controls()?;
+        Ok(dialog)
+    }
+
+    /// `WM_CTLCOLORSTATIC`은 state를 빌리기 전에 처리한다. `SetWindowTextW`가
+    /// 정적 컨트롤을 동기적으로 다시 그릴 때도 RefCell 대여 여부와 무관하게
+    /// 탭 본문 배경색을 유지해야 하기 때문이다.
+    fn handle_before_borrow(
+        _hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<isize> {
+        if msg != WM_CTLCOLORSTATIC {
+            return None;
+        }
+        // SAFETY: WM_CTLCOLORSTATIC의 WPARAM은 유효한 HDC, LPARAM은 자식 HWND다.
+        unsafe {
             let hdc = HDC(wparam.0 as *mut _);
             let _ = SetBkMode(hdc, TRANSPARENT);
             // EzTrans 경로 경고만 붉은 글자로 그려 다른 안내 문구와 구분한다.
@@ -141,147 +157,62 @@ unsafe extern "system" fn settings_dialog_proc(
             {
                 SetTextColor(hdc, COLORREF(0x00_00_00_CC));
             }
-            return GetSysColorBrush(COLOR_WINDOW).0 as isize;
+            Some(GetSysColorBrush(COLOR_WINDOW).0 as isize)
         }
+    }
 
-        if msg == WM_INITDIALOG {
-            let pending = SETTINGS_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(PendingSettings { draft, actions }) = pending else {
-                SETTINGS_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some("설정창 초기화 인자가 없습니다".to_string());
-                });
-                return 0;
-            };
-
-            let last_applied = RefCell::new(draft.borrow().clone());
-            let dialog = Rc::new(RefCell::new(SettingsDialog {
-                hwnd,
-                draft,
-                last_applied,
-                actions,
-                tab_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-                current_tab: TAB_APPEARANCE,
-                applied_dpi: crate::dpi::dpi_for_window(hwnd),
-                scroll_pos: 0,
-                scroll_max: 0,
-                has_unapplied_changes: Cell::new(false),
-                engine_controls: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-                update_available: Cell::new(false),
-            }));
-            SETTINGS_INSTANCE.with(|slot| {
-                *slot.borrow_mut() = Some(dialog.clone());
-            });
-
-            if let Err(error) = dialog.borrow_mut().initialize_controls() {
-                SETTINGS_INSTANCE.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                SETTINGS_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some(error.to_string());
-                });
-                return 0;
-            }
-            register_resource_dialog(hwnd);
-            return 1;
-        }
-
-        let instance = SETTINGS_INSTANCE.with(|slot| {
-            let Ok(guard) = slot.try_borrow() else {
-                return None;
-            };
-            guard.clone()
-        });
-        let Some(dialog) = instance else {
-            return 0;
-        };
-
-        if msg == WM_DPICHANGED {
-            let mut can_flush = false;
-            if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                dialog.handle_dpi_changed(wparam, lparam);
-                can_flush = true;
-            } else {
-                super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
-            }
-            if can_flush {
-                super::helpers::flush_deferred_dialog_messages(hwnd);
-            }
-            return 1;
-        }
-
+    fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> DialogResult {
         if msg == crate::dialogs::glossary::WM_GLOSSARY_APPLIED {
-            if let Ok(dialog) = dialog.try_borrow() {
-                dialog.glossary_applied();
-                drop(dialog);
-                super::helpers::flush_deferred_dialog_messages(hwnd);
-            } else {
-                super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
-            }
-            return 1;
+            self.glossary_applied();
+            return DialogResult::Handled(LRESULT(1));
         }
-
         if msg == crate::dialogs::glossary::WM_EZTRANS_DICTIONARY_APPLIED {
-            if let Ok(dialog) = dialog.try_borrow() {
-                dialog.eztrans_dictionary_applied();
-                drop(dialog);
-                super::helpers::flush_deferred_dialog_messages(hwnd);
-            } else {
-                super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
-            }
-            return 1;
+            self.eztrans_dictionary_applied();
+            return DialogResult::Handled(LRESULT(1));
         }
-
-        if let Ok(mut dialog) = dialog.try_borrow_mut()
-            && let Some(result) = dialog.handle_message(msg, wparam, lparam)
-        {
-            drop(dialog);
-            super::helpers::flush_deferred_dialog_messages(hwnd);
-            return result.0;
+        if let Some(result) = self.handle_custom_message(msg, wparam, lparam) {
+            return DialogResult::Handled(result);
         }
-
-        let mut can_flush = false;
-        let result = match msg {
+        match msg {
             WM_COMMAND => {
                 let id = (wparam.0 & 0xFFFF) as u16;
                 let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-                if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_command(id, notify_code);
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
-                }
-                1
+                self.handle_command(id, notify_code);
+                DialogResult::Handled(LRESULT(1))
             }
+            // 적용하지 않은 preview는 창을 닫기 전에 되돌린다.
             WM_CLOSE => {
-                if let Ok(dialog) = dialog.try_borrow() {
-                    dialog.discard_unapplied_changes();
-                    drop(dialog);
-                    let _ = DestroyWindow(hwnd);
-                } else {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
-                }
-                1
+                self.discard_unapplied_changes();
+                DialogResult::Close(LRESULT(1))
             }
-            WM_DESTROY => {
-                unregister_resource_dialog(hwnd);
-                if let Ok(dialog) = dialog.try_borrow()
-                    && let Some(actions) = &dialog.actions
-                {
-                    actions.settings_dialog_closed();
-                }
-                SETTINGS_INSTANCE.with(|slot| {
-                    if let Ok(mut guard) = slot.try_borrow_mut() {
-                        *guard = None;
-                    }
-                });
-                1
-            }
-            _ => 0,
-        };
-        if can_flush {
-            super::helpers::flush_deferred_dialog_messages(hwnd);
+            _ => DialogResult::Unhandled,
         }
-        result
+    }
+
+    fn applied_dpi(&mut self) -> Option<&mut u32> {
+        // 설정창은 scroll 위치를 먼저 되돌려야 해서 after_dpi_changed에서 직접 처리한다.
+        None
+    }
+
+    fn after_dpi_changed(&mut self, new_dpi: u32) {
+        self.scroll_to(0);
+        super::helpers::rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
+        self.applied_dpi = new_dpi;
+        self.adjust_dialog_size_for_tab(self.current_tab);
+    }
+
+    fn destroy(&mut self) {
+        if let Some(actions) = &self.actions {
+            actions.settings_dialog_closed();
+        }
+    }
+
+    fn can_defer(msg: u32) -> bool {
+        // WM_CLOSE는 제외한다. 재진입 중이면 host가 바로 파괴하며, 재예약하면
+        // preview 되돌리기가 끝나기 전에 창이 닫힐 수 있다.
+        msg == WM_COMMAND
+            || msg == crate::dialogs::glossary::WM_GLOSSARY_APPLIED
+            || msg == crate::dialogs::glossary::WM_EZTRANS_DICTIONARY_APPLIED
     }
 }
 
@@ -294,81 +225,23 @@ impl SettingsDialog {
 
     /// `resources/settings.rc`의 모델리스 DIALOGEX 리소스를 연다.
     pub fn show(parent: HWND, config: Config, actions: Option<AppActionSender>) -> Result<HWND> {
-        if let Some(hwnd) = Self::current_hwnd() {
-            unsafe {
-                let _ = SetForegroundWindow(hwnd);
-            }
-            return Ok(hwnd);
-        }
-        // SAFETY: None은 현재 프로세스 모듈을 뜻한다.
-        let instance = unsafe { GetModuleHandleW(None)? };
-        SETTINGS_INIT_ERROR.with(|slot| {
-            slot.borrow_mut().take();
-        });
-        SETTINGS_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingSettings {
+        DialogHost::<Self>::show(
+            parent,
+            SettingsInit {
                 draft: Rc::new(RefCell::new(SettingsDraft::new(config))),
                 actions,
-            });
-        });
-
-        // SAFETY: 리소스 ID는 빌드 시 실행 파일에 포함되고, 콜백은 DLGPROC ABI를
-        // 따른다. 초기화 인자는 UI 스레드의 SETTINGS_PENDING에서 한 번만 꺼낸다.
-        let result = unsafe {
-            CreateDialogParamW(
-                Some(instance.into()),
-                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
-                Some(parent),
-                Some(settings_dialog_proc),
-                LPARAM(0),
-            )
-        };
-
-        let hwnd = match result {
-            Ok(hwnd) => hwnd,
-            Err(error) => {
-                SETTINGS_PENDING.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                SETTINGS_INIT_ERROR.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                return Err(error);
-            }
-        };
-
-        if let Some(message) = SETTINGS_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
-            // SAFETY: CreateDialogParamW가 반환한 유효한 모델리스 다이얼로그.
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-            return Err(Error::new(E_FAIL, message));
-        }
-
-        // 부모가 있는 모니터의 작업 영역 중앙에 배치한다.
-        unsafe {
-            center_dialog_on_monitor(hwnd, parent);
-            show_dialog_window(hwnd);
-        }
-        Ok(hwnd)
+            },
+        )
     }
 
     pub(crate) fn current_hwnd() -> Option<HWND> {
-        let hwnd = SETTINGS_INSTANCE.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .and_then(|dialog| dialog.try_borrow().ok().map(|dialog| dialog.hwnd))
-        })?;
-        unsafe { IsWindow(Some(hwnd)).as_bool().then_some(hwnd) }
+        DialogHost::<Self>::current_hwnd()
     }
 
     /// 주 창이 설정 요청을 처리한 뒤 실제 magnetic 상태를 반영한다.
     pub(crate) fn set_magnetic_checked(dialog_hwnd: HWND, enabled: bool) {
-        SETTINGS_INSTANCE.with(|slot| {
-            if let Some(dialog) = slot.borrow().as_ref()
-                && let Ok(dialog) = dialog.try_borrow()
-                && dialog.hwnd == dialog_hwnd
-            {
+        DialogHost::<Self>::with_state(|dialog| {
+            if dialog.hwnd == dialog_hwnd {
                 dialog.draft.borrow_mut().magnetic_mode = enabled;
             }
         });
@@ -382,11 +255,8 @@ impl SettingsDialog {
     }
 
     pub(crate) fn set_clipboard_checked(dialog_hwnd: HWND, enabled: bool) {
-        SETTINGS_INSTANCE.with(|slot| {
-            if let Some(dialog) = slot.borrow().as_ref()
-                && let Ok(dialog) = dialog.try_borrow()
-                && dialog.hwnd == dialog_hwnd
-            {
+        DialogHost::<Self>::with_state(|dialog| {
+            if dialog.hwnd == dialog_hwnd {
                 dialog.draft.borrow_mut().clipboard_watch = enabled;
             }
         });
@@ -431,13 +301,7 @@ impl SettingsDialog {
     /// 같은 버튼이 두 가지 일을 하므로 레이블도 함께 바꾼다. 레이블이 "업데이트
     /// 확인"인 채로 다운로드가 시작되면 사용자는 자기가 무엇을 눌렀는지 알 수 없다.
     pub(crate) fn set_update_available(available: bool) {
-        SETTINGS_INSTANCE.with(|slot| {
-            if let Some(dialog) = slot.borrow().as_ref()
-                && let Ok(dialog) = dialog.try_borrow()
-            {
-                dialog.update_available.set(available);
-            }
-        });
+        DialogHost::<Self>::with_state(|dialog| dialog.update_available.set(available));
 
         let Some(hwnd) = Self::current_hwnd() else {
             return;
@@ -578,30 +442,6 @@ impl SettingsDialog {
                 let _ = InvalidateRect(Some(h), None, true);
             }
         }
-    }
-
-    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
-        let new_dpi = (wparam.0 & 0xffff) as u32;
-        self.scroll_to(0);
-        super::helpers::rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
-        self.applied_dpi = new_dpi;
-
-        if lparam.0 != 0 {
-            // SAFETY: WM_DPICHANGED의 LPARAM은 메시지 처리 동안 유효한 RECT 포인터다.
-            unsafe {
-                let rect = &*(lparam.0 as *const RECT);
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    None,
-                    rect.left,
-                    rect.top,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-        }
-        self.adjust_dialog_size_for_tab(self.current_tab);
     }
 
     /// 탭 전환: 현재 탭 컨트롤 숨기고 새 탭 컨트롤 표시
@@ -1090,8 +930,13 @@ impl SettingsDialog {
         }
     }
 
-    /// 커스텀 메시지 핸들러
-    fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    /// 레이아웃·그리기 관련 커스텀 메시지. 처리하지 않으면 `None`.
+    fn handle_custom_message(
+        &mut self,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<LRESULT> {
         match msg {
             hotkeys::WM_HOTKEY_CAPTURED => {
                 self.handle_hotkey_capture(wparam.0, lparam.0 as u32);
@@ -1191,6 +1036,12 @@ impl SettingsDialog {
             _ => None,
         }
     }
+}
+
+/// 열려 있는 설정창 상태를 빌려 검사·조작한다. GUI 테스트 전용이다.
+#[cfg(test)]
+pub(crate) fn with_settings_instance<R>(f: impl FnOnce(&mut SettingsDialog) -> R) -> R {
+    DialogHost::<SettingsDialog>::with_state_mut(f).expect("settings instance")
 }
 
 #[cfg(test)]

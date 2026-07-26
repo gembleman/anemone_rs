@@ -133,7 +133,8 @@ fn every_translation_tab_control_is_registered_for_show_hide() {
 
     // 컨트롤 ID는 첫 인자이거나 문자열 뒤 첫 숫자다. 좌표와 구분하기 위해
     // 이 다이얼로그가 실제로 쓰는 ID 대역(1200~1599, 2000~2499)만 취한다.
-    let is_control_id = |value: u16| (1200..=1599).contains(&value) || (2000..=2499).contains(&value);
+    let is_control_id =
+        |value: u16| (1200..=1599).contains(&value) || (2000..=2499).contains(&value);
     let declared: std::collections::BTreeSet<u16> = declared_control_ids(section)
         .into_iter()
         .filter(|&id| is_control_id(id))
@@ -355,14 +356,12 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
         crate::dialogs::helpers::get_window_text(control(hwnd, ctrl_id::MARGIN_X_EDIT)),
         "300"
     );
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        assert_eq!(instance.borrow().draft.borrow().text_margin_x, 300);
+    super::with_settings_instance(|instance| {
+        assert_eq!(instance.draft.borrow().text_margin_x, 300);
     });
 
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        instance.borrow_mut().switch_tab(super::TAB_TRANSLATION);
+    super::with_settings_instance(|instance| {
+        instance.switch_tab(super::TAB_TRANSLATION);
     });
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_KEYS_LIST)).as_bool() });
     assert!(unsafe { IsWindowVisible(control(hwnd, ctrl_id::DEEPL_KEY_TIER_COMBO)).as_bool() });
@@ -516,16 +515,9 @@ fn win32_engine_transition_and_invalid_numeric_input_smoke() {
     );
     assert_eq!(combo_index(hwnd, ctrl_id::LLM_REASONING_EFFORT), 0);
     select_combo(hwnd, ctrl_id::LLM_REASONING_EFFORT, 5);
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
+    super::with_settings_instance(|instance| {
         assert_eq!(
-            instance
-                .borrow()
-                .draft
-                .borrow()
-                .translation
-                .llm
-                .reasoning_effort,
+            instance.draft.borrow().translation.llm.reasoning_effort,
             Some(crate::translation::llm::ReasoningEffort::High)
         );
     });
@@ -710,10 +702,9 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
     // 잘못된 경로이므로 경고 문구가 실제로 채워져야 한다. 문구가 비면 라벨이
     // 보이든 말든 사용자에게는 아무 경고도 없는 것이고, 아래 가시성 검사도
     // 의미를 잃는다.
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        instance.borrow_mut().switch_tab(super::TAB_TRANSLATION);
-        instance.borrow().refresh_eztrans_path_warnings();
+    super::with_settings_instance(|instance| {
+        instance.switch_tab(super::TAB_TRANSLATION);
+        instance.refresh_eztrans_path_warnings();
     });
     assert!(
         crate::dialogs::helpers::get_window_text(dll_warning).contains("EzTrans DLL이 아닙니다"),
@@ -727,9 +718,8 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
     assert!(unsafe { IsWindowVisible(dat_warning).as_bool() });
 
     // 외관 탭으로 나가면 두 라벨 모두 숨겨져야 한다.
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        instance.borrow_mut().switch_tab(super::TAB_APPEARANCE);
+    super::with_settings_instance(|instance| {
+        instance.switch_tab(super::TAB_APPEARANCE);
     });
     assert!(
         !unsafe { IsWindowVisible(dll_warning).as_bool() },
@@ -742,16 +732,14 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
 
     // 올바른 경로로 바꾸면 경고가 사라져야 한다 — 라벨이 항상 켜져 있는 것이
     // 아님을 확인해 위 가시성 검사가 자명하게 통과하는 것을 막는다.
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        instance.borrow_mut().switch_tab(super::TAB_TRANSLATION);
+    super::with_settings_instance(|instance| {
+        instance.switch_tab(super::TAB_TRANSLATION);
         {
-            let instance = instance.borrow();
             let mut draft = instance.draft.borrow_mut();
             draft.translation.eztrans_dll_path = String::new();
             draft.translation.eztrans_dat_path = String::new();
         }
-        instance.borrow().refresh_eztrans_path_warnings();
+        instance.refresh_eztrans_path_warnings();
     });
     assert!(
         crate::dialogs::helpers::get_window_text(dll_warning).is_empty(),
@@ -807,24 +795,21 @@ fn win32_scrolling_moves_every_child_exactly_once() {
     // 번역 탭에는 공용 컨트롤과 엔진 컨트롤이 섞여 있다. 중복 등록/누락이
     // 있었다면 이 둘의 이동량이 서로 달라진다.
     let probes = [
-        ctrl_id::TRANS_ENGINE,               // 공용(tab_controls에만)
-        ctrl_id::TRANSLATION_GROUP,          // 공용 그룹박스
-        ctrl_id::EZTRANS_DLL_EDIT,           // 엔진 컨트롤(양쪽에 등록)
-        ctrl_id::EZTRANS_DLL_WARNING_LABEL,  // 과거에 누락되었던 컨트롤
-        ctrl_id::APPLY,                      // 탭에 속하지 않는 하단 버튼
+        ctrl_id::TRANS_ENGINE,              // 공용(tab_controls에만)
+        ctrl_id::TRANSLATION_GROUP,         // 공용 그룹박스
+        ctrl_id::EZTRANS_DLL_EDIT,          // 엔진 컨트롤(양쪽에 등록)
+        ctrl_id::EZTRANS_DLL_WARNING_LABEL, // 과거에 누락되었던 컨트롤
+        ctrl_id::APPLY,                     // 탭에 속하지 않는 하단 버튼
     ];
 
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        instance.borrow_mut().switch_tab(super::TAB_TRANSLATION);
+    super::with_settings_instance(|instance| {
+        instance.switch_tab(super::TAB_TRANSLATION);
     });
 
     let before: Vec<i32> = probes.iter().map(|&id| top_of(hwnd, id)).collect();
 
     const DELTA: i32 = 40;
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        let mut instance = instance.borrow_mut();
+    super::with_settings_instance(|instance| {
         instance.scroll_max = 200;
         instance.scroll_to(DELTA);
     });
@@ -842,12 +827,14 @@ fn win32_scrolling_moves_every_child_exactly_once() {
 
     // 되돌리면 정확히 원래 위치여야 한다. 왕복 오차가 쌓이면 탭을 오갈 때마다
     // 레이아웃이 조금씩 밀린다.
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        instance.borrow_mut().scroll_to(0);
+    super::with_settings_instance(|instance| {
+        instance.scroll_to(0);
     });
     let restored: Vec<i32> = probes.iter().map(|&id| top_of(hwnd, id)).collect();
-    assert_eq!(restored, before, "스크롤 왕복 후 위치가 원래대로 돌아오지 않았습니다");
+    assert_eq!(
+        restored, before,
+        "스크롤 왕복 후 위치가 원래대로 돌아오지 않았습니다"
+    );
 }
 
 /// `reset_scroll_offset`은 스크롤된 자식을 원점으로 되돌리고 `scroll_pos`를 0으로
@@ -893,15 +880,12 @@ fn win32_reset_scroll_offset_restores_child_positions() {
         SettingsDialog::show(unsafe { GetDesktopWindow() }, Config::default(), None).unwrap();
     let _dialog = DialogGuard(hwnd);
 
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        instance.borrow_mut().switch_tab(super::TAB_HOTKEYS);
+    super::with_settings_instance(|instance| {
+        instance.switch_tab(super::TAB_HOTKEYS);
     });
     let baseline = top_of(hwnd, ctrl_id::HOTKEYS_LIST);
 
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        let mut instance = instance.borrow_mut();
+    super::with_settings_instance(|instance| {
         instance.scroll_max = 200;
         instance.scroll_to(60);
     });
@@ -911,9 +895,7 @@ fn win32_reset_scroll_offset_restores_child_positions() {
         "스크롤이 적용되지 않아 복원 검사가 무의미합니다"
     );
 
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        let mut instance = instance.borrow_mut();
+    super::with_settings_instance(|instance| {
         instance.reset_scroll_offset();
         assert_eq!(instance.scroll_pos, 0);
     });
@@ -953,9 +935,8 @@ fn win32_display_tab_keeps_cache_controls_visible() {
     let hwnd =
         SettingsDialog::show(unsafe { GetDesktopWindow() }, Config::default(), None).unwrap();
     let _dialog = DialogGuard(hwnd);
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        instance.borrow_mut().switch_tab(super::TAB_DISPLAY);
+    super::with_settings_instance(|instance| {
+        instance.switch_tab(super::TAB_DISPLAY);
     });
 
     let cache_clear = control(hwnd, ctrl_id::CLIPBOARD_CACHE_CLEAR);
@@ -1007,9 +988,8 @@ fn win32_hotkeys_tab_layout_smoke() {
     config.hotkeys.toggle_window = "F8".parse().unwrap();
     let hwnd = SettingsDialog::show(unsafe { GetDesktopWindow() }, config, None).unwrap();
     let _dialog = DialogGuard(hwnd);
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        instance.borrow_mut().switch_tab(super::TAB_HOTKEYS);
+    super::with_settings_instance(|instance| {
+        instance.switch_tab(super::TAB_HOTKEYS);
     });
 
     let mut list_rect = Default::default();
@@ -1039,9 +1019,7 @@ fn win32_hotkeys_tab_layout_smoke() {
             Some(LPARAM(reset.0 as isize)),
         );
     }
-    super::SETTINGS_INSTANCE.with(|slot| {
-        let instance = slot.borrow().as_ref().expect("settings instance").clone();
-        let instance = instance.borrow();
+    super::with_settings_instance(|instance| {
         assert_eq!(instance.draft.borrow().hotkeys, Default::default());
         assert!(instance.has_unapplied_changes.get());
     });

@@ -12,7 +12,8 @@ use windows::{
 };
 
 use super::helpers::{
-    get_window_text, listbox_add_item, listbox_get_sel, listbox_reset, set_window_text,
+    get_dlg_item_text, listbox_add_item, listbox_get_sel, listbox_reset, set_dlg_item_text,
+    set_window_text,
 };
 use super::host::{DialogHost, DialogResult, HostedDialog};
 use super::models::{DictionaryTarget, GlossaryDraft, SettingsDraft};
@@ -87,35 +88,13 @@ impl GlossaryDialog {
                 )
             })?;
         }
-        self.populate_listbox();
+        self.refresh_listbox();
         let title = match self.draft.target() {
             DictionaryTarget::Llm => "LLM 사전 편집",
             DictionaryTarget::EzTransPostprocess => "EzTrans 후처리 사전 편집",
         };
         set_window_text(self.hwnd, title)?;
         Ok(())
-    }
-
-    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
-        let new_dpi = (wparam.0 & 0xFFFF) as u32;
-        super::helpers::rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
-        self.applied_dpi = new_dpi;
-
-        if lparam.0 != 0 {
-            // SAFETY: WM_DPICHANGED의 LPARAM은 메시지 처리 동안 유효한 RECT 포인터다.
-            unsafe {
-                let rect = &*(lparam.0 as *const RECT);
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    None,
-                    rect.left,
-                    rect.top,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-        }
     }
 
     fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
@@ -168,22 +147,7 @@ impl GlossaryDialog {
         self.refresh_listbox();
     }
 
-    fn populate_listbox(&self) {
-        // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox handle.
-        unsafe {
-            let Ok(lb) = GetDlgItem(Some(self.hwnd), ctrl_id::LIST as i32) else {
-                return;
-            };
-            if lb.is_invalid() {
-                return;
-            }
-            for e in self.draft.entries() {
-                let line = format!("{} → {}", e.source, e.target);
-                listbox_add_item(lb, &line);
-            }
-        }
-    }
-
+    /// 목록을 비우고 현재 draft 항목으로 다시 채운다.
     fn refresh_listbox(&self) {
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox handle.
         unsafe {
@@ -215,27 +179,11 @@ impl GlossaryDialog {
     }
 
     fn set_control_text(&self, ctrl_id: u16, text: &str) {
-        // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid control handle.
-        unsafe {
-            if let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32)
-                && !ctrl.is_invalid()
-            {
-                let _ = set_window_text(ctrl, text);
-            }
-        }
+        set_dlg_item_text(self.hwnd, ctrl_id, text);
     }
 
     fn get_control_text(&self, ctrl_id: u16) -> String {
-        // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid control handle.
-        unsafe {
-            let Ok(ctrl) = GetDlgItem(Some(self.hwnd), ctrl_id as i32) else {
-                return String::new();
-            };
-            if ctrl.is_invalid() {
-                return String::new();
-            }
-            get_window_text(ctrl)
-        }
+        get_dlg_item_text(self.hwnd, ctrl_id)
     }
 }
 
@@ -274,8 +222,8 @@ impl HostedDialog for GlossaryDialog {
         DialogResult::Handled(LRESULT(1))
     }
 
-    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
-        GlossaryDialog::handle_dpi_changed(self, wparam, lparam);
+    fn applied_dpi(&mut self) -> Option<&mut u32> {
+        Some(&mut self.applied_dpi)
     }
 
     fn can_defer(msg: u32) -> bool {

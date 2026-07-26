@@ -358,6 +358,32 @@ pub fn get_window_text(hwnd: HWND) -> String {
     }
 }
 
+/// Dialog의 자식 컨트롤 text를 설정한다. 컨트롤이 없으면 조용히 무시한다.
+pub fn set_dlg_item_text(hwnd: HWND, ctrl_id: u16, text: &str) {
+    // SAFETY: hwnd는 유효한 dialog이며 GetDlgItem은 자식 handle을 돌려준다.
+    unsafe {
+        if let Ok(control) = GetDlgItem(Some(hwnd), ctrl_id as i32)
+            && !control.is_invalid()
+        {
+            let _ = set_window_text(control, text);
+        }
+    }
+}
+
+/// Dialog의 자식 컨트롤 text를 읽는다. 컨트롤이 없으면 빈 문자열이다.
+pub fn get_dlg_item_text(hwnd: HWND, ctrl_id: u16) -> String {
+    // SAFETY: hwnd는 유효한 dialog이며 GetDlgItem은 자식 handle을 돌려준다.
+    unsafe {
+        let Ok(control) = GetDlgItem(Some(hwnd), ctrl_id as i32) else {
+            return String::new();
+        };
+        if control.is_invalid() {
+            return String::new();
+        }
+        get_window_text(control)
+    }
+}
+
 pub fn listbox_add_item(hwnd: HWND, text: &str) {
     let wide = to_wide(text);
     unsafe {
@@ -378,21 +404,4 @@ pub fn listbox_reset(hwnd: HWND) {
 
 pub fn listbox_get_sel(hwnd: HWND) -> i32 {
     unsafe { SendMessageW(hwnd, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
-}
-
-/// 다이얼로그 타입별 thread-local 인스턴스 슬롯을 선언한다.
-///
-/// 사용:
-/// ```ignore
-/// define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
-/// ```
-#[macro_export]
-macro_rules! define_dialog_instance {
-    ($name:ident : $Dialog:ty) => {
-        thread_local! {
-            #[allow(non_upper_case_globals)]
-            static $name: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<$Dialog>>>>
-                = const { std::cell::RefCell::new(None) };
-        }
-    };
 }

@@ -3,14 +3,12 @@
 //! 다중 파일 선택 및 배치 번역 기능.
 //! Common Item Dialog (IFileOpenDialog / IFileSaveDialog) 사용.
 
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use windows::{
     Win32::{
         Foundation::*,
-        System::LibraryLoader::GetModuleHandleW,
         UI::Controls::{BST_CHECKED, CheckDlgButton},
         UI::Input::KeyboardAndMouse::EnableWindow,
         UI::WindowsAndMessaging::*,
@@ -20,13 +18,10 @@ use windows::{
 
 use super::file_dialog::{FileFilter, open_files_multi, save_file};
 use super::file_trans_progress::FileTransProgressDialog;
-use super::helpers::{
-    center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
-    set_window_text, show_dialog_window, unregister_resource_dialog,
-};
+use super::helpers::set_window_text;
+use super::host::{DialogHost, DialogResult, HostedDialog};
 use crate::app::action::AppActionSender;
 use crate::config::Config;
-use crate::define_dialog_instance;
 use crate::file_trans::{
     FileTransJobData, FileTranslationSupervisor, WriteType, default_output_paths,
     validate_job_paths,
@@ -69,121 +64,52 @@ pub struct FileTransDialog {
     session: u64,
 }
 
-define_dialog_instance!(FILE_TRANS_INSTANCE: FileTransDialog);
-
-struct PendingFileTrans {
+pub(crate) struct FileTransInit {
     config: Config,
     supervisor: Rc<FileTranslationSupervisor>,
     actions: AppActionSender,
     session: u64,
 }
 
-thread_local! {
-    static FILE_TRANS_PENDING: std::cell::RefCell<Option<PendingFileTrans>> = const { std::cell::RefCell::new(None) };
-    static FILE_TRANS_INIT_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-}
+impl HostedDialog for FileTransDialog {
+    type Init = FileTransInit;
+    const RESOURCE_ID: u16 = ctrl_id::DIALOG;
 
-/// `resources/file_trans.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
-unsafe extern "system" fn file_trans_dialog_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> isize {
-    unsafe {
-        if msg == WM_INITDIALOG {
-            let pending = FILE_TRANS_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(PendingFileTrans {
-                config,
-                supervisor,
-                actions,
-                session,
-            }) = pending
-            else {
-                FILE_TRANS_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some("파일 번역 창 초기화 인자가 없습니다".into());
-                });
-                return 0;
-            };
+    fn create(hwnd: HWND, init: Self::Init) -> Result<Self> {
+        let mut dialog = Self::new(
+            hwnd,
+            init.config,
+            init.supervisor,
+            init.actions,
+            init.session,
+        );
+        dialog.initialize_controls()?;
+        Ok(dialog)
+    }
 
-            let dialog = Rc::new(RefCell::new(FileTransDialog::new(
-                hwnd, config, supervisor, actions, session,
-            )));
-            FILE_TRANS_INSTANCE.with(|slot| {
-                *slot.borrow_mut() = Some(dialog.clone());
-            });
-
-            if let Err(error) = dialog.borrow_mut().initialize_controls() {
-                FILE_TRANS_INSTANCE.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                FILE_TRANS_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some(error.to_string());
-                });
-                return 0;
-            }
-            register_resource_dialog(hwnd);
-            return 1;
+    fn handle_message(&mut self, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> DialogResult {
+        if msg != WM_COMMAND {
+            return DialogResult::Unhandled;
         }
-
-        let instance = FILE_TRANS_INSTANCE.with(|slot| {
-            let Ok(guard) = slot.try_borrow() else {
-                return None;
-            };
-            guard.clone()
-        });
-        let Some(dialog) = instance else {
-            return 0;
-        };
-
-        let mut can_flush = false;
-        let result = match msg {
-            WM_DPICHANGED => {
-                if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_dpi_changed(wparam, lparam);
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
-                }
-                1
-            }
-            WM_COMMAND => {
-                let id = (wparam.0 & 0xFFFF) as u16;
-                let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-                if id == IDCANCEL.0 as u16 {
-                    let _ = DestroyWindow(hwnd);
-                } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_command(id, notify_code);
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
-                }
-                1
-            }
-            WM_CLOSE => {
-                let _ = DestroyWindow(hwnd);
-                1
-            }
-            WM_DESTROY => {
-                let (actions, session) = {
-                    let dialog = dialog.borrow();
-                    (dialog.actions.clone(), dialog.session)
-                };
-                actions.file_trans_dialog_closed(session);
-                unregister_resource_dialog(hwnd);
-                FILE_TRANS_INSTANCE.with(|slot| {
-                    if let Ok(mut guard) = slot.try_borrow_mut() {
-                        *guard = None;
-                    }
-                });
-                1
-            }
-            _ => 0,
-        };
-        if can_flush {
-            super::helpers::flush_deferred_dialog_messages(hwnd);
+        let id = (wparam.0 & 0xFFFF) as u16;
+        if id == IDCANCEL.0 as u16 {
+            return DialogResult::Close(LRESULT(1));
         }
-        result
+        let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+        self.handle_command(id, notify_code);
+        DialogResult::Handled(LRESULT(1))
+    }
+
+    fn applied_dpi(&mut self) -> Option<&mut u32> {
+        Some(&mut self.applied_dpi)
+    }
+
+    fn destroy(&mut self) {
+        self.actions.file_trans_dialog_closed(self.session);
+    }
+
+    fn can_defer(msg: u32) -> bool {
+        msg == WM_COMMAND
     }
 }
 
@@ -222,74 +148,19 @@ impl FileTransDialog {
         actions: AppActionSender,
         session: u64,
     ) -> Result<HWND> {
-        let existing = FILE_TRANS_INSTANCE
-            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
-        if let Some(hwnd) = existing
-            && unsafe { IsWindow(Some(hwnd)).as_bool() }
-        {
-            unsafe {
-                let _ = SetForegroundWindow(hwnd);
-            }
-            return Ok(hwnd);
-        }
-
-        let instance = unsafe { GetModuleHandleW(None)? };
-        FILE_TRANS_INIT_ERROR.with(|slot| {
-            slot.borrow_mut().take();
-        });
-        FILE_TRANS_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingFileTrans {
+        DialogHost::<Self>::show(
+            parent,
+            FileTransInit {
                 config,
                 supervisor,
                 actions,
                 session,
-            });
-        });
-
-        let result = unsafe {
-            CreateDialogParamW(
-                Some(instance.into()),
-                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
-                Some(parent),
-                Some(file_trans_dialog_proc),
-                LPARAM(0),
-            )
-        };
-
-        let hwnd = match result {
-            Ok(hwnd) => hwnd,
-            Err(error) => {
-                FILE_TRANS_PENDING.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                FILE_TRANS_INIT_ERROR.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                return Err(error);
-            }
-        };
-
-        if let Some(message) = FILE_TRANS_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-            return Err(Error::new(E_FAIL, message));
-        }
-
-        unsafe {
-            center_dialog_on_monitor(hwnd, parent);
-            show_dialog_window(hwnd);
-        }
-        Ok(hwnd)
+            },
+        )
     }
 
     pub(crate) fn current_session() -> Option<u64> {
-        let (hwnd, session) = FILE_TRANS_INSTANCE.with(|slot| {
-            let dialog = slot.borrow();
-            let dialog = dialog.as_ref()?.try_borrow().ok()?;
-            Some((dialog.hwnd, dialog.session))
-        })?;
-        unsafe { IsWindow(Some(hwnd)).as_bool().then_some(session) }
+        DialogHost::<Self>::with_state(|dialog| dialog.session)
     }
 
     fn initialize_controls(&mut self) -> Result<()> {
@@ -325,27 +196,6 @@ impl FileTransDialog {
         }
         self.update_engine_label();
         Ok(())
-    }
-
-    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
-        let new_dpi = (wparam.0 & 0xFFFF) as u32;
-        rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
-        self.applied_dpi = new_dpi;
-
-        if lparam.0 != 0 {
-            unsafe {
-                let rect = &*(lparam.0 as *const RECT);
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    None,
-                    rect.left,
-                    rect.top,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-        }
     }
 
     fn handle_command(&mut self, cmd: u16, _notify_code: u32) {

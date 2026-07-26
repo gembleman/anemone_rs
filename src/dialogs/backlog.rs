@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use windows::{
     Win32::{
         Foundation::*,
-        System::LibraryLoader::{GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
+        System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
         UI::Controls::RichEdit::{
             CFE_BOLD, CFE_ITALIC, CFM_BOLD, CFM_COLOR, CFM_FACE, CFM_ITALIC, CFM_SIZE,
             CHARFORMAT2W, EM_EXLIMITTEXT, EM_SETBKGNDCOLOR, EM_SETCHARFORMAT, SCF_SELECTION,
@@ -21,12 +21,8 @@ use windows::{
 
 use super::file_dialog::{FileFilter, save_file};
 use super::font::{FontDialog, FontDialogConfig, FontStyle};
-use super::helpers::{
-    center_dialog_on_monitor, register_resource_dialog, rescale_dialog_children_for_dpi,
-    show_dialog_window, unregister_resource_dialog,
-};
+use super::host::{DialogHost, DialogResult, HostedDialog};
 use crate::app::action::AppActionSender;
-use crate::define_dialog_instance;
 use crate::win32::to_wide;
 
 // 컨트롤 ID
@@ -71,108 +67,51 @@ pub struct BacklogDialog {
 
 thread_local! {
     static RICHEDIT_LOADED: RefCell<bool> = const { RefCell::new(false) };
-    static BACKLOG_PENDING: RefCell<Option<(BacklogStore, AppActionSender)>> = const { RefCell::new(None) };
-    static BACKLOG_INIT_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
     static BACKLOG_VIEW_DIRTY: Cell<bool> = const { Cell::new(false) };
 }
 
-define_dialog_instance!(BACKLOG_INSTANCE: BacklogDialog);
+pub(crate) struct BacklogInit {
+    store: BacklogStore,
+    actions: AppActionSender,
+}
 
-unsafe extern "system" fn backlog_dialog_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> isize {
-    unsafe {
-        if msg == WM_INITDIALOG {
-            let pending = BACKLOG_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some((store, actions)) = pending else {
-                BACKLOG_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some("백로그 창 초기화 인자가 없습니다".into());
-                });
-                return 0;
-            };
+impl HostedDialog for BacklogDialog {
+    type Init = BacklogInit;
+    const RESOURCE_ID: u16 = ctrl_id::DIALOG;
 
-            let dialog = std::rc::Rc::new(RefCell::new(BacklogDialog::new(hwnd, store, actions)));
-            BACKLOG_INSTANCE.with(|slot| *slot.borrow_mut() = Some(dialog.clone()));
-            if let Err(error) = dialog.borrow_mut().initialize_controls() {
-                BACKLOG_INSTANCE.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                BACKLOG_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some(error.to_string());
-                });
-                return 0;
-            }
-            register_resource_dialog(hwnd);
-            return 1;
-        }
+    fn create(hwnd: HWND, init: Self::Init) -> Result<Self> {
+        let mut dialog = Self::new(hwnd, init.store, init.actions);
+        dialog.initialize_controls()?;
+        Ok(dialog)
+    }
 
-        let instance = BACKLOG_INSTANCE.with(|slot| {
-            let Ok(guard) = slot.try_borrow() else {
-                return None;
-            };
-            guard.clone()
-        });
-        let Some(dialog) = instance else {
-            return 0;
-        };
-
-        let mut can_flush = false;
-        let result = match msg {
+    fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> DialogResult {
+        match msg {
             WM_SIZE => {
-                if let Ok(dialog) = dialog.try_borrow() {
-                    dialog.on_size(
-                        (lparam.0 & 0xFFFF) as i32,
-                        ((lparam.0 >> 16) & 0xFFFF) as i32,
-                    );
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
-                }
-                1
-            }
-            WM_DPICHANGED => {
-                if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_dpi_changed(wparam, lparam);
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
-                }
-                1
+                self.on_size(
+                    (lparam.0 & 0xFFFF) as i32,
+                    ((lparam.0 >> 16) & 0xFFFF) as i32,
+                );
+                DialogResult::Handled(LRESULT(1))
             }
             WM_COMMAND => {
                 let id = (wparam.0 & 0xFFFF) as u16;
                 if id == IDCANCEL.0 as u16 {
-                    let _ = DestroyWindow(hwnd);
-                } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_command(id);
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
+                    return DialogResult::Close(LRESULT(1));
                 }
-                1
+                self.handle_command(id);
+                DialogResult::Handled(LRESULT(1))
             }
-            WM_CLOSE => {
-                let _ = DestroyWindow(hwnd);
-                1
-            }
-            WM_DESTROY => {
-                unregister_resource_dialog(hwnd);
-                BACKLOG_INSTANCE.with(|slot| {
-                    if let Ok(mut guard) = slot.try_borrow_mut() {
-                        *guard = None;
-                    }
-                });
-                1
-            }
-            _ => 0,
-        };
-        if can_flush {
-            super::helpers::flush_deferred_dialog_messages(hwnd);
+            _ => DialogResult::Unhandled,
         }
-        result
+    }
+
+    fn applied_dpi(&mut self) -> Option<&mut u32> {
+        Some(&mut self.applied_dpi)
+    }
+
+    fn can_defer(msg: u32) -> bool {
+        matches!(msg, WM_SIZE | WM_COMMAND)
     }
 }
 
@@ -195,17 +134,7 @@ impl BacklogDialog {
     }
 
     pub fn show(parent: HWND, store: BacklogStore, actions: AppActionSender) -> Result<HWND> {
-        let existing =
-            BACKLOG_INSTANCE.with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
-        if let Some(hwnd) = existing
-            && unsafe { IsWindow(Some(hwnd)).as_bool() }
-        {
-            unsafe {
-                let _ = SetForegroundWindow(hwnd);
-            }
-            return Ok(hwnd);
-        }
-
+        // RichEdit 컨트롤은 창을 만들기 전에 클래스가 등록되어 있어야 한다.
         RICHEDIT_LOADED.with(|loaded| -> Result<()> {
             if !*loaded.borrow() {
                 unsafe {
@@ -216,41 +145,7 @@ impl BacklogDialog {
             Ok(())
         })?;
 
-        let instance = unsafe { GetModuleHandleW(None)? };
-        BACKLOG_INIT_ERROR.with(|slot| {
-            slot.borrow_mut().take();
-        });
-        BACKLOG_PENDING.with(|slot| *slot.borrow_mut() = Some((store, actions)));
-        let result = unsafe {
-            CreateDialogParamW(
-                Some(instance.into()),
-                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
-                Some(parent),
-                Some(backlog_dialog_proc),
-                LPARAM(0),
-            )
-        };
-        let hwnd = match result {
-            Ok(hwnd) => hwnd,
-            Err(error) => {
-                BACKLOG_PENDING.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                return Err(error);
-            }
-        };
-        if let Some(message) = BACKLOG_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-            return Err(Error::new(E_FAIL, message));
-        }
-
-        unsafe {
-            center_dialog_on_monitor(hwnd, parent);
-            show_dialog_window(hwnd);
-        }
-        Ok(hwnd)
+        DialogHost::<Self>::show(parent, BacklogInit { store, actions })
     }
 
     fn initialize_controls(&mut self) -> Result<()> {
@@ -321,26 +216,6 @@ impl BacklogDialog {
             _ => {}
         }
         self.refresh_if_dirty();
-    }
-
-    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
-        let new_dpi = (wparam.0 & 0xFFFF) as u32;
-        rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
-        self.applied_dpi = new_dpi;
-        if lparam.0 != 0 {
-            unsafe {
-                let rect = &*(lparam.0 as *const RECT);
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    None,
-                    rect.left,
-                    rect.top,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-        }
     }
 
     /// RichEdit에 항목 추가
@@ -565,31 +440,24 @@ impl BacklogDialog {
 
 /// AppModel이 소유한 저장소와 별개인 열린 view snapshot에 새 항목을 반영한다.
 pub(crate) fn append_entry(entry: LogEntry, model_evicted: bool) {
+    if DialogHost::<BacklogDialog>::current_hwnd().is_none() {
+        return;
+    }
     let entry_for_render = entry.clone();
-    BACKLOG_INSTANCE.with(|cell| {
-        let Ok(guard) = cell.try_borrow() else {
-            BACKLOG_VIEW_DIRTY.with(|dirty| dirty.set(true));
-            return;
-        };
-        if let Some(ref dialog) = *guard {
-            match dialog.try_borrow_mut() {
-                Ok(mut d) => {
-                    let view_evicted = d.store.push(entry);
-                    if model_evicted
-                        || view_evicted
-                        || BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false))
-                    {
-                        d.refresh_richedit();
-                    } else {
-                        d.append_styled_texts_to_richedit(BacklogStore::render_entry(
-                            &entry_for_render,
-                            d.filter,
-                            d.add_linefeed,
-                        ));
-                    }
-                }
-                Err(_) => BACKLOG_VIEW_DIRTY.with(|dirty| dirty.set(true)),
-            }
+    let applied = DialogHost::<BacklogDialog>::with_state_mut(|dialog| {
+        let view_evicted = dialog.store.push(entry);
+        if model_evicted || view_evicted || BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false)) {
+            dialog.refresh_richedit();
+        } else {
+            dialog.append_styled_texts_to_richedit(BacklogStore::render_entry(
+                &entry_for_render,
+                dialog.filter,
+                dialog.add_linefeed,
+            ));
         }
     });
+    // 재진입으로 state를 빌리지 못했다. 다음 갱신에서 전체를 다시 그린다.
+    if applied.is_none() {
+        BACKLOG_VIEW_DIRTY.with(|dirty| dirty.set(true));
+    }
 }

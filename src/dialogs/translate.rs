@@ -1,6 +1,5 @@
 //! Engine과 언어를 선택해 수동 번역하는 dialog.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -8,7 +7,6 @@ use windows::{
     Win32::{
         Foundation::*,
         System::DataExchange::*,
-        System::LibraryLoader::GetModuleHandleW,
         System::Memory::*,
         System::Ole::CF_UNICODETEXT,
         UI::Controls::*,
@@ -19,13 +17,9 @@ use windows::{
     core::*,
 };
 
-use super::helpers::{
-    center_dialog_on_monitor, get_window_text, register_resource_dialog,
-    rescale_dialog_children_for_dpi, set_window_text, show_dialog_window,
-    unregister_resource_dialog,
-};
+use super::helpers::{get_window_text, set_window_text};
+use super::host::{DialogHost, DialogResult, HostedDialog};
 use crate::app::action::AppActionSender;
-use crate::define_dialog_instance;
 use crate::win32::to_wide;
 
 use crate::app::messages::WM_TRANSLATION_COMPLETE;
@@ -99,152 +93,77 @@ pub struct TranslateDialog {
     session: u64,
 }
 
-define_dialog_instance!(TRANSLATE_INSTANCE: TranslateDialog);
-
-struct PendingTranslate {
+pub(crate) struct TranslateInit {
     config: Config,
     translation_service: Rc<GuiTranslationHost>,
     actions: AppActionSender,
     session: u64,
 }
 
-thread_local! {
-    static TRANSLATE_PENDING: std::cell::RefCell<Option<PendingTranslate>> = const { std::cell::RefCell::new(None) };
-    static TRANSLATE_INIT_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-}
+impl HostedDialog for TranslateDialog {
+    type Init = TranslateInit;
+    const RESOURCE_ID: u16 = ctrl_id::DIALOG;
 
-/// `resources/translate.rc`에서 생성된 모델리스 다이얼로그의 메시지 콜백.
-unsafe extern "system" fn translate_dialog_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> isize {
-    unsafe {
-        if msg == WM_INITDIALOG {
-            let pending = TRANSLATE_PENDING.with(|slot| slot.borrow_mut().take());
-            let Some(PendingTranslate {
-                config,
-                translation_service,
-                actions,
-                session,
-            }) = pending
-            else {
-                TRANSLATE_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some("번역 창 초기화 인자가 없습니다".into());
-                });
-                return 0;
-            };
+    fn create(hwnd: HWND, init: Self::Init) -> Result<Self> {
+        let mut dialog = Self::new(
+            hwnd,
+            init.config,
+            init.translation_service,
+            init.actions,
+            init.session,
+        );
+        dialog.initialize_controls()?;
+        Ok(dialog)
+    }
 
-            let dialog = Rc::new(RefCell::new(TranslateDialog::new(
-                hwnd,
-                config,
-                translation_service,
-                actions,
-                session,
-            )));
-            TRANSLATE_INSTANCE.with(|slot| {
-                *slot.borrow_mut() = Some(dialog.clone());
-            });
-
-            if let Err(error) = dialog.borrow_mut().initialize_controls() {
-                TRANSLATE_INSTANCE.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                TRANSLATE_INIT_ERROR.with(|slot| {
-                    *slot.borrow_mut() = Some(error.to_string());
-                });
-                return 0;
-            }
-            register_resource_dialog(hwnd);
-            return 1;
-        }
-
-        let instance = TRANSLATE_INSTANCE.with(|slot| {
-            let Ok(guard) = slot.try_borrow() else {
-                return None;
-            };
-            guard.clone()
-        });
-        let Some(dialog) = instance else {
-            return 0;
-        };
-
-        let mut can_flush = false;
-        let result = match msg {
+    fn handle_message(&mut self, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> DialogResult {
+        match msg {
             WM_TRANSLATION_COMPLETE => {
-                if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_translation_complete();
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_message(hwnd, msg, WPARAM(0), LPARAM(0));
-                }
-                1
-            }
-            WM_DPICHANGED => {
-                if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.handle_dpi_changed(wparam, lparam);
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_dpi_change(hwnd, wparam, lparam);
-                }
-                1
+                self.handle_translation_complete();
+                DialogResult::Handled(LRESULT(1))
             }
             WM_COMMAND => {
                 let id = (wparam.0 & 0xFFFF) as u16;
-                let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
                 if id == IDCANCEL.0 as u16 {
-                    let _ = DestroyWindow(hwnd);
-                } else if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    if id == ctrl_id::SOURCE_EDIT && notify_code == EN_CHANGE {
-                        dialog.invalidate_stale_translation();
-                        if dialog.one_go {
-                            dialog.schedule_auto_translate();
-                        }
-                    }
-                    dialog.handle_command(id, notify_code);
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, lparam);
+                    return DialogResult::Close(LRESULT(1));
                 }
-                1
+                let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                if id == ctrl_id::SOURCE_EDIT && notify_code == EN_CHANGE {
+                    self.invalidate_stale_translation();
+                    if self.one_go {
+                        self.schedule_auto_translate();
+                    }
+                }
+                self.handle_command(id, notify_code);
+                DialogResult::Handled(LRESULT(1))
             }
             WM_TIMER if wparam.0 == AUTO_TRANSLATE_TIMER => {
-                let _ = KillTimer(Some(hwnd), AUTO_TRANSLATE_TIMER);
-                if let Ok(mut dialog) = dialog.try_borrow_mut() {
-                    dialog.do_translate();
-                    can_flush = true;
-                } else {
-                    super::helpers::defer_dialog_message(hwnd, msg, wparam, LPARAM(0));
+                // SAFETY: self.hwnd는 살아 있는 번역 창이다.
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), AUTO_TRANSLATE_TIMER);
                 }
-                1
+                self.do_translate();
+                DialogResult::Handled(LRESULT(1))
             }
-            WM_CLOSE => {
-                let _ = DestroyWindow(hwnd);
-                1
-            }
-            WM_DESTROY => {
-                let _ = KillTimer(Some(hwnd), AUTO_TRANSLATE_TIMER);
-                dialog.borrow().translation_service.unregister(hwnd);
-                let (actions, session) = {
-                    let dialog = dialog.borrow();
-                    (dialog.actions.clone(), dialog.session)
-                };
-                actions.translate_dialog_closed(session);
-                unregister_resource_dialog(hwnd);
-                TRANSLATE_INSTANCE.with(|slot| {
-                    if let Ok(mut guard) = slot.try_borrow_mut() {
-                        *guard = None;
-                    }
-                });
-                1
-            }
-            _ => 0,
-        };
-        if can_flush {
-            super::helpers::flush_deferred_dialog_messages(hwnd);
+            _ => DialogResult::Unhandled,
         }
-        result
+    }
+
+    fn applied_dpi(&mut self) -> Option<&mut u32> {
+        Some(&mut self.applied_dpi)
+    }
+
+    fn destroy(&mut self) {
+        // SAFETY: self.hwnd는 아직 파괴 중인 유효한 창이다.
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), AUTO_TRANSLATE_TIMER);
+        }
+        self.translation_service.unregister(self.hwnd);
+        self.actions.translate_dialog_closed(self.session);
+    }
+
+    fn can_defer(msg: u32) -> bool {
+        matches!(msg, WM_COMMAND | WM_TRANSLATION_COMPLETE)
     }
 }
 
@@ -290,74 +209,19 @@ impl TranslateDialog {
         actions: AppActionSender,
         session: u64,
     ) -> Result<HWND> {
-        let existing = TRANSLATE_INSTANCE
-            .with(|slot| slot.borrow().as_ref().map(|dialog| dialog.borrow().hwnd));
-        if let Some(hwnd) = existing
-            && unsafe { IsWindow(Some(hwnd)).as_bool() }
-        {
-            unsafe {
-                let _ = SetForegroundWindow(hwnd);
-            }
-            return Ok(hwnd);
-        }
-
-        let instance = unsafe { GetModuleHandleW(None)? };
-        TRANSLATE_INIT_ERROR.with(|slot| {
-            slot.borrow_mut().take();
-        });
-        TRANSLATE_PENDING.with(|slot| {
-            *slot.borrow_mut() = Some(PendingTranslate {
+        DialogHost::<Self>::show(
+            parent,
+            TranslateInit {
                 config,
                 translation_service,
                 actions,
                 session,
-            });
-        });
-
-        let result = unsafe {
-            CreateDialogParamW(
-                Some(instance.into()),
-                PCWSTR(ctrl_id::DIALOG as usize as *const u16),
-                Some(parent),
-                Some(translate_dialog_proc),
-                LPARAM(0),
-            )
-        };
-
-        let hwnd = match result {
-            Ok(hwnd) => hwnd,
-            Err(error) => {
-                TRANSLATE_PENDING.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                TRANSLATE_INIT_ERROR.with(|slot| {
-                    slot.borrow_mut().take();
-                });
-                return Err(error);
-            }
-        };
-
-        if let Some(message) = TRANSLATE_INIT_ERROR.with(|slot| slot.borrow_mut().take()) {
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-            return Err(Error::new(E_FAIL, message));
-        }
-
-        unsafe {
-            center_dialog_on_monitor(hwnd, parent);
-            show_dialog_window(hwnd);
-        }
-        Ok(hwnd)
+            },
+        )
     }
 
     pub(crate) fn current_session() -> Option<u64> {
-        let (hwnd, session) = TRANSLATE_INSTANCE.with(|slot| {
-            let dialog = slot.borrow();
-            let dialog = dialog.as_ref()?.try_borrow().ok()?;
-            Some((dialog.hwnd, dialog.session))
-        })?;
-        unsafe { IsWindow(Some(hwnd)).as_bool().then_some(session) }
+        DialogHost::<Self>::with_state(|dialog| dialog.session)
     }
 
     fn initialize_controls(&mut self) -> Result<()> {
@@ -524,27 +388,6 @@ impl TranslateDialog {
         }
         self.update_llm_group_visibility(engine);
         Ok(())
-    }
-
-    fn handle_dpi_changed(&mut self, wparam: WPARAM, lparam: LPARAM) {
-        let new_dpi = (wparam.0 & 0xFFFF) as u32;
-        rescale_dialog_children_for_dpi(self.hwnd, self.applied_dpi, new_dpi);
-        self.applied_dpi = new_dpi;
-
-        if lparam.0 != 0 {
-            unsafe {
-                let rect = &*(lparam.0 as *const RECT);
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    None,
-                    rect.left,
-                    rect.top,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-        }
     }
 
     /// 명령 처리

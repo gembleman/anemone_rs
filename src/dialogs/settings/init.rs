@@ -475,9 +475,7 @@ impl SettingsDialog {
         let mut adopted: Vec<HWND> = Vec::new();
         for group in &self.engine_controls {
             for &hwnd in group {
-                if !self.tab_controls[TAB_TRANSLATION].contains(&hwnd)
-                    && !adopted.contains(&hwnd)
-                {
+                if !self.tab_controls[TAB_TRANSLATION].contains(&hwnd) && !adopted.contains(&hwnd) {
                     adopted.push(hwnd);
                 }
             }
