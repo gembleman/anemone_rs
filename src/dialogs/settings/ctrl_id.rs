@@ -167,7 +167,7 @@ pub const TRANSLATION_COMMON_IDS: &[u16] = &[
     TRANS_TARGET_LANG,
 ];
 pub const HOTKEYS_STATIC_IDS: &[u16] = &[2304];
-pub const INFO_STATIC_IDS: &[u16] = &[2400, 2401, 2402, 2403];
+pub const INFO_STATIC_IDS: &[u16] = &[2400, 2401, 2402, 2403, 2404, 2405];
 
 pub const EZTRANS_STATIC_IDS: &[u16] = &[
     2204,
