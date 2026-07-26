@@ -982,8 +982,10 @@ fn win32_owner_draw_color_survives_tab_switch() {
         }
     }
 
-    let mut config = Config::default();
-    config.background_color = 0xff_12_34_56;
+    let config = Config {
+        background_color: 0xff_12_34_56,
+        ..Config::default()
+    };
     let hwnd = SettingsDialog::show(unsafe { GetDesktopWindow() }, config, None).unwrap();
     let _dialog = DialogGuard(hwnd);
 
