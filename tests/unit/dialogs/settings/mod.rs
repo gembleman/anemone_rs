@@ -957,6 +957,57 @@ fn win32_display_tab_keeps_cache_controls_visible() {
     assert!(group_rect.bottom < apply_rect.top);
 }
 
+/// 탭 전환 중 동기 repaint가 `DialogHost`의 state 대여에 재진입하면 owner-draw
+/// 색상 버튼의 `WM_DRAWITEM`이 버려져 버튼이 빈 회색으로 남는다.
+#[test]
+#[ignore = "requires a Win32 desktop and embedded dialog resources"]
+fn win32_owner_draw_color_survives_tab_switch() {
+    use super::ctrl_id;
+    use crate::config::Config;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC, UpdateWindow};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DestroyWindow, GetDesktopWindow, GetDlgItem, IsWindow,
+    };
+
+    struct DialogGuard(HWND);
+
+    impl Drop for DialogGuard {
+        fn drop(&mut self) {
+            if unsafe { IsWindow(Some(self.0)).as_bool() } {
+                unsafe {
+                    let _ = DestroyWindow(self.0);
+                }
+            }
+        }
+    }
+
+    let mut config = Config::default();
+    config.background_color = 0xff_12_34_56;
+    let hwnd = SettingsDialog::show(unsafe { GetDesktopWindow() }, config, None).unwrap();
+    let _dialog = DialogGuard(hwnd);
+
+    super::with_settings_instance(|instance| {
+        instance.switch_tab(super::TAB_DISPLAY);
+        instance.switch_tab(super::TAB_APPEARANCE);
+    });
+
+    let button =
+        unsafe { GetDlgItem(Some(hwnd), ctrl_id::BACKGROUND_COLOR as i32).expect("color button") };
+    unsafe {
+        // 비동기로 예약된 paint를 state 대여가 끝난 뒤 처리한다.
+        UpdateWindow(button).expect("owner-draw repaint");
+        let hdc = GetDC(Some(button));
+        assert!(!hdc.is_invalid());
+        let pixel = GetPixel(hdc, 5, 5);
+        let _ = ReleaseDC(Some(button), hdc);
+        assert_eq!(
+            pixel.0, 0x00_56_34_12,
+            "탭 전환 후 배경색 owner-draw 버튼이 다시 그려지지 않았습니다"
+        );
+    }
+}
+
 #[test]
 #[ignore = "requires a Win32 desktop and embedded dialog resources"]
 fn win32_hotkeys_tab_layout_smoke() {

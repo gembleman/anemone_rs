@@ -618,7 +618,11 @@ impl SettingsDialog {
         self.redraw_all();
     }
 
-    /// 탭 전환·크기 조정 후 부모와 모든 자식을 다시 그려 잔상을 없앤다.
+    /// 탭 전환·크기 조정 후 부모와 모든 자식을 다시 그리도록 예약한다.
+    ///
+    /// 이 함수는 dialog state를 가변 대여한 상태에서 호출된다. `RDW_UPDATENOW`로
+    /// 동기 paint를 강제하면 owner-draw 버튼의 `WM_DRAWITEM`이 재진입하고,
+    /// `DialogHost`가 같은 state를 다시 대여하지 못해 색상 버튼이 빈 채로 남는다.
     fn redraw_all(&self) {
         // SAFETY: self.hwnd는 설정창 수명 동안 유효한 핸들이다.
         unsafe {
@@ -626,7 +630,7 @@ impl SettingsDialog {
                 Some(self.hwnd),
                 None,
                 None,
-                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN,
             );
         }
     }
