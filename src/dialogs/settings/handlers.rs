@@ -294,6 +294,8 @@ impl SettingsDialog {
                         TranslationSettingChange::EzTransDllPath(path.clone()),
                     );
                     self.set_control_text(EZTRANS_DLL_EDIT, &path);
+                    // 경고 라벨만 갱신하고 선택한 경로는 그대로 유지한다.
+                    self.refresh_eztrans_path_warnings();
                 }
                 Ok(None) => {}
                 Err(error) => self.show_file_dialog_error(&error),
@@ -306,6 +308,7 @@ impl SettingsDialog {
                         TranslationSettingChange::EzTransDatPath(path.clone()),
                     );
                     self.set_control_text(EZTRANS_DAT_EDIT, &path);
+                    self.refresh_eztrans_path_warnings();
                 }
                 Ok(None) => {}
                 Err(error) => self.show_file_dialog_error(&error),
@@ -774,6 +777,44 @@ impl SettingsDialog {
             .map(|path| path.map(|p| p.to_string_lossy().into_owned()))
     }
 
+    /// 선택된 EzTrans 경로를 찾을 수 없으면 각 입력란 아래 라벨에 경고를 표시하고,
+    /// 찾을 수 있으면 라벨을 비운다. 선택한 경로는 그대로 두며 저장도 막지 않는다.
+    pub(super) fn refresh_eztrans_path_warnings(&self) {
+        let (dll_path, dat_path) = {
+            let config = self.draft.borrow();
+            (
+                config.translation.eztrans_dll_path.clone(),
+                config.translation.eztrans_dat_path.clone(),
+            )
+        };
+
+        let dll_invalid = TranslationSettingsEditor::eztrans_dll_invalid(&dll_path);
+        if dll_invalid {
+            tracing::warn!("EzTrans DLL로 쓸 수 없는 파일입니다: {dll_path}");
+        }
+        self.set_control_text(
+            ctrl_id::EZTRANS_DLL_WARNING_LABEL,
+            if dll_invalid {
+                "⚠ EzTrans DLL이 아닙니다. J2KEngine.dll을 선택하세요."
+            } else {
+                ""
+            },
+        );
+
+        let dat_invalid = TranslationSettingsEditor::eztrans_dat_invalid(&dat_path);
+        if dat_invalid {
+            tracing::warn!("EzTrans Dat 폴더로 쓸 수 없는 경로입니다: {dat_path}");
+        }
+        self.set_control_text(
+            ctrl_id::EZTRANS_DAT_WARNING_LABEL,
+            if dat_invalid {
+                "⚠ EzTrans 사전 폴더가 아닙니다. Dat 폴더를 선택하세요."
+            } else {
+                ""
+            },
+        );
+    }
+
     fn show_file_dialog_error(&self, error: &windows::core::Error) {
         tracing::error!("설정 파일 대화상자 오류: {error}");
         let message = HSTRING::from(format!("파일 대화상자를 열 수 없습니다.\n{error}"));
@@ -798,11 +839,11 @@ impl SettingsDialog {
         }
 
         use ctrl_id::*;
+        // EzTrans 경로 편집란은 읽기 전용이라 "찾아보기" 결과만 담긴다.
+        // 포커스 해제로 다시 저장할 사용자 입력이 없으므로 여기서 다루지 않는다.
         let change = match ctrl_id {
             PAPAGO_ID_EDIT => TranslationSettingChange::PapagoClientId(text),
             PAPAGO_SECRET_EDIT => TranslationSettingChange::PapagoClientSecret(text),
-            EZTRANS_DLL_EDIT => TranslationSettingChange::EzTransDllPath(text),
-            EZTRANS_DAT_EDIT => TranslationSettingChange::EzTransDatPath(text),
             LLM_MODEL_EDIT => TranslationSettingChange::LlmModel(text),
             LLM_API_KEY_EDIT => TranslationSettingChange::LlmApiKey(text),
             LLM_SYSTEM_PROMPT_EDIT => TranslationSettingChange::LlmSystemPrompt(text),

@@ -29,7 +29,7 @@ pub use eztrans_process::EzTransBatchTranslator as BenchmarkEzTransBatchTranslat
 pub(crate) use eztrans_process::{EzTransBatchTranslator, EzTransProcessConfig};
 pub(crate) use eztrans_process::{EzTransProcessPoolRegistry, run_eztrans_worker};
 pub(crate) use job::{DeepLStrategy, PreparedEngineKind};
-pub use job::{LanguagePair, PreparedEngine, PreparedJob};
+pub use job::{LanguagePair, PreparedEngine, PreparedJob, resolve_configured_eztrans_path};
 pub use language::{EnumParseError, Language, TranslationEngine, lang_utils};
 pub use llm::LlmProvider;
 pub use service::TranslationService;

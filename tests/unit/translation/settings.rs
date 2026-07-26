@@ -378,3 +378,92 @@ fn custom_api_selection_changes_only_the_registered_name() {
     assert!(result.changed);
     assert!(!result.runtime_sync_required);
 }
+
+/// 이 테스트들이 만드는 임시 디렉터리. 케이스마다 다른 이름을 써서 병렬 실행에도 안전하다.
+fn eztrans_fixture_dir(case: &str) -> std::path::PathBuf {
+    let directory = std::env::temp_dir().join(format!("anemone_eztrans_{case}"));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    directory
+}
+
+#[test]
+fn an_unset_eztrans_path_is_not_reported_as_invalid() {
+    assert!(!TranslationSettingsEditor::eztrans_dll_invalid(""));
+    assert!(!TranslationSettingsEditor::eztrans_dll_invalid("   "));
+    assert!(!TranslationSettingsEditor::eztrans_dat_invalid(""));
+    assert!(!TranslationSettingsEditor::eztrans_dat_invalid("   "));
+}
+
+#[test]
+fn the_bundled_engine_dll_name_is_accepted_regardless_of_casing() {
+    let directory = eztrans_fixture_dir("dll_ok");
+    let dll = directory.join("j2kengine.DLL");
+    std::fs::write(&dll, b"stub").unwrap();
+
+    assert!(!TranslationSettingsEditor::eztrans_dll_invalid(
+        &dll.to_string_lossy()
+    ));
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_dll_that_is_not_the_engine_is_reported_as_invalid() {
+    let directory = eztrans_fixture_dir("dll_wrong_name");
+    let unrelated = directory.join("SomeOther.dll");
+    std::fs::write(&unrelated, b"stub").unwrap();
+
+    assert!(TranslationSettingsEditor::eztrans_dll_invalid(
+        &unrelated.to_string_lossy()
+    ));
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_directory_is_not_accepted_as_the_eztrans_dll() {
+    let directory = eztrans_fixture_dir("dll_is_dir");
+
+    assert!(TranslationSettingsEditor::eztrans_dll_invalid(
+        &directory.to_string_lossy()
+    ));
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_dat_folder_holding_the_translation_dictionary_is_accepted() {
+    let directory = eztrans_fixture_dir("dat_ok");
+    std::fs::write(directory.join("JisJK.da"), b"stub").unwrap();
+
+    assert!(!TranslationSettingsEditor::eztrans_dat_invalid(
+        &directory.to_string_lossy()
+    ));
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_folder_without_the_translation_dictionary_is_reported_as_invalid() {
+    let directory = eztrans_fixture_dir("dat_no_dictionary");
+
+    assert!(TranslationSettingsEditor::eztrans_dat_invalid(
+        &directory.to_string_lossy()
+    ));
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_file_is_not_accepted_as_the_dat_folder() {
+    let directory = eztrans_fixture_dir("dat_is_file");
+    let file = directory.join("JisJK.da");
+    std::fs::write(&file, b"stub").unwrap();
+
+    assert!(TranslationSettingsEditor::eztrans_dat_invalid(
+        &file.to_string_lossy()
+    ));
+
+    let _ = std::fs::remove_dir_all(&directory);
+}

@@ -336,14 +336,26 @@ impl SettingsDialog {
                 None,
             );
         }
-        self.set_text(
-            ctrl_id::EZTRANS_DLL_EDIT,
-            &config.translation.eztrans_dll_path,
-        )?;
-        self.set_text(
-            ctrl_id::EZTRANS_DAT_EDIT,
-            &config.translation.eztrans_dat_path,
-        )?;
+        // 저장된 경로를 쓸 수 없으면 편집란을 비운 채로 연다. (설정 값 자체는 보존한다.)
+        // 입력란이 비어 있으므로 경고 라벨도 함께 비워 둔다.
+        use crate::translation::settings::TranslationSettingsEditor;
+        let dll_path = &config.translation.eztrans_dll_path;
+        let dll_display = if TranslationSettingsEditor::eztrans_dll_invalid(dll_path) {
+            ""
+        } else {
+            dll_path.as_str()
+        };
+        self.set_text(ctrl_id::EZTRANS_DLL_EDIT, dll_display)?;
+        self.set_text(ctrl_id::EZTRANS_DLL_WARNING_LABEL, "")?;
+
+        let dat_path = &config.translation.eztrans_dat_path;
+        let dat_display = if TranslationSettingsEditor::eztrans_dat_invalid(dat_path) {
+            ""
+        } else {
+            dat_path.as_str()
+        };
+        self.set_text(ctrl_id::EZTRANS_DAT_EDIT, dat_display)?;
+        self.set_text(ctrl_id::EZTRANS_DAT_WARNING_LABEL, "")?;
         self.set_text(
             ctrl_id::EZTRANS_DICTIONARY_COUNT_LABEL,
             &format!(

@@ -106,14 +106,18 @@ BEGIN
     COMBOBOX        1261, 123, 31, 46, 107, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     LTEXT           "타겟:", 2203, 177, 32, 23, 10
     COMBOBOX        1262, 200, 31, 46, 107, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    // 경로는 "찾아보기"로만 지정한다. 편집란은 선택 결과를 보여 주기만 한다.
     LTEXT           "EzTrans DLL:", 2204, 17, 51, 46, 10
-    EDITTEXT        1264, 63, 50, 160, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    EDITTEXT        1264, 63, 50, 160, 12, ES_AUTOHSCROLL | ES_READONLY | WS_TABSTOP
     PUSHBUTTON      "찾아보기", 1265, 226, 50, 40, 12
-    LTEXT           "EzTrans Dat:", 2205, 17, 67, 46, 10
-    EDITTEXT        1266, 63, 66, 160, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    PUSHBUTTON      "찾아보기", 1267, 226, 66, 40, 12
-    LTEXT           "후처리 사전: 0", 2206, 17, 83, 69, 10
-    PUSHBUTTON      "사전 편집...", 1268, 91, 82, 71, 12
+    // 경로를 찾을 수 없을 때만 표시되는 경고. 평소에는 빈 문자열로 비워 둔다.
+    LTEXT           "", 2207, 63, 63, 203, 9
+    LTEXT           "EzTrans Dat:", 2205, 17, 78, 46, 10
+    EDITTEXT        1266, 63, 77, 160, 12, ES_AUTOHSCROLL | ES_READONLY | WS_TABSTOP
+    PUSHBUTTON      "찾아보기", 1267, 226, 77, 40, 12
+    LTEXT           "", 2208, 63, 90, 203, 9
+    LTEXT           "후처리 사전: 0", 2206, 17, 105, 69, 10
+    PUSHBUTTON      "사전 편집...", 1268, 91, 104, 71, 12
 
     // 엔진별 설정 패널은 같은 위치에 겹쳐 두고 선택된 패널만 표시한다.
     LTEXT           "키 목록:", 2213, 17, 51, 40, 10

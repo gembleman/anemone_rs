@@ -329,7 +329,9 @@ impl PreparedJob {
 /// 설정의 상대 EzTrans 경로는 프로세스의 현재 작업 폴더가 아니라 실행 파일과
 /// `config.toml`이 놓인 데이터 폴더를 기준으로 해석한다. 설정값 자체는 변경하지
 /// 않으므로 다음 저장에서도 사용자가 입력한 상대 경로가 유지된다.
-fn resolve_configured_eztrans_path(configured: &str) -> String {
+/// 설정에 저장된 EzTrans 경로를 실제 파일 시스템 경로로 해석한다.
+/// 상대 경로는 데이터 디렉터리 기준으로 처리한다.
+pub fn resolve_configured_eztrans_path(configured: &str) -> String {
     let path = std::path::Path::new(configured);
     if path.is_absolute() {
         return configured.to_string();

@@ -119,6 +119,13 @@ unsafe extern "system" fn settings_dialog_proc(
             // RefCell 대여 여부와 무관하게 탭 본문 배경색을 유지한다.
             let hdc = HDC(wparam.0 as *mut _);
             let _ = SetBkMode(hdc, TRANSPARENT);
+            // EzTrans 경로 경고만 붉은 글자로 그려 다른 안내 문구와 구분한다.
+            let control_id = GetDlgCtrlID(HWND(lparam.0 as *mut _)) as u16;
+            if control_id == ctrl_id::EZTRANS_DLL_WARNING_LABEL
+                || control_id == ctrl_id::EZTRANS_DAT_WARNING_LABEL
+            {
+                SetTextColor(hdc, COLORREF(0x00_00_00_CC));
+            }
             return GetSysColorBrush(COLOR_WINDOW).0 as isize;
         }
 
@@ -608,7 +615,7 @@ impl SettingsDialog {
 
     fn translation_height_for_engine(engine: TranslationEngine) -> i32 {
         match engine {
-            TranslationEngine::EzTrans => 265,
+            TranslationEngine::EzTrans => 312,
             TranslationEngine::Google | TranslationEngine::Papago | TranslationEngine::Custom => {
                 245
             }
@@ -622,7 +629,7 @@ impl SettingsDialog {
         match engine {
             TranslationEngine::DeepL => 136,
             TranslationEngine::Llm => 204,
-            TranslationEngine::EzTrans => 88,
+            TranslationEngine::EzTrans => 110,
             TranslationEngine::Google | TranslationEngine::Papago | TranslationEngine::Custom => 69,
         }
     }
