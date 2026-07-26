@@ -152,9 +152,19 @@ pub const APPEARANCE_STATIC_IDS: &[u16] = &[
     2016,
 ];
 pub const DISPLAY_STATIC_IDS: &[u16] = &[2100, 2101];
-pub const TRANSLATION_STATIC_IDS: &[u16] = &[
-    2200, 2201, 2202, 2203, 2204, 2205, 2206, 2213, 2214, 2215, 2216, 2221, 2222, 2231, 2232, 2233,
-    2235, 2236, 2237, 2238, 2240, 2241, 2242,
+/// 엔진 선택과 무관하게 번역 탭에 항상 보이는 컨트롤.
+///
+/// 엔진 전용 컨트롤은 여기 넣지 않는다. `EZTRANS_STATIC_IDS` 등 엔진 그룹에만
+/// 등록하면 `adopt_engine_controls_into_translation_tab`이 번역 탭에 자동으로
+/// 합쳐 준다.
+pub const TRANSLATION_COMMON_IDS: &[u16] = &[
+    2200,
+    2201,
+    2202,
+    2203,
+    TRANS_ENGINE,
+    TRANS_SOURCE_LANG,
+    TRANS_TARGET_LANG,
 ];
 pub const HOTKEYS_STATIC_IDS: &[u16] = &[2304];
 pub const INFO_STATIC_IDS: &[u16] = &[2400, 2401, 2402, 2403];

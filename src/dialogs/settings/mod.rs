@@ -73,6 +73,21 @@ pub(super) fn format_deepl_key(secret: &str) -> String {
     format!("[{}] {}", tier.display_name(), mask_secret(secret))
 }
 
+/// `EnumChildWindows` 콜백: 자식 핸들을 `LPARAM`이 가리키는 Vec에 모은다.
+///
+/// 열거 중에는 창을 옮기지 않는다. `SetWindowPos`를 콜백 안에서 호출하면
+/// 열거 순서가 흐트러져 일부 컨트롤을 건너뛸 수 있기 때문이다.
+unsafe extern "system" fn collect_direct_child(child: HWND, lparam: LPARAM) -> BOOL {
+    // SAFETY: lparam은 호출부가 넘긴 유효한 Vec<HWND> 포인터이며, 열거가
+    // 끝날 때까지 살아 있다.
+    unsafe {
+        if let Some(children) = (lparam.0 as *mut Vec<HWND>).as_mut() {
+            children.push(child);
+        }
+    }
+    TRUE
+}
+
 /// 설정 대화상자
 pub struct SettingsDialog {
     hwnd: HWND,
@@ -594,6 +609,17 @@ impl SettingsDialog {
         if new_tab == self.current_tab || new_tab >= self.tab_controls.len() {
             return;
         }
+        // 번역 탭은 선택된 엔진의 컨트롤만 보여야 하므로, 먼저 그룹박스를 엔진 높이에
+        // 맞춘 뒤 표시한다. 전부 SW_SHOW 했다가 되숨기면 비활성 엔진 패널이 깜빡인다.
+        let engine = if new_tab == TAB_TRANSLATION {
+            self.draft.borrow().translation.get_engine().ok()
+        } else {
+            None
+        };
+        if let Some(engine) = engine {
+            self.resize_translation_group(engine);
+        }
+
         // SAFETY: All HWNDs in tab_controls are valid child window handles.
         unsafe {
             for &hwnd in &self.tab_controls[self.current_tab] {
@@ -604,11 +630,10 @@ impl SettingsDialog {
             }
         }
         self.current_tab = new_tab;
-        if new_tab == TAB_TRANSLATION {
-            let engine = self.draft.borrow().translation.get_engine().ok();
-            if let Some(engine) = engine {
-                self.update_engine_controls(engine);
-            }
+        // 엔진 컨트롤 중에는 tab_controls에 없는 것(EzTrans 경고 라벨 등)이 있어
+        // 위의 hide 루프로는 숨겨지지 않는다. 번역 탭을 벗어날 때도 반드시 호출한다.
+        if let Ok(engine) = self.draft.borrow().translation.get_engine() {
+            self.update_engine_controls(engine);
         }
         self.adjust_dialog_size_for_tab(new_tab);
     }
@@ -685,7 +710,9 @@ impl SettingsDialog {
         let target_height = self.target_height_for_tab(tab);
         // SAFETY: self.hwnd is valid. SetWindowPos uses valid parameters.
         unsafe {
-            self.scroll_to(0);
+            // scroll_max는 아직 이전 탭 기준이라 scroll_to(0)은 clamp에 걸려
+            // 오프셋을 되돌리지 못할 수 있다. 자식 위치를 직접 원점으로 되돌린다.
+            self.reset_scroll_offset();
             let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
             let mut info = MONITORINFO {
                 cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -735,6 +762,8 @@ impl SettingsDialog {
             } else {
                 rect.top.clamp(work.top, work.bottom - win_height)
             };
+            // SWP_NOCOPYBITS: 크기가 바뀔 때 이전 탭의 픽셀이 새 위치로 복사되어
+            // 잔상으로 남는 것을 막는다.
             let _ = SetWindowPos(
                 self.hwnd,
                 None,
@@ -742,10 +771,24 @@ impl SettingsDialog {
                 y,
                 win_width,
                 win_height,
-                SWP_NOZORDER | SWP_FRAMECHANGED,
+                SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOCOPYBITS,
             );
         }
         self.layout_for_current_size();
+        self.redraw_all();
+    }
+
+    /// 탭 전환·크기 조정 후 부모와 모든 자식을 다시 그려 잔상을 없앤다.
+    fn redraw_all(&self) {
+        // SAFETY: self.hwnd는 설정창 수명 동안 유효한 핸들이다.
+        unsafe {
+            let _ = RedrawWindow(
+                Some(self.hwnd),
+                None,
+                None,
+                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+            );
+        }
     }
 
     /// 사용자가 테두리를 끌어 바꾼 client 크기에 tab, 하단 button, scrollbar를 맞춘다.
@@ -831,6 +874,21 @@ impl SettingsDialog {
         }
     }
 
+    /// 탭 전환 직전에 스크롤 오프셋을 맨 위로 되돌린다.
+    ///
+    /// `scroll_to(0)`과 달리 `scroll_max`(아직 이전 탭 값)를 참조하지 않으므로,
+    /// 새 탭의 높이를 계산하기 전에도 자식 위치를 확실히 원점으로 맞춘다.
+    fn reset_scroll_offset(&mut self) {
+        if self.scroll_pos == 0 {
+            return;
+        }
+        // SAFETY: self.hwnd와 그 자식 컨트롤은 설정창 수명 동안 유효하다.
+        unsafe {
+            self.offset_scroll_children(self.scroll_pos);
+        }
+        self.scroll_pos = 0;
+    }
+
     /// 낮은 해상도에서 잘린 설정 내용을 세로로 이동한다.
     fn scroll_to(&mut self, position: i32) {
         let new_pos = position.clamp(0, self.scroll_max);
@@ -880,16 +938,20 @@ impl SettingsDialog {
             }
         }
 
+        // 등록 목록(tab_controls/engine_controls)을 순회하면 양쪽에 중복 등록된
+        // 컨트롤이 두 번 이동하고, 어느 쪽에도 없는 컨트롤(예: EzTrans 경고 라벨)은
+        // 아예 이동하지 않는다. 실제 자식 창을 열거해 하나씩만 정확히 옮긴다.
         unsafe {
-            if let Ok(tab) = GetDlgItem(Some(self.hwnd), ctrl_id::TAB_CONTROL as i32) {
-                offset(self.hwnd, tab, delta);
-            }
-            for &child in self.tab_controls.iter().flatten() {
-                offset(self.hwnd, child, delta);
-            }
-            for id in [ctrl_id::APPLY, ctrl_id::CLOSE] {
-                if let Ok(button) = GetDlgItem(Some(self.hwnd), id as i32) {
-                    offset(self.hwnd, button, delta);
+            let mut children: Vec<HWND> = Vec::new();
+            let _ = EnumChildWindows(
+                Some(self.hwnd),
+                Some(collect_direct_child),
+                LPARAM(&mut children as *mut Vec<HWND> as isize),
+            );
+            for child in children {
+                // 탭 컨트롤의 손자(자식의 자식)는 부모를 따라 함께 움직인다.
+                if GetParent(child).ok() == Some(self.hwnd) {
+                    offset(self.hwnd, child, delta);
                 }
             }
         }
@@ -1052,7 +1114,9 @@ impl SettingsDialog {
                 if wparam.0 != SIZE_MINIMIZED as usize {
                     self.layout_for_current_size();
                 }
-                Some(LRESULT(1))
+                // None을 돌려 기본 처리를 남긴다. 여기서 1을 반환하면 다이얼로그
+                // 매니저가 scrollbar 갱신 등 WM_SIZE 기본 동작을 건너뛴다.
+                None
             }
             WM_DRAWITEM => {
                 // SAFETY: lparam points to a valid DRAWITEMSTRUCT from the system.

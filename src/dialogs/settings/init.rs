@@ -64,37 +64,68 @@ pub(super) const DISPLAY_IDS: &[u16] = &[
     ctrl_id::CLIPBOARD_CACHE_CLEAR,
 ];
 
-pub(super) const TRANSLATION_IDS: &[u16] = &[
-    ctrl_id::TRANS_ENGINE,
-    ctrl_id::TRANS_SOURCE_LANG,
-    ctrl_id::TRANS_TARGET_LANG,
-    ctrl_id::EZTRANS_DLL_EDIT,
-    ctrl_id::EZTRANS_DLL_BROWSE,
-    ctrl_id::EZTRANS_DAT_EDIT,
-    ctrl_id::EZTRANS_DAT_BROWSE,
-    ctrl_id::EZTRANS_DICTIONARY_EDIT_BTN,
-    ctrl_id::DEEPL_KEYS_LIST,
-    ctrl_id::DEEPL_KEY_ADD_EDIT,
-    ctrl_id::DEEPL_KEY_ADD_BTN,
-    ctrl_id::DEEPL_KEY_REMOVE_BTN,
-    ctrl_id::DEEPL_STRATEGY_COMBO,
-    ctrl_id::DEEPL_KEY_TIER_COMBO,
-    ctrl_id::PAPAGO_ID_EDIT,
-    ctrl_id::PAPAGO_SECRET_EDIT,
-    ctrl_id::LLM_PROVIDER,
-    ctrl_id::LLM_MODEL_EDIT,
-    ctrl_id::LLM_API_KEY_EDIT,
-    ctrl_id::LLM_API_KEY_VISIBLE,
-    ctrl_id::LLM_REASONING_EFFORT,
-    ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
-    ctrl_id::LLM_MAX_TOKENS_EDIT,
-    ctrl_id::LLM_TEMPERATURE_TRACKBAR,
-    ctrl_id::LLM_TEMPERATURE_EDIT,
-    ctrl_id::LLM_DEBOUNCE_EDIT,
-    ctrl_id::LLM_GLOSSARY_EDIT_BTN,
-    ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
-    ctrl_id::CUSTOM_API_SELECT,
+/// 엔진별 컨트롤의 단일 출처.
+///
+/// 번역 탭 목록은 여기에서 유도되므로(`adopt_engine_controls_into_translation_tab`)
+/// 엔진 컨트롤을 추가할 때는 이 표만 고치면 된다.
+pub(super) const ENGINE_CONTROL_IDS: &[(EngineGroup, &[u16])] = &[
+    (EngineGroup::EzTrans, ctrl_id::EZTRANS_STATIC_IDS),
+    (
+        EngineGroup::EzTrans,
+        &[
+            ctrl_id::EZTRANS_DLL_EDIT,
+            ctrl_id::EZTRANS_DLL_BROWSE,
+            ctrl_id::EZTRANS_DAT_EDIT,
+            ctrl_id::EZTRANS_DAT_BROWSE,
+            ctrl_id::EZTRANS_DICTIONARY_EDIT_BTN,
+        ],
+    ),
+    (EngineGroup::DeepL, ctrl_id::DEEPL_STATIC_IDS),
+    (
+        EngineGroup::DeepL,
+        &[
+            ctrl_id::DEEPL_KEYS_LIST,
+            ctrl_id::DEEPL_KEY_ADD_EDIT,
+            ctrl_id::DEEPL_KEY_ADD_BTN,
+            ctrl_id::DEEPL_KEY_REMOVE_BTN,
+            ctrl_id::DEEPL_STRATEGY_COMBO,
+            ctrl_id::DEEPL_KEY_TIER_COMBO,
+        ],
+    ),
+    (EngineGroup::Papago, ctrl_id::PAPAGO_STATIC_IDS),
+    (
+        EngineGroup::Papago,
+        &[ctrl_id::PAPAGO_ID_EDIT, ctrl_id::PAPAGO_SECRET_EDIT],
+    ),
+    (EngineGroup::Llm, ctrl_id::LLM_STATIC_IDS),
+    (
+        EngineGroup::Llm,
+        &[
+            ctrl_id::LLM_PROVIDER,
+            ctrl_id::LLM_MODEL_EDIT,
+            ctrl_id::LLM_API_KEY_EDIT,
+            ctrl_id::LLM_API_KEY_VISIBLE,
+            ctrl_id::LLM_REASONING_EFFORT,
+            ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
+            ctrl_id::LLM_MAX_TOKENS_EDIT,
+            ctrl_id::LLM_TEMPERATURE_TRACKBAR,
+            ctrl_id::LLM_TEMPERATURE_EDIT,
+            ctrl_id::LLM_DEBOUNCE_EDIT,
+            ctrl_id::LLM_GLOSSARY_EDIT_BTN,
+            ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
+        ],
+    ),
+    (EngineGroup::Custom, ctrl_id::CUSTOM_STATIC_IDS),
+    (EngineGroup::Custom, &[ctrl_id::CUSTOM_API_SELECT]),
 ];
+
+/// 엔진 그룹에 등록된 모든 컨트롤 ID (테스트에서 누락 검증에 쓴다).
+#[cfg(test)]
+pub(super) fn engine_control_ids() -> impl Iterator<Item = u16> {
+    ENGINE_CONTROL_IDS
+        .iter()
+        .flat_map(|(_, ids)| ids.iter().copied())
+}
 
 pub(super) const HOTKEYS_IDS: &[u16] = &[ctrl_id::HOTKEYS_LIST, ctrl_id::HOTKEYS_RESET];
 pub(super) const INFO_IDS: &[u16] = &[
@@ -112,13 +143,16 @@ impl SettingsDialog {
         self.register_ids(TAB_APPEARANCE, APPEARANCE_IDS)?;
         self.register_ids(TAB_DISPLAY, ctrl_id::DISPLAY_STATIC_IDS)?;
         self.register_ids(TAB_DISPLAY, DISPLAY_IDS)?;
-        self.register_ids(TAB_TRANSLATION, ctrl_id::TRANSLATION_STATIC_IDS)?;
-        self.register_ids(TAB_TRANSLATION, TRANSLATION_IDS)?;
+        self.register_ids(TAB_TRANSLATION, ctrl_id::TRANSLATION_COMMON_IDS)?;
         self.register_ids(TAB_HOTKEYS, ctrl_id::HOTKEYS_STATIC_IDS)?;
         self.register_ids(TAB_HOTKEYS, HOTKEYS_IDS)?;
         self.register_ids(TAB_INFO, ctrl_id::INFO_STATIC_IDS)?;
         self.register_ids(TAB_INFO, INFO_IDS)?;
+        // 엔진 컨트롤은 모두 번역 탭에 속한다. 두 목록을 따로 관리하면
+        // 한쪽에만 추가하는 실수가 생기므로(2207/2208 경고 라벨 누락 사례)
+        // 엔진 그룹에서 번역 탭 목록을 자동으로 유도한다.
         self.register_engine_controls()?;
+        self.adopt_engine_controls_into_translation_tab();
         self.initialize_tab_titles()?;
         self.initialize_values()?;
         self.initialize_info()?;
@@ -156,54 +190,10 @@ impl SettingsDialog {
     }
 
     fn register_engine_controls(&mut self) -> Result<()> {
-        self.register_engine_ids(EngineGroup::EzTrans, ctrl_id::EZTRANS_STATIC_IDS)?;
-        self.register_engine_ids(
-            EngineGroup::EzTrans,
-            &[
-                ctrl_id::EZTRANS_DLL_EDIT,
-                ctrl_id::EZTRANS_DLL_BROWSE,
-                ctrl_id::EZTRANS_DAT_EDIT,
-                ctrl_id::EZTRANS_DAT_BROWSE,
-                ctrl_id::EZTRANS_DICTIONARY_EDIT_BTN,
-            ],
-        )?;
-        self.register_engine_ids(EngineGroup::DeepL, ctrl_id::DEEPL_STATIC_IDS)?;
-        self.register_engine_ids(
-            EngineGroup::DeepL,
-            &[
-                ctrl_id::DEEPL_KEYS_LIST,
-                ctrl_id::DEEPL_KEY_ADD_EDIT,
-                ctrl_id::DEEPL_KEY_ADD_BTN,
-                ctrl_id::DEEPL_KEY_REMOVE_BTN,
-                ctrl_id::DEEPL_STRATEGY_COMBO,
-                ctrl_id::DEEPL_KEY_TIER_COMBO,
-            ],
-        )?;
-        self.register_engine_ids(EngineGroup::Papago, ctrl_id::PAPAGO_STATIC_IDS)?;
-        self.register_engine_ids(
-            EngineGroup::Papago,
-            &[ctrl_id::PAPAGO_ID_EDIT, ctrl_id::PAPAGO_SECRET_EDIT],
-        )?;
-        self.register_engine_ids(EngineGroup::Llm, ctrl_id::LLM_STATIC_IDS)?;
-        self.register_engine_ids(
-            EngineGroup::Llm,
-            &[
-                ctrl_id::LLM_PROVIDER,
-                ctrl_id::LLM_MODEL_EDIT,
-                ctrl_id::LLM_API_KEY_EDIT,
-                ctrl_id::LLM_API_KEY_VISIBLE,
-                ctrl_id::LLM_REASONING_EFFORT,
-                ctrl_id::LLM_SYSTEM_PROMPT_EDIT,
-                ctrl_id::LLM_MAX_TOKENS_EDIT,
-                ctrl_id::LLM_TEMPERATURE_TRACKBAR,
-                ctrl_id::LLM_TEMPERATURE_EDIT,
-                ctrl_id::LLM_DEBOUNCE_EDIT,
-                ctrl_id::LLM_GLOSSARY_EDIT_BTN,
-                ctrl_id::LLM_GLOSSARY_COUNT_LABEL,
-            ],
-        )?;
-        self.register_engine_ids(EngineGroup::Custom, ctrl_id::CUSTOM_STATIC_IDS)?;
-        self.register_engine_ids(EngineGroup::Custom, &[ctrl_id::CUSTOM_API_SELECT])
+        for &(group, ids) in ENGINE_CONTROL_IDS {
+            self.register_engine_ids(group, ids)?;
+        }
+        Ok(())
     }
 
     fn initialize_values(&self) -> Result<()> {
@@ -475,6 +465,24 @@ impl SettingsDialog {
             .collect::<Result<Vec<_>>>()?;
         self.tab_controls[tab].extend(controls);
         Ok(())
+    }
+
+    /// 엔진별 컨트롤을 번역 탭 목록에 합친다.
+    ///
+    /// 엔진 컨트롤은 전부 번역 탭 위에 놓이므로 탭 전환 시 함께 표시/숨김되어야
+    /// 한다. `engine_controls`를 단일 출처로 삼아 중복 없이 복사한다.
+    fn adopt_engine_controls_into_translation_tab(&mut self) {
+        let mut adopted: Vec<HWND> = Vec::new();
+        for group in &self.engine_controls {
+            for &hwnd in group {
+                if !self.tab_controls[TAB_TRANSLATION].contains(&hwnd)
+                    && !adopted.contains(&hwnd)
+                {
+                    adopted.push(hwnd);
+                }
+            }
+        }
+        self.tab_controls[TAB_TRANSLATION].extend(adopted);
     }
 
     fn register_engine_ids(&mut self, group: EngineGroup, ids: &[u16]) -> Result<()> {
