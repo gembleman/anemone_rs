@@ -62,7 +62,7 @@ jobs:
           "checksum=$checksum" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "업데이트 asset: $asset"
 
-      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: i686-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
