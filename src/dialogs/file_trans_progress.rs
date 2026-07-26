@@ -143,8 +143,7 @@ impl HostedDialog for FileTransProgressDialog {
     }
 
     fn can_defer(msg: u32) -> bool {
-        // WM_CLOSE는 재예약하지 않는다. 이 창에서 닫기는 "작업 취소"를 뜻하므로
-        // 재진입 중이면 host의 기본 파괴 경로로 넘겨 창이 남지 않게 한다.
+        // WM_CLOSE는 host가 공통으로 재예약해 현재 handler가 끝난 뒤 취소로 처리한다.
         msg == WM_COMMAND
     }
 }

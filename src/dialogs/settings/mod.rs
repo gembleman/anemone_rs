@@ -208,8 +208,8 @@ impl HostedDialog for SettingsDialog {
     }
 
     fn can_defer(msg: u32) -> bool {
-        // WM_CLOSE는 제외한다. 재진입 중이면 host가 바로 파괴하며, 재예약하면
-        // preview 되돌리기가 끝나기 전에 창이 닫힐 수 있다.
+        // WM_CLOSE는 host가 공통으로 재예약해 현재 preview handler의 대여가
+        // 끝난 뒤 discard_unapplied_changes를 실행한다.
         msg == WM_COMMAND
             || msg == crate::dialogs::glossary::WM_GLOSSARY_APPLIED
             || msg == crate::dialogs::glossary::WM_EZTRANS_DICTIONARY_APPLIED

@@ -375,17 +375,15 @@ impl<T: HostedDialog> DialogHost<T> {
         let response = match state.try_borrow_mut() {
             Ok(mut dialog) => dialog.handle_message(msg, wparam, lparam),
             Err(_) => {
-                if T::can_defer(msg) {
+                // WM_CLOSE는 pointer-free이며, 바깥 handler의 대여가 끝난 뒤 다시
+                // 처리해야 한다. 여기서 DestroyWindow를 호출하면 동기 WM_DESTROY가
+                // 아직 살아 있는 RefMut 아래의 state를 해제한다.
+                if msg == WM_CLOSE {
                     unsafe { defer_dialog_message(hwnd, msg, wparam, lparam) };
                     return 1;
                 }
-                // 재진입 중에도 닫기 요청은 삼키지 않는다. 여기서 무시하면
-                // 사용자가 창을 닫을 방법이 없어진다.
-                if msg == WM_CLOSE {
-                    // SAFETY: state를 빌리지 않았으므로 파괴 경로가 재진입해도 안전하다.
-                    unsafe {
-                        let _ = DestroyWindow(hwnd);
-                    }
+                if T::can_defer(msg) {
+                    unsafe { defer_dialog_message(hwnd, msg, wparam, lparam) };
                     return 1;
                 }
                 return 0;

@@ -92,7 +92,7 @@ impl HostedDialog for FileTransDialog {
             return DialogResult::Unhandled;
         }
         let id = (wparam.0 & 0xFFFF) as u16;
-        if id == IDCANCEL.0 as u16 {
+        if id == IDCANCEL.0 as u16 || id == ctrl_id::BTN_CLOSE {
             return DialogResult::Close(LRESULT(1));
         }
         let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
@@ -209,9 +209,6 @@ impl FileTransDialog {
             OUTPUT_3 => self.write_type = WriteType::OriginalTransNewline,
             NO_TRANS_LINEFEED => self.no_trans_linefeed = !self.no_trans_linefeed,
             BTN_TRANSLATE => self.start_translation(),
-            BTN_CLOSE => unsafe {
-                let _ = DestroyWindow(self.hwnd);
-            },
             _ => {}
         }
     }

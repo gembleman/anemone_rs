@@ -4,6 +4,7 @@
 //! 원문/번역 필터링 및 파일 저장 지원.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 
 use windows::{
     Win32::{
@@ -68,6 +69,10 @@ pub struct BacklogDialog {
 thread_local! {
     static RICHEDIT_LOADED: RefCell<bool> = const { RefCell::new(false) };
     static BACKLOG_VIEW_DIRTY: Cell<bool> = const { Cell::new(false) };
+    /// 모달 공통 대화상자의 중첩 message loop에서 state를 빌리지 못했을 때도
+    /// 열린 view snapshot에 나중에 반영할 항목.
+    static PENDING_BACKLOG_ENTRIES: RefCell<VecDeque<LogEntry>> =
+        const { RefCell::new(VecDeque::new()) };
 }
 
 pub(crate) struct BacklogInit {
@@ -80,6 +85,10 @@ impl HostedDialog for BacklogDialog {
     const RESOURCE_ID: u16 = ctrl_id::DIALOG;
 
     fn create(hwnd: HWND, init: Self::Init) -> Result<Self> {
+        // 새 snapshot은 AppModel에서 복제되므로 이전 창 수명의 pending 항목을
+        // 다시 넣으면 중복된다.
+        PENDING_BACKLOG_ENTRIES.with(|pending| pending.borrow_mut().clear());
+        BACKLOG_VIEW_DIRTY.with(|dirty| dirty.set(false));
         let mut dialog = Self::new(hwnd, init.store, init.actions);
         dialog.initialize_controls()?;
         Ok(dialog)
@@ -319,8 +328,9 @@ impl BacklogDialog {
         self.append_styled_texts_to_richedit(segments);
     }
 
-    fn refresh_if_dirty(&self) {
+    fn refresh_if_dirty(&mut self) {
         if BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false)) {
+            drain_pending_entries(&mut self.store);
             self.refresh_richedit();
         }
     }
@@ -445,8 +455,13 @@ pub(crate) fn append_entry(entry: LogEntry, model_evicted: bool) {
     }
     let entry_for_render = entry.clone();
     let applied = DialogHost::<BacklogDialog>::with_state_mut(|dialog| {
+        let had_pending = drain_pending_entries(&mut dialog.store);
         let view_evicted = dialog.store.push(entry);
-        if model_evicted || view_evicted || BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false)) {
+        if model_evicted
+            || view_evicted
+            || had_pending
+            || BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false))
+        {
             dialog.refresh_richedit();
         } else {
             dialog.append_styled_texts_to_richedit(BacklogStore::render_entry(
@@ -456,8 +471,49 @@ pub(crate) fn append_entry(entry: LogEntry, model_evicted: bool) {
             ));
         }
     });
-    // 재진입으로 state를 빌리지 못했다. 다음 갱신에서 전체를 다시 그린다.
+    // 재진입으로 state를 빌리지 못했다. 항목 자체를 보존한 뒤 바깥 handler가
+    // 돌아왔을 때 snapshot에 넣고 전체를 다시 그린다.
     if applied.is_none() {
+        PENDING_BACKLOG_ENTRIES.with(|pending| pending.borrow_mut().push_back(entry_for_render));
         BACKLOG_VIEW_DIRTY.with(|dirty| dirty.set(true));
+    }
+}
+
+fn drain_pending_entries(store: &mut BacklogStore) -> bool {
+    let pending =
+        PENDING_BACKLOG_ENTRIES.with(|pending| std::mem::take(&mut *pending.borrow_mut()));
+    let had_pending = !pending.is_empty();
+    for entry in pending {
+        store.push(entry);
+    }
+    had_pending
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deferred_entries_are_preserved_in_the_open_view_snapshot() {
+        PENDING_BACKLOG_ENTRIES.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            pending.clear();
+            pending.push_back(LogEntry::new("first".into()).with_translation("첫째".into()));
+            pending.push_back(LogEntry::new("second".into()).with_translation("둘째".into()));
+        });
+
+        let mut store = BacklogStore::new();
+        assert!(drain_pending_entries(&mut store));
+        let rendered = store
+            .render(BacklogFilter::All, true)
+            .into_iter()
+            .map(|segment| segment.text)
+            .collect::<String>();
+
+        assert!(rendered.contains("first"));
+        assert!(rendered.contains("첫째"));
+        assert!(rendered.contains("second"));
+        assert!(rendered.contains("둘째"));
+        assert!(!drain_pending_entries(&mut store));
     }
 }
