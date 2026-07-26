@@ -70,14 +70,15 @@ impl App {
 
                 let delay_ms = {
                     let config = &self.model.config;
-                    let engine = match config.translation.get_engine() {
-                        Ok(engine) => engine,
+                    match config.translation.get_engine() {
+                        // 디바운스 지연만 정하는 값이므로, 설정이 잘못됐어도 캡처는 계속한다.
+                        // 실제 오류 보고는 번역 요청 단계에서 이뤄진다.
+                        Ok(engine) => debounce_delay_ms(engine, config.translation.llm.debounce_ms),
                         Err(error) => {
                             tracing::error!("자동 번역 설정 오류: {error}");
-                            return;
+                            0
                         }
-                    };
-                    debounce_delay_ms(engine, config.translation.llm.debounce_ms)
+                    }
                 };
                 self.schedule_clipboard_translation(text, delay_ms);
             }
@@ -144,6 +145,7 @@ impl App {
             Ok(spec) => spec,
             Err(error) => {
                 tracing::warn!("자동 번역 요청을 구성할 수 없습니다: {error}");
+                self.capture_without_translation(text);
                 return;
             }
         };
@@ -164,6 +166,7 @@ impl App {
 
         if let Err(error) = job.prepare() {
             tracing::warn!("자동 번역 엔진을 준비할 수 없습니다: {error}");
+            self.capture_without_translation(text);
             return;
         }
 
@@ -193,6 +196,20 @@ impl App {
 
         if let Err(e) = self.paint() {
             tracing::warn!("paint failed during translation: {e}");
+        }
+    }
+
+    /// 번역 엔진을 쓸 수 없을 때도 클립보드 캡처 결과는 남긴다.
+    ///
+    /// 번역 설정/엔진 준비가 실패해도 캡처 자체는 정상 동작해야 하므로,
+    /// 번역 요청 실패와 같은 방식으로 원문만 표시하고 백로그에 기록한다.
+    fn capture_without_translation(&mut self, text: &str) {
+        self.model.runtime.pending_translation = None;
+        self.model.runtime.original_text = text.to_string();
+        self.model.runtime.translated_text.clear();
+        self.push_backlog(LogEntry::new(text.to_string()));
+        if let Err(e) = self.paint() {
+            tracing::warn!("paint failed during untranslated capture: {e}");
         }
     }
 
