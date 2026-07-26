@@ -34,7 +34,8 @@ pub struct AvailableUpdate {
 
 /// 최신 릴리스를 조회해 현재 버전과 비교한다.
 pub async fn fetch_latest(current: &Version) -> Result<UpdateCheck, UpdateError> {
-    let url = format!("https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest");
+    let url =
+        format!("https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases?per_page=100");
     let parsed =
         reqwest::Url::parse(&url).map_err(|error| UpdateError::Parse(error.to_string()))?;
     ensure_trusted_url(&parsed)?;
@@ -65,7 +66,7 @@ pub async fn fetch_latest(current: &Version) -> Result<UpdateCheck, UpdateError>
     }
 
     let body = read_limited(response, MAX_API_BODY).await?;
-    parse_release(&body, current)
+    parse_releases(&body, current)
 }
 
 /// 본문을 상한까지만 읽는다. 응답이 상한을 넘으면 즉시 중단한다.
@@ -99,24 +100,32 @@ async fn read_limited(
     String::from_utf8(bytes).map_err(|error| UpdateError::Parse(error.to_string()))
 }
 
-/// 릴리스 JSON을 해석해 업데이트 가능 여부를 판단한다. 순수 함수다.
-pub(super) fn parse_release(body: &str, current: &Version) -> Result<UpdateCheck, UpdateError> {
-    let release: Release =
+/// 릴리스 목록에서 정식 버전 태그 중 가장 높은 것을 골라 업데이트 가능 여부를 판단한다.
+pub(super) fn parse_releases(body: &str, current: &Version) -> Result<UpdateCheck, UpdateError> {
+    let releases: Vec<Release> =
         serde_json::from_str(body).map_err(|error| UpdateError::Parse(error.to_string()))?;
 
-    // releases/latest는 원래 draft/prerelease를 제외하지만 방어적으로 확인한다.
-    if release.draft || release.prerelease {
+    let candidate = releases
+        .into_iter()
+        .filter(|release| !release.draft && !release.prerelease)
+        .filter_map(|release| {
+            let version: Version = release.tag_name.parse().ok()?;
+            (!version.is_prerelease()).then_some((release, version))
+        })
+        .max_by(|(_, left), (_, right)| left.cmp(right));
+
+    let Some((release, version)) = candidate else {
         return Ok(UpdateCheck::UpToDate);
-    }
+    };
 
-    let version: Version =
-        release
-            .tag_name
-            .parse()
-            .map_err(|error: super::version::VersionParseError| {
-                UpdateError::Parse(error.to_string())
-            })?;
+    evaluate_release(release, version, current)
+}
 
+fn evaluate_release(
+    release: Release,
+    version: Version,
+    current: &Version,
+) -> Result<UpdateCheck, UpdateError> {
     if !version.is_upgrade_from(current) {
         return Ok(UpdateCheck::UpToDate);
     }
