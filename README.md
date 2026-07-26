@@ -1,6 +1,10 @@
 # 아네모네_RS
 2017년 프로그램 아네모네를 개선하고자 완전히 새롭게 만들었습니다.
 
+### 다운로드
+최신버전 v0.1.1  
+[다운로드 페이지](https://github.com/gembleman/anemone_rs/releases/tag/starter_kit)
+
 ## 개선사항
 1. 그래픽 프레임워크를 GDI에서 다이렉트X로 전환. GPU를 쓰는 덕분에 CPU 사용률 저하.
 2. LLM API, 구글 등 번역 API 추가.
