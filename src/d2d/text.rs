@@ -13,8 +13,8 @@ use windows_numerics::{Matrix3x2, Vector2};
 use super::{
     TextBox,
     cache::{
-        EffectiveOutlineStyle, HitTestCache, HitTestKeyRef, MeasureCache, MeasureKeyRef,
-        OutlineBitmap, OutlineBitmapKey, OutlineBitmapKeyRef,
+        EffectiveOutlineStyle, HitTestCache, HitTestKeyRef, MeasureKeyRef, OutlineBitmap,
+        OutlineBitmapKey, OutlineBitmapKeyRef,
     },
     color::argb_to_color_f,
     renderer::D2DRenderer,
@@ -65,9 +65,10 @@ impl D2DRenderer {
     /// 주어진 폭에서 DirectWrite가 계산한 실제 시각적 줄 높이를 반환한다.
     /// 명시적 개행 수가 아니라 layout metrics를 사용하므로 자동 줄바꿈도 포함한다.
     ///
-    /// 결과는 단일 슬롯 캐시에 보관한다. 텍스트·폭·폰트가 불변인 한 동일
-    /// measure는 재현될 수 없으므로, paint마다 `CreateTextFormat`(글꼴 로딩 포함)
-    /// 과 `CreateTextLayout`(폴백 분석)을 다시 만들지 않는다. 캐시는
+    /// 결과는 고정 3슬롯 순환 캐시에 보관한다. paint가 최대 3개 블록
+    /// (Name/Original/Translation)을 같은 순서로 측정하므로, 한 paint의 워밍업
+    /// 뒤에는 매 paint마다 `CreateTextFormat`(글꼴 로딩 포함)과
+    /// `CreateTextLayout`(폴백 분석)을 다시 만들지 않는다. 캐시는
     /// `invalidate_device_caches`(장치 손실·DPI 변경)에서 폐기된다.
     pub fn measure_text_height(
         &mut self,
@@ -77,10 +78,8 @@ impl D2DRenderer {
     ) -> Result<f32> {
         const MEASURE_MAX_HEIGHT: f32 = 1_000_000.0;
         let key_ref = MeasureKeyRef::from_style(text, style, max_width);
-        if let Some(c) = &self.measure_cache
-            && key_ref.matches(&c.key)
-        {
-            return Ok(c.height);
+        if let Some(height) = self.measure_cache.get(&key_ref) {
+            return Ok(height);
         }
         let layout =
             self.create_text_layout_uncached(text, style, max_width, MEASURE_MAX_HEIGHT)?;
@@ -89,10 +88,7 @@ impl D2DRenderer {
             layout.GetMetrics(&mut metrics)?;
         }
         let height = metrics.height.max(style.font_size.max(1) as f32);
-        self.measure_cache = Some(MeasureCache {
-            key: key_ref.to_owned(),
-            height,
-        });
+        self.measure_cache.insert(key_ref.to_owned(), height);
         Ok(height)
     }
 

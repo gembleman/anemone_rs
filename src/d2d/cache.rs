@@ -134,10 +134,45 @@ impl<'a> MeasureKeyRef<'a> {
     }
 }
 
-/// `measure_text_height` 결과. 단일 슬롯이라 무한 성장하지 않는다.
-pub(super) struct MeasureCache {
+/// `measure_text_height` 결과 항목 하나.
+pub(super) struct MeasureCacheEntry {
     pub(super) key: MeasureKey,
     pub(super) height: f32,
+}
+
+/// `measure_text_height` 결과 캐시 — 고정 3슬롯 순환.
+///
+/// paint는 최대 3개 블록(Name/Original/Translation)을 순서대로 측정하므로,
+/// 슬롯이 3개면 한 paint의 워밍업 뒤 같은 블록 순서가 항상 hit한다.
+/// 단일 슬롯이라면 블록 2개 이상에서 교대 miss가 반복된다. 크기가 고정이라
+/// 무한 성장하지 않는다.
+pub(super) struct MeasureCache {
+    entries: [Option<MeasureCacheEntry>; 3],
+    /// miss 때 덮어쓸 슬롯 (FIFO 순환). hit는 이 인덱스를 움직이지 않는다.
+    next_replace: usize,
+}
+
+impl MeasureCache {
+    const CAPACITY: usize = 3;
+
+    pub(super) fn new() -> Self {
+        Self {
+            entries: [const { None }, const { None }, const { None }],
+            next_replace: 0,
+        }
+    }
+
+    pub(super) fn get(&self, key: &MeasureKeyRef<'_>) -> Option<f32> {
+        self.entries
+            .iter()
+            .find_map(|entry| entry.as_ref().filter(|e| key.matches(&e.key)).map(|e| e.height))
+    }
+
+    /// miss 시 호출: FIFO 순환으로 한 슬롯을 덮어쓴다.
+    pub(super) fn insert(&mut self, key: MeasureKey, height: f32) {
+        self.entries[self.next_replace] = Some(MeasureCacheEntry { key, height });
+        self.next_replace = (self.next_replace + 1) % Self::CAPACITY;
+    }
 }
 
 /// Outline geometry를 필요할 때 만드는 layout 캐시 항목.

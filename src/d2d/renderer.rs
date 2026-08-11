@@ -29,8 +29,8 @@ pub struct D2DRenderer {
     pub(super) stroke_style: Option<ID2D1StrokeStyle>,
     /// 현재 표시 중인 text layout과 outline geometry cache.
     pub(super) text_cache: Option<TextLayoutCache>,
-    /// `measure_text_height` 결과 cache. text_cache와 같은 단일 슬롯 패턴.
-    pub(super) measure_cache: Option<MeasureCache>,
+    /// `measure_text_height` 결과 cache (고정 3슬롯 순환).
+    pub(super) measure_cache: MeasureCache,
     /// 현재 outline과 shadow를 합성한 bitmap cache.
     pub(super) outline_bitmap: Option<OutlineBitmap>,
     /// 투명 배경의 `WM_NCHITTEST`용 줄별 사각형 cache.
@@ -70,7 +70,7 @@ impl D2DRenderer {
                 brush_cache: HashMap::new(),
                 stroke_style: Some(stroke_style),
                 text_cache: None,
-                measure_cache: None,
+                measure_cache: MeasureCache::new(),
                 outline_bitmap: None,
                 hit_test_cache: None,
                 miss_tracker: MissTracker::new(),
@@ -218,7 +218,7 @@ impl D2DRenderer {
     pub fn invalidate_device_caches(&mut self) {
         self.brush_cache.clear();
         self.text_cache = None;
-        self.measure_cache = None;
+        self.measure_cache = MeasureCache::new();
         self.outline_bitmap = None;
         self.hit_test_cache = None;
         // 추적 상태도 함께 초기화한다.

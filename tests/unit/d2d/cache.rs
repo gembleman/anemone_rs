@@ -79,6 +79,80 @@ fn measure_key_tracks_text_font_and_width() {
 }
 
 #[test]
+fn measure_cache_warms_up_and_hits_multi_block_sequence() {
+    let base = style();
+    let mut cache = MeasureCache::new();
+    let block_a = MeasureKeyRef::from_style("이름", &base, 100.0).to_owned();
+    let block_b = MeasureKeyRef::from_style("대사", &base, 100.0).to_owned();
+
+    // 2블록 paint: 첫 paint는 전부 miss (워밍업)
+    cache.insert(block_a.clone(), 30.0);
+    cache.insert(block_b.clone(), 20.0);
+    assert!(cache
+        .get(&MeasureKeyRef::from_style("이름", &base, 100.0))
+        .is_some());
+
+    // 두 번째 paint: 같은 순서 호출이면 두 블록 모두 hit
+    assert_eq!(
+        cache.get(&MeasureKeyRef::from_style("이름", &base, 100.0)),
+        Some(30.0)
+    );
+    assert_eq!(
+        cache.get(&MeasureKeyRef::from_style("대사", &base, 100.0)),
+        Some(20.0)
+    );
+
+    // hit는 순환 인덱스를 움직이지 않으므로 세 번째 paint도 hit 유지
+    assert_eq!(
+        cache.get(&MeasureKeyRef::from_style("이름", &base, 100.0)),
+        Some(30.0)
+    );
+    assert_eq!(
+        cache.get(&MeasureKeyRef::from_style("대사", &base, 100.0)),
+        Some(20.0)
+    );
+}
+
+#[test]
+fn measure_cache_fifo_evicts_oldest_slot_on_fourth_key() {
+    let base = style();
+    let mut cache = MeasureCache::new();
+    let keys: Vec<MeasureKey> = (0..4)
+        .map(|i| {
+            MeasureKeyRef::from_style(&format!("block{i}"), &base, 100.0)
+                .to_owned()
+        })
+        .collect();
+
+    for key in &keys[..3] {
+        cache.insert(key.clone(), 10.0);
+    }
+    // 3슬롯이 다 찬 뒤 4번째 키는 가장 오래된 슬롯(첫 키)을 덮어쓴다.
+    cache.insert(keys[3].clone(), 40.0);
+
+    assert_eq!(cache.get(&MeasureKeyRef::from_style("block0", &base, 100.0)), None);
+    assert_eq!(
+        cache.get(&MeasureKeyRef::from_style("block1", &base, 100.0)),
+        Some(10.0)
+    );
+    assert_eq!(
+        cache.get(&MeasureKeyRef::from_style("block2", &base, 100.0)),
+        Some(10.0)
+    );
+    assert_eq!(
+        cache.get(&MeasureKeyRef::from_style("block3", &base, 100.0)),
+        Some(40.0)
+    );
+
+    // 블록 1~3 순서 호출(2블록/3블록 paint와 유사)은 전부 hit한다.
+    for i in 1..4 {
+        assert!(cache
+            .get(&MeasureKeyRef::from_style(&format!("block{i}"), &base, 100.0))
+            .is_some());
+    }
+}
+
+#[test]
 fn inactive_effect_values_do_not_invalidate_bitmap_key() {
     let base = style();
     let key = OutlineBitmapKeyRef::from_style("text", &base, 100.0, 50.0).to_owned();
