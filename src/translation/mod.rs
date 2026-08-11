@@ -20,6 +20,8 @@ pub(crate) mod settings;
 pub(crate) mod worker;
 
 pub(crate) use cache_key::CacheKey;
+#[cfg(feature = "benchmark")]
+pub use cache_key::CacheKey as BenchmarkCacheKey;
 pub(crate) use deepl::DeepLApiTier;
 pub use error::{TranslationError, TranslationResult};
 pub(crate) use eztrans::EzTransTranslator;

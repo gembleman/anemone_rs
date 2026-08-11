@@ -2,6 +2,10 @@ mod app;
 #[cfg(feature = "benchmark")]
 #[path = "../benchmark/mem.rs"]
 pub mod bench_mem;
+#[cfg(feature = "benchmark")]
+pub use app::translation_cache::TranslationCacheStore as BenchmarkTranslationCacheStore;
+#[cfg(feature = "benchmark")]
+pub use translation::BenchmarkCacheKey;
 mod cli;
 mod clipboard;
 mod config;

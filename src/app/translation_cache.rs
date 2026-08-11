@@ -37,6 +37,11 @@ impl TranslationCacheStore {
         let conn = Connection::open(path).map_err(CacheError::Open)?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(CacheError::Query)?;
+        // WAL에서 fsync를 checkpoint 시점으로 미룬다. 번역 캐시는 재생성 가능
+        // 데이터라 크래시 시 마지막 일부 항목 유실은 수용 가능하다 — UI 스레드
+        // put 지연(벤치: FULL 344us vs NORMAL 57us 평균)을 줄이는 것이 우선이다.
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(CacheError::Query)?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS translation_cache (
                 engine_id TEXT NOT NULL,

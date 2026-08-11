@@ -30,7 +30,7 @@ mod rendering;
 pub(crate) mod services;
 mod state;
 mod translation;
-mod translation_cache;
+pub(crate) mod translation_cache;
 mod update;
 mod window_proc;
 

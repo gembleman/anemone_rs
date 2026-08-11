@@ -19,3 +19,6 @@ mod benchmarks;
 
 #[path = "file_trans/worker.rs"]
 mod worker_benchmarks;
+
+#[path = "translation_cache_bench.rs"]
+mod translation_cache_benchmarks;
