@@ -8,8 +8,9 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{
         DefWindowProcW, GetClientRect, HTCAPTION, HTTRANSPARENT, KillTimer, MINMAXINFO,
         PostQuitMessage, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_CLIPBOARDUPDATE, WM_CLOSE,
-        WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_HOTKEY,
-        WM_NCHITTEST, WM_NCRBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
+        WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE,
+        WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_HOTKEY, WM_NCHITTEST, WM_NCRBUTTONUP, WM_PAINT,
+        WM_RBUTTONUP, WM_SIZE, WM_TIMER,
     },
 };
 
@@ -60,7 +61,8 @@ fn reentry_policy(msg: u32, taskbar_created_msg: u32) -> ReentryPolicy {
         WM_DPICHANGED => ReentryPolicy::ApplyDpiThenResize,
         WM_PAINT => ReentryPolicy::ValidatePaintThenRepaint,
         WM_CLOSE | WM_SIZE | WM_DISPLAYCHANGE | WM_RBUTTONUP | WM_NCRBUTTONUP | WM_COMMAND
-        | WM_HOTKEY | WM_TRAY_ICON | WM_CLIPBOARDUPDATE | WM_TIMER => ReentryPolicy::DeferOwned,
+        | WM_HOTKEY | WM_TRAY_ICON | WM_CLIPBOARDUPDATE | WM_TIMER | WM_ENTERSIZEMOVE
+        | WM_EXITSIZEMOVE => ReentryPolicy::DeferOwned,
         _ if matches!(
             msg,
             WM_APP_REFRESH
@@ -119,6 +121,23 @@ impl App {
                     let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
                     if let Err(e) = self.resize(width, height) {
                         tracing::warn!("resize failed: {e}");
+                    }
+                    Some(LRESULT(0))
+                }
+
+                WM_ENTERSIZEMOVE => {
+                    self.model.runtime.resizing = true;
+                    Some(LRESULT(0))
+                }
+
+                WM_EXITSIZEMOVE => {
+                    self.model.runtime.resizing = false;
+                    if let Some(size) = self.model.runtime.pending_resize.take() {
+                        if let Err(e) = self.resize(size.width, size.height) {
+                            tracing::warn!("exit-resize failed: {e}");
+                        }
+                    } else {
+                        self.sync_client_size(hwnd);
                     }
                     Some(LRESULT(0))
                 }

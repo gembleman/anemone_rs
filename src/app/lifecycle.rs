@@ -183,6 +183,8 @@ impl App {
                             initial_client_width,
                             initial_client_height,
                         ),
+                        resizing: false,
+                        pending_resize: None,
                         original_text: String::new(),
                         translated_text: "아네모네 시작됨 - 클립보드를 복사해보세요".to_string(),
                         overlay_notice: None,

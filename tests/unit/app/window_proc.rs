@@ -3,7 +3,8 @@ use crate::app::messages::{
     WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_TRANSLATION_COMPLETE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    WM_APP, WM_CLIPBOARDUPDATE, WM_COMMAND, WM_DPICHANGED, WM_NOTIFY, WM_SIZE,
+    WM_APP, WM_CLIPBOARDUPDATE, WM_COMMAND, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
+    WM_NOTIFY, WM_SIZE,
 };
 
 #[test]
@@ -11,6 +12,8 @@ fn reentry_defers_owned_app_messages() {
     for msg in [
         WM_COMMAND,
         WM_SIZE,
+        WM_ENTERSIZEMOVE,
+        WM_EXITSIZEMOVE,
         WM_CLIPBOARDUPDATE,
         WM_APP_REFRESH,
         WM_APP_SET_MAGNETIC,

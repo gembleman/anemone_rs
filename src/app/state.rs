@@ -126,6 +126,11 @@ pub(super) enum AppCommand {
 
 pub(super) struct AppState {
     pub client_size: ClientSize,
+    /// WM_ENTERSIZEMOVE ~ WM_EXITSIZEMOVE 동안 true. WM_SIZE는 드래그 내내
+    /// 연속으로 오므로 그 사이 ResizeBuffers/layout/bitmap 재빌드를 미룬다.
+    pub resizing: bool,
+    /// interactive resize 중 최종 목표 크기. 종료 시 1회만 적용한다.
+    pub pending_resize: Option<ClientSize>,
     pub original_text: String,
     pub translated_text: String,
     pub overlay_notice: Option<OverlayNotice>,

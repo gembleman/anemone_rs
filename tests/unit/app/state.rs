@@ -201,6 +201,8 @@ fn app_model() -> AppModel {
         backlog: BacklogStore::new(),
         runtime: AppState {
             client_size: ClientSize::new(400, 200),
+            resizing: false,
+            pending_resize: None,
             original_text: String::new(),
             translated_text: String::new(),
             overlay_notice: None,

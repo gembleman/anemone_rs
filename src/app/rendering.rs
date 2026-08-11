@@ -447,6 +447,16 @@ impl App {
             return Ok(());
         }
 
+        // interactive resize 중(WM_ENTERSIZEMOVE ~ WM_EXITSIZEMOVE)에는 재구축
+        // 비용이 큰 작업을 모두 끝으로 미룬다. WM_SIZE는 드래그 내내 연속으로
+        // 오는데, 매번 ResizeBuffers + layout/bitmap/hit-test 전 캐시 재빌드 +
+        // 최대 16ms wait_for_back_buffer를 반복하면 리사이즈가 버벅인다. 최종
+        // 목표 크기만 기록해 두고 WM_EXITSIZEMOVE에서 1회 적용한다.
+        if self.model.runtime.resizing {
+            self.model.runtime.pending_resize = Some(size);
+            return Ok(());
+        }
+
         self.model.runtime.client_size = size;
 
         // 첫 paint 전이면 lazy init이 현재 크기로 만들고, 이후에는 swap chain을 조정한다.
