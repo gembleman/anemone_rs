@@ -16,6 +16,82 @@ fn rejects_missing_credentials_without_exposing_values() {
 }
 
 #[test]
+fn from_config_cached_reuses_the_job_for_unchanged_config() {
+    let mut config = TranslationConfig {
+        engine: "eztrans".into(),
+        eztrans_postprocess_dictionary: vec![EzTransPostprocessEntry {
+            source: "foo".into(),
+            target: "bar".into(),
+        }],
+        ..TranslationConfig::default()
+    };
+    config.eztrans_dll_path = "engine.dll".into();
+    config.eztrans_dat_path = "dat".into();
+
+    let first = PreparedJob::from_config_cached(&config).unwrap();
+    let second = PreparedJob::from_config_cached(&config).unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "같은 설정은 같은 PreparedJob 인스턴스를 재사용해야 합니다"
+    );
+    // engine_id는 캐시된 인스턴스 안에서 메모이즈되어 사전 해시가 재계산되지 않는다.
+    let id = first.engine().cache_engine_id();
+    assert_eq!(second.engine().cache_engine_id(), id);
+    assert_ne!(id, "eztrans");
+}
+
+#[test]
+fn from_config_cached_rebuilds_when_the_dictionary_changes() {
+    let mut config = TranslationConfig {
+        engine: "eztrans".into(),
+        ..TranslationConfig::default()
+    };
+    config.eztrans_dll_path = "engine.dll".into();
+    config.eztrans_dat_path = "dat".into();
+    config.eztrans_postprocess_dictionary = vec![EzTransPostprocessEntry {
+        source: "A".into(),
+        target: "B".into(),
+    }];
+
+    let with_dictionary_a = PreparedJob::from_config_cached(&config).unwrap();
+    config.eztrans_postprocess_dictionary = vec![EzTransPostprocessEntry {
+        source: "C".into(),
+        target: "D".into(),
+    }];
+    let with_dictionary_b = PreparedJob::from_config_cached(&config).unwrap();
+
+    assert!(
+        !Arc::ptr_eq(&with_dictionary_a, &with_dictionary_b),
+        "사전이 바뀌면 새로 빌드해야 합니다"
+    );
+    assert_ne!(
+        with_dictionary_a.engine().cache_engine_id(),
+        with_dictionary_b.engine().cache_engine_id()
+    );
+}
+
+#[test]
+fn from_config_cached_rebuilds_when_llm_model_changes() {
+    let mut config = TranslationConfig {
+        engine: "llm".into(),
+        llm: crate::config::LlmConfig {
+            model: "model-a".into(),
+            api_key: "key".into(),
+            ..crate::config::LlmConfig::default()
+        },
+        ..TranslationConfig::default()
+    };
+
+    let model_a = PreparedJob::from_config_cached(&config).unwrap();
+    config.llm.model = "model-b".into();
+    let model_b = PreparedJob::from_config_cached(&config).unwrap();
+
+    assert!(!Arc::ptr_eq(&model_a, &model_b));
+    assert_eq!(model_a.engine().cache_engine_id(), "llm:model-a");
+    assert_eq!(model_b.engine().cache_engine_id(), "llm:model-b");
+}
+
+#[test]
 fn validates_eztrans_paths_and_language_pair() {
     let mut config = TranslationConfig {
         engine: "eztrans".into(),

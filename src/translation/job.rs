@@ -1,6 +1,6 @@
 //! 호출 환경과 무관한 검증된 번역 작업 구성.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::config::{EzTransPostprocessEntry, TranslationConfig};
 use crate::translation::custom::CustomApiCallParams;
@@ -73,11 +73,23 @@ impl PreparedEngineKind {
 
 /// 비밀값을 복제하지 않고 공유하는 검증된 번역 엔진.
 #[derive(Clone)]
-pub struct PreparedEngine(Arc<PreparedEngineKind>);
+pub struct PreparedEngine {
+    kind: Arc<PreparedEngineKind>,
+    /// `cache_engine_id()` 결과 메모이즈. 사전 전체 해시를 요청당 반복하지 않게
+    /// 처음 계산한 값만 보관한다 (PreparedJob 전역 재사용과 함께 동작).
+    cache_engine_id: OnceLock<String>,
+}
 
 impl PreparedEngine {
+    fn new(kind: PreparedEngineKind) -> Self {
+        Self {
+            kind: Arc::new(kind),
+            cache_engine_id: OnceLock::new(),
+        }
+    }
+
     pub fn engine(&self) -> TranslationEngine {
-        self.0.engine()
+        self.kind.engine()
     }
 
     pub fn display_name(&self) -> &'static str {
@@ -89,19 +101,19 @@ impl PreparedEngine {
     }
 
     pub fn is_blocking(&self) -> bool {
-        matches!(self.0.as_ref(), PreparedEngineKind::EzTrans { .. })
+        matches!(self.kind.as_ref(), PreparedEngineKind::EzTrans { .. })
     }
 
     pub fn supports_batch(&self) -> bool {
-        matches!(self.0.as_ref(), PreparedEngineKind::EzTrans { .. })
+        matches!(self.kind.as_ref(), PreparedEngineKind::EzTrans { .. })
     }
 
     pub(crate) fn kind(&self) -> &PreparedEngineKind {
-        self.0.as_ref()
+        self.kind.as_ref()
     }
 
     pub(crate) fn eztrans_process(&self) -> Option<&EzTransProcessConfig> {
-        match self.0.as_ref() {
+        match self.kind.as_ref() {
             PreparedEngineKind::EzTrans { process, .. } => Some(process),
             _ => None,
         }
@@ -110,7 +122,13 @@ impl PreparedEngine {
     /// 캐시 키에 쓰이는 엔진 식별자. LLM은 모델이 바뀌면 결과가 달라질 수 있어
     /// 모델명까지 포함하고, 다른 엔진은 엔진명만으로 충분하다.
     pub fn cache_engine_id(&self) -> String {
-        match self.0.as_ref() {
+        self.cache_engine_id
+            .get_or_init(|| Self::compute_cache_engine_id(&self.kind))
+            .clone()
+    }
+
+    fn compute_cache_engine_id(kind: &PreparedEngineKind) -> String {
+        match kind {
             PreparedEngineKind::Llm(params) => format!("llm:{}", params.model),
             PreparedEngineKind::EzTrans {
                 postprocess_dictionary,
@@ -121,7 +139,7 @@ impl PreparedEngine {
                 postprocess_dictionary.hash(&mut hasher);
                 format!("eztrans:{:016x}", hasher.finish())
             }
-            _ => self.engine().to_str().to_string(),
+            _ => kind.engine().to_str().to_string(),
         }
     }
 }
@@ -187,6 +205,27 @@ impl PreparedJob {
             .get_target_language()
             .map_err(|error| TranslationConfigError::InvalidSetting(error.to_string()))?;
         Self::with_engine_languages(config, engine, source, target)
+    }
+
+    /// `from_config` 결과를 설정 fingerprint로 전역 재사용한다.
+    ///
+    /// 클립보드 경로는 변경마다 `from_config`를 호출하는데, EzTrans + 후처리
+    /// 사전을 쓰면 매번 사전 Vec 전체 clone과 aho-corasick automaton 재빌드가
+    /// 일어난다(캐시 hit여도). 같은 설정의 작업은 처음 만든 인스턴스를 공유해
+    /// 이 비용을 설정 변경 시 1회로 줄인다. `cache_engine_id` 메모이즈도
+    /// 캐시된 인스턴스 안에서 함께 이뤄진다.
+    pub fn from_config_cached(
+        config: &TranslationConfig,
+    ) -> Result<Arc<PreparedJob>, TranslationConfigError> {
+        let fingerprint = config_fingerprint(config)?;
+        let mut cache = PREPARED_JOB_CACHE.lock().expect("prepared job cache poisoned");
+        if let Some((_, job)) = cache.iter().find(|(key, _)| *key == fingerprint) {
+            return Ok(job.clone());
+        }
+        let job = Arc::new(Self::from_config(config)?);
+        cache.insert(0, (fingerprint, job.clone()));
+        cache.truncate(PREPARED_JOB_CACHE_MAX);
+        Ok(job)
     }
 
     /// CLI 등의 명시적 엔진/언어 재정의도 동일한 backend 구성 규칙을 사용한다.
@@ -289,7 +328,7 @@ impl PreparedJob {
             });
         }
         Ok(Self {
-            engine: PreparedEngine(Arc::new(kind)),
+            engine: PreparedEngine::new(kind),
             languages: LanguagePair::new(source, target),
         })
     }
@@ -331,6 +370,86 @@ impl PreparedJob {
             _ => translated,
         }
     }
+}
+
+/// 설정 fingerprint → 준비된 작업 전역 캐시. 설정 변경은 드물어 소형이면
+/// 충분하고, 같은 키 재요청 시 사전 clone/automaton 재빌드를 건너뛴다.
+static PREPARED_JOB_CACHE: Mutex<Vec<(u64, Arc<PreparedJob>)>> = Mutex::new(Vec::new());
+const PREPARED_JOB_CACHE_MAX: usize = 4;
+
+/// `PreparedJob::from_config`가 소비하는 설정 필드만 반영한 fingerprint.
+/// 잘못된 hit(다른 설정이 같은 키)를 막으려면 from_config의 모든 입력을
+/// 빠짐없이 해시해야 한다. DefaultHasher면 충분하다 — 입력이 앱 자체 설정이라
+/// 공격 대상이 아니다. 사전은 매 요청 한 번 해시되는데, 이는 automaton 재빌드
+/// (벤치: 사전 2만 개에서 줄당 27.6ms)보다 2자릿수 이상 저렴한 비용이다.
+fn config_fingerprint(config: &TranslationConfig) -> Result<u64, TranslationConfigError> {
+    use std::hash::{Hash, Hasher};
+
+    let engine = config
+        .get_engine()
+        .map_err(|error| TranslationConfigError::InvalidSetting(error.to_string()))?;
+    let source = config
+        .get_source_language()
+        .map_err(|error| TranslationConfigError::InvalidSetting(error.to_string()))?;
+    let target = config
+        .get_target_language()
+        .map_err(|error| TranslationConfigError::InvalidSetting(error.to_string()))?;
+    let mut hasher = std::hash::DefaultHasher::new();
+    (engine as u8).hash(&mut hasher);
+    source.hash(&mut hasher);
+    target.hash(&mut hasher);
+    match engine {
+        TranslationEngine::EzTrans => {
+            config.eztrans_dll_path.hash(&mut hasher);
+            config.eztrans_dat_path.hash(&mut hasher);
+            config.eztrans_process_count.hash(&mut hasher);
+            config.eztrans_postprocess_dictionary.hash(&mut hasher);
+        }
+        TranslationEngine::Google => {}
+        TranslationEngine::DeepL => {
+            config.deepl_effective_keys().hash(&mut hasher);
+            (config.deepl_strategy() as u8).hash(&mut hasher);
+        }
+        TranslationEngine::Papago => {
+            config.papago_client_id.hash(&mut hasher);
+            config.papago_client_secret.hash(&mut hasher);
+        }
+        TranslationEngine::Llm => {
+            let params = config
+                .llm
+                .to_call_params()
+                .map_err(|error| TranslationConfigError::InvalidSetting(error.to_string()))?;
+            (params.provider as u8).hash(&mut hasher);
+            params.model.hash(&mut hasher);
+            params.api_key.hash(&mut hasher);
+            params.base_url.hash(&mut hasher);
+            params.system_prompt.hash(&mut hasher);
+            params.temperature.to_bits().hash(&mut hasher);
+            params.top_p.to_bits().hash(&mut hasher);
+            params.frequency_penalty.to_bits().hash(&mut hasher);
+            params.presence_penalty.to_bits().hash(&mut hasher);
+            params.max_tokens.hash(&mut hasher);
+            params.reasoning_effort.map(|effort| effort as u8).hash(&mut hasher);
+            for entry in &params.glossary {
+                entry.source.hash(&mut hasher);
+                entry.target.hash(&mut hasher);
+            }
+        }
+        TranslationEngine::Custom => {
+            let custom = config.active_custom_api().map_err(|error| {
+                TranslationConfigError::InvalidSetting(error.to_string())
+            })?;
+            custom.name.hash(&mut hasher);
+            custom.url.hash(&mut hasher);
+            custom.api_key.hash(&mut hasher);
+            custom.auth_header.hash(&mut hasher);
+            custom.auth_scheme.hash(&mut hasher);
+            custom.headers.hash(&mut hasher);
+            custom.request_template.hash(&mut hasher);
+            custom.response_path.hash(&mut hasher);
+        }
+    }
+    Ok(hasher.finish())
 }
 
 /// 설정의 상대 EzTrans 경로는 프로세스의 현재 작업 폴더가 아니라 실행 파일과

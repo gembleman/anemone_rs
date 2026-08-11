@@ -152,7 +152,10 @@ impl App {
         use crate::translation::PreparedJob;
 
         let cache_enabled = self.model.config.clipboard_cache_enabled;
-        let job = match PreparedJob::from_config(&self.model.config.translation) {
+        // 전역 재사용: EzTrans + 후처리 사전을 쓰면 매 요청 사전 clone과
+        // automaton 재빌드가 일어나는데(캐시 hit여도), 같은 설정의 작업은
+        // 공유 인스턴스를 돌려받아 이 비용을 설정 변경 시 1회로 줄인다.
+        let job = match PreparedJob::from_config_cached(&self.model.config.translation) {
             Ok(spec) => spec,
             Err(error) => {
                 tracing::warn!("자동 번역 요청을 구성할 수 없습니다: {error}");
@@ -187,7 +190,7 @@ impl App {
         let request = self
             .services
             .translation_ui
-            .request(self.hwnd, Arc::clone(&original), job);
+            .request(self.hwnd, Arc::clone(&original), (*job).clone());
 
         match request {
             Ok(req_id) => {
