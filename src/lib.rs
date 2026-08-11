@@ -9,6 +9,8 @@ pub use translation::BenchmarkCacheKey;
 mod cli;
 mod clipboard;
 mod config;
+#[cfg(feature = "benchmark")]
+pub use config::EzTransPostprocessEntry as BenchmarkEzTransPostprocessEntry;
 mod d2d;
 mod dialogs;
 mod dpi;

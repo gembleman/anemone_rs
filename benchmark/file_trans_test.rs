@@ -22,3 +22,6 @@ mod worker_benchmarks;
 
 #[path = "translation_cache_bench.rs"]
 mod translation_cache_benchmarks;
+
+#[path = "postprocess_bench.rs"]
+mod postprocess_benchmarks;

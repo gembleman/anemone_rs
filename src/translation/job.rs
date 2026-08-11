@@ -41,6 +41,9 @@ pub(crate) enum PreparedEngineKind {
     EzTrans {
         process: EzTransProcessConfig,
         postprocess_dictionary: Vec<EzTransPostprocessEntry>,
+        /// 사전에서 미리 빌드한 automaton — 파일 번역 중 매 결과마다 빌드하지
+        /// 않도록 작업 준비 시 한 번만 만든다 (빈 사전이면 `None`).
+        postprocess_matcher: Option<super::postprocess::EzTransPostprocessMatcher>,
     },
     Google,
     DeepL {
@@ -166,6 +169,7 @@ impl PreparedJob {
                     ),
                 },
                 postprocess_dictionary: Vec::new(),
+                postprocess_matcher: None,
             },
             source,
             target,
@@ -209,6 +213,9 @@ impl PreparedJob {
                             ) as usize,
                         },
                         postprocess_dictionary: config.eztrans_postprocess_dictionary.clone(),
+                        postprocess_matcher: super::postprocess::EzTransPostprocessMatcher::new(
+                            &config.eztrans_postprocess_dictionary,
+                        ),
                     }
                 }
                 TranslationEngine::Google => PreparedEngineKind::Google,
@@ -318,9 +325,9 @@ impl PreparedJob {
     pub(crate) fn postprocess(&self, translated: String) -> String {
         match self.engine.kind() {
             PreparedEngineKind::EzTrans {
-                postprocess_dictionary,
+                postprocess_matcher: Some(matcher),
                 ..
-            } => super::postprocess::apply_eztrans_dictionary(translated, postprocess_dictionary),
+            } => matcher.apply(translated),
             _ => translated,
         }
     }

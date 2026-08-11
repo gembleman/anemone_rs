@@ -15,6 +15,10 @@ pub(crate) mod llm;
 pub(crate) mod manual;
 pub(crate) mod papago_api;
 mod postprocess;
+#[cfg(feature = "benchmark")]
+pub use postprocess::{
+    benchmark_apply_eztrans_dictionary, EzTransPostprocessMatcher as BenchmarkEzTransPostprocessMatcher,
+};
 mod service;
 pub(crate) mod settings;
 pub(crate) mod worker;
