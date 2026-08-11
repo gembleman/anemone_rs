@@ -33,8 +33,12 @@ impl App {
         if !self.model.config.clipboard_watch || !self.clipboard.is_watching() {
             return;
         }
-        match self.clipboard.on_clipboard_update() {
+        let max_len = self.model.config.clipboard_max_length as usize;
+        match self.clipboard.on_clipboard_update(max_len) {
             ClipboardUpdate::Unchanged => {}
+            ClipboardUpdate::TooLong => {
+                tracing::debug!("Clipboard text skipped: exceeds clipboard_max_length {max_len}");
+            }
             ClipboardUpdate::Retry(error) => {
                 tracing::debug!("clipboard read failed temporarily; retrying: {error}");
                 let timer = unsafe {
@@ -53,7 +57,6 @@ impl App {
                 tracing::warn!("clipboard read failed after retries: {error}");
             }
             ClipboardUpdate::Text(text) => {
-                let max_len = self.model.config.clipboard_max_length as usize;
                 if max_len > 0 {
                     let text_len = text.chars().count();
                     if text_len > max_len {

@@ -9,8 +9,17 @@ use windows::core::{Error, Result};
 pub enum ClipboardUpdate {
     Unchanged,
     Text(String),
+    /// clipboard_max_length 초과 — UTF-16 단위 수로 변환 전에 확정된 경우.
+    TooLong,
     Retry(Error),
     Failed(Error),
+}
+
+/// `get_text`의 정상 결과. 오류는 `Result`의 `Err`로, 포맷 부재는 `None`으로 구분한다.
+pub enum TextRead {
+    None,
+    Text(String),
+    TooLong,
 }
 
 pub(crate) struct ClipboardGuard;
@@ -121,7 +130,7 @@ impl ClipboardWatcher {
     }
 
     /// WM_CLIPBOARDUPDATE 처리
-    pub fn on_clipboard_update(&mut self) -> ClipboardUpdate {
+    pub fn on_clipboard_update(&mut self, max_len: usize) -> ClipboardUpdate {
         let sequence = unsafe { GetClipboardSequenceNumber() };
         if sequence != 0 && sequence == self.last_sequence {
             return ClipboardUpdate::Unchanged;
@@ -130,12 +139,24 @@ impl ClipboardWatcher {
             self.pending_sequence = sequence;
             self.read_failures = 0;
         }
-        match self.get_text() {
-            Ok(text) => {
+        match self.get_text(max_len) {
+            Ok(TextRead::None) => {
                 self.last_sequence = sequence;
                 self.pending_sequence = 0;
                 self.read_failures = 0;
-                text.map_or(ClipboardUpdate::Unchanged, ClipboardUpdate::Text)
+                ClipboardUpdate::Unchanged
+            }
+            Ok(TextRead::Text(text)) => {
+                self.last_sequence = sequence;
+                self.pending_sequence = 0;
+                self.read_failures = 0;
+                ClipboardUpdate::Text(text)
+            }
+            Ok(TextRead::TooLong) => {
+                self.last_sequence = sequence;
+                self.pending_sequence = 0;
+                self.read_failures = 0;
+                ClipboardUpdate::TooLong
             }
             Err(error) => {
                 self.read_failures = self.read_failures.saturating_add(1);
@@ -151,8 +172,13 @@ impl ClipboardWatcher {
         }
     }
 
-    /// 클립보드에서 텍스트 읽기
-    pub fn get_text(&self) -> Result<Option<String>> {
+    /// 클립보드에서 텍스트 읽기.
+    ///
+    /// UTF-16 단위 수 `u`와 char 수 `c`는 `c ≤ u ≤ 2c`가 성립하므로,
+    /// `u > max_len * 2`면 변환 없이 확실히 초과다. 거대 클립보드(파일 전체
+    /// 복사 등)를 `String`으로 만들지 않도록 `max_len > 0`일 때 그 경우를
+    /// 미리 거른다.
+    pub fn get_text(&self, max_len: usize) -> Result<TextRead> {
         // SAFETY: GetClipboardData returns a HANDLE which we wrap into HGLOBAL — both are
         // `*mut c_void` newtypes for the same kernel handle representation. GlobalLock/
         // GlobalUnlock are paired and the returned pointer is valid until GlobalUnlock.
@@ -162,7 +188,7 @@ impl ClipboardWatcher {
             let format = CF_UNICODETEXT.0 as u32;
             (|| {
                 if IsClipboardFormatAvailable(format).is_err() {
-                    return Ok(None);
+                    return Ok(TextRead::None);
                 }
 
                 let handle = GetClipboardData(format)?;
@@ -202,11 +228,18 @@ impl ClipboardWatcher {
                     len += 1;
                 }
 
+                // UTF-16 단위 수(u)와 char 수(c)는 c ≤ u ≤ 2c이므로, u > max_len × 2면
+                // 변환 없이 확실히 초과다 — 거대 클립보드를 String으로 만들지 않는다.
+                if max_len > 0 && len > max_len * 2 {
+                    let _ = GlobalUnlock(hglobal);
+                    return Ok(TextRead::TooLong);
+                }
+
                 let slice = std::slice::from_raw_parts(ptr, len);
                 let text = String::from_utf16_lossy(slice);
 
                 let _ = GlobalUnlock(hglobal);
-                Ok(Some(text))
+                Ok(TextRead::Text(text))
             })()
         }
     }

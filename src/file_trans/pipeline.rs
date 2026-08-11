@@ -207,10 +207,18 @@ fn process_single_file(
         let mut window_chars = 0usize;
 
         while let Some(line) = next_line.take() {
+            let blocking = job_data.translation.engine().is_blocking();
+            if !blocking {
+                // non-blocking 엔진은 창 배치가 없어 항상 1줄 단위다 —
+                // separator/window char 카운트 없이 바로 넘긴다.
+                lines.push(line);
+                next_line = read_input_line(&mut reader, input_path, false)?;
+                break;
+            }
+
             let separator_chars = usize::from(!lines.is_empty());
             let line_chars = line.text.chars().count();
             let exceeds_window = !lines.is_empty()
-                && job_data.translation.engine().is_blocking()
                 && (lines.len() >= EZTRANS_WINDOW_MAX_LINES
                     || window_chars
                         .saturating_add(separator_chars)
@@ -226,10 +234,6 @@ fn process_single_file(
                 .saturating_add(line_chars);
             lines.push(line);
             next_line = read_input_line(&mut reader, input_path, false)?;
-
-            if !job_data.translation.engine().is_blocking() {
-                break;
-            }
         }
 
         if job_data.cancel_token.load(Ordering::SeqCst) {
