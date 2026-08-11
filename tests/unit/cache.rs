@@ -96,12 +96,23 @@ fn clear_vacuum_shrinks_the_database_file() {
     assert!(store.get(&sample_key("エントリ 3-199")).is_none());
 
     // WAL 모드라 실제 데이터는 -wal 파일에 있을 수 있다 — 메인 파일은 VACUUM
-    // 이후 체크포인트로 합쳐진다. 크기 회수 여부는 페이지 수가 줄었는지로 본다.
-    let page_count = rusqlite::Connection::open(&path)
-        .unwrap()
-        .pragma_query_value(None, "page_count", |row| row.get::<_, i64>(0))
-        .unwrap();
-    assert!(page_count < 8, "VACUUM 후 페이지가 회수되어야 합니다 (page_count={page_count})");
+    // 이후 체크포인트로 합쳐진다. VACUUM은 백그라운드 스레드에서 실행되므로
+    // 완료될 때까지 폴링한다 (실패하면 VACUUM 완료 로그를 기다리지 않아야 한다).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let page_count = loop {
+        let count = rusqlite::Connection::open(&path)
+            .unwrap()
+            .pragma_query_value(None, "page_count", |row| row.get::<_, i64>(0))
+            .unwrap();
+        if count < 8 || std::time::Instant::now() > deadline {
+            break count;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(
+        page_count < 8,
+        "VACUUM 후 페이지가 회수되어야 합니다 (page_count={page_count})"
+    );
 
     let _ = std::fs::remove_file(&path);
 }
