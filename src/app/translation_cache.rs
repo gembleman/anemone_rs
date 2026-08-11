@@ -115,6 +115,13 @@ impl TranslationCacheStore {
         };
         if let Err(error) = conn.execute("DELETE FROM translation_cache", []) {
             tracing::warn!("번역 캐시 비우기 실패: {error}");
+            return;
+        }
+        // DELETE는 항목만 지우고 파일 크기를 줄이지 않는다 — VACUUM으로 페이지를
+        // 회수한다. clear는 사용자가 명시적으로 호출하는 드문 동작이라 재작성
+        // 비용을 감수한다 (캐시는 재생성 가능 데이터).
+        if let Err(error) = conn.execute("VACUUM", []) {
+            tracing::warn!("번역 캐시 VACUUM 실패: {error}");
         }
     }
 }

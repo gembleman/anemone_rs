@@ -80,6 +80,33 @@ fn clear_removes_all_entries() {
 }
 
 #[test]
+fn clear_vacuum_shrinks_the_database_file() {
+    let path = temp_db_path();
+    let store = TranslationCacheStore::open(&path);
+
+    // 페이지 단위가 섞이도록 여러 번 put/clear를 반복해 단편화된 공간을 만든다.
+    for round in 0..4 {
+        for i in 0..200 {
+            let mut key = sample_key(&format!("エントリ {round}-{i}"));
+            key.original = format!("エントリ {round}-{i}");
+            store.put(&key, &"번역".repeat(i + 1));
+        }
+        store.clear();
+    }
+    assert!(store.get(&sample_key("エントリ 3-199")).is_none());
+
+    // WAL 모드라 실제 데이터는 -wal 파일에 있을 수 있다 — 메인 파일은 VACUUM
+    // 이후 체크포인트로 합쳐진다. 크기 회수 여부는 페이지 수가 줄었는지로 본다.
+    let page_count = rusqlite::Connection::open(&path)
+        .unwrap()
+        .pragma_query_value(None, "page_count", |row| row.get::<_, i64>(0))
+        .unwrap();
+    assert!(page_count < 8, "VACUUM 후 페이지가 회수되어야 합니다 (page_count={page_count})");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn unwritable_path_degrades_to_disabled_cache_without_panicking() {
     // 존재하지 않는 디렉터리는 sqlite가 열 수 없으므로 캐시가 조용히 비활성화되어야 한다.
     let path = std::path::Path::new("Z:\\definitely\\missing\\dir\\cache.sqlite3");
