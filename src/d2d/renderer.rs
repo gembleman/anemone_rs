@@ -34,8 +34,8 @@ pub struct D2DRenderer {
     pub(super) outline_bitmap: [Option<OutlineBitmap>; MeasureSlot::COUNT],
     /// 유형별 `WM_NCHITTEST`용 줄별 사각형 cache.
     pub(super) hit_test_cache: [Option<HitTestCache>; MeasureSlot::COUNT],
-    /// 슬롯별 연속 미사용 프레임 수 — prune 유예 기간 판정에 쓴다.
-    unused_frames: UnusedSlotTracker,
+    /// 슬롯별 미사용 추적 — prune 유예 기간 판정에 쓴다.
+    unused_slots: UnusedSlotTracker,
     /// 캐시 miss 비율 추적 — 폭주 시 비트맵 경로 우회.
     pub(super) miss_tracker: MissTracker,
     /// `measure_text_height` 결과 cache (유형별 direct-mapped).
@@ -76,7 +76,7 @@ impl D2DRenderer {
                 measure_cache: MeasureCache::new(),
                 outline_bitmap: [const { None }; MeasureSlot::COUNT],
                 hit_test_cache: [const { None }; MeasureSlot::COUNT],
-                unused_frames: UnusedSlotTracker::new(),
+                unused_slots: UnusedSlotTracker::new(),
                 miss_tracker: MissTracker::new(),
             })
         }
@@ -228,7 +228,7 @@ impl D2DRenderer {
         self.measure_cache = MeasureCache::new();
         self.outline_bitmap = [const { None }; MeasureSlot::COUNT];
         self.hit_test_cache = [const { None }; MeasureSlot::COUNT];
-        self.unused_frames = UnusedSlotTracker::new();
+        self.unused_slots = UnusedSlotTracker::new();
         // 추적 상태도 함께 초기화한다.
         self.miss_tracker = MissTracker::new();
     }
@@ -243,7 +243,7 @@ impl D2DRenderer {
     pub fn prune_unused_slots(&mut self, used: [bool; MeasureSlot::COUNT]) {
         for (slot, to_prune) in MeasureSlot::ALL
             .into_iter()
-            .zip(self.unused_frames.record(used))
+            .zip(self.unused_slots.record(used))
         {
             if to_prune {
                 self.outline_bitmap[slot as usize] = None;

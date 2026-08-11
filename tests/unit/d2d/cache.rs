@@ -320,11 +320,11 @@ fn miss_tracker_overload_state_is_independent_per_slot() {
 }
 
 #[test]
-fn unused_slot_tracker_keeps_cache_through_short_unused_span() {
+fn unused_slot_tracker_keeps_cache_within_grace_window() {
     let mut tracker = UnusedSlotTracker::new();
     let mut used = [true; MeasureSlot::COUNT];
 
-    // 대사↔지문 교대: Name이 몇 paint 동안만 빠졌다가 돌아온다.
+    // 연속 미사용이 GRACE 미만이면 폐기되지 않는다.
     for _ in 0..(UnusedSlotTracker::GRACE - 1) {
         used[MeasureSlot::Name as usize] = false;
         let to_prune = tracker.record(used);
@@ -334,9 +334,22 @@ fn unused_slot_tracker_keeps_cache_through_short_unused_span() {
         );
         used[MeasureSlot::Name as usize] = true;
     }
-    // 사용된 프레임이 카운터를 리셋했으므로 여전히 폐기 대상이 아니다.
     let to_prune = tracker.record(used);
     assert!(!to_prune[MeasureSlot::Name as usize]);
+}
+
+#[test]
+fn unused_slot_tracker_survives_indefinite_alternation() {
+    let mut tracker = UnusedSlotTracker::new();
+    // 대사(Name 있음) ↔ 지문(Name 없음)을 GRACE의 몇 배로 반복해도
+    // 카운터가 매번 리셋되므로 폐기되지 않는다 (8132aab 회귀 고정).
+    for _ in 0..(UnusedSlotTracker::GRACE as usize * 4) {
+        let mut narration = [true; MeasureSlot::COUNT];
+        narration[MeasureSlot::Name as usize] = false;
+        assert!(!tracker.record(narration)[MeasureSlot::Name as usize]);
+        // 다음 대사 줄에서 Name이 돌아오며 카운터가 리셋된다.
+        assert!(!tracker.record([true; MeasureSlot::COUNT])[MeasureSlot::Name as usize]);
+    }
 }
 
 #[test]

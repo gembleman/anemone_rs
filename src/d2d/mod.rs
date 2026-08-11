@@ -45,3 +45,15 @@ impl MeasureSlot {
         Self::Notice,
     ];
 }
+
+/// `ALL`의 위치가 discriminant와 일치함을 컴파일 타임에 봉인한다.
+///
+/// `MeasureSlot::ALL.into_iter().zip(used)`는 슬롯 순서를 배열 위치에
+/// 암묵 의존한다 — `ALL`을 재정렬하면 조용히 엉뚱한 슬롯을 폐기한다.
+const _: () = {
+    let mut index = 0;
+    while index < MeasureSlot::COUNT {
+        assert!(MeasureSlot::ALL[index] as usize == index);
+        index += 1;
+    }
+};
