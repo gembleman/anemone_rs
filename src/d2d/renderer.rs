@@ -32,11 +32,11 @@ pub struct D2DRenderer {
     pub(super) text_cache: [Option<TextLayoutCache>; MeasureSlot::COUNT],
     /// 유형별 outline/shadow 합성 bitmap cache.
     pub(super) outline_bitmap: [Option<OutlineBitmap>; MeasureSlot::COUNT],
-    /// 투명 배경의 `WM_NCHITTEST`용 줄별 사각형 cache.
-    pub(super) hit_test_cache: Option<HitTestCache>,
+    /// 유형별 `WM_NCHITTEST`용 줄별 사각형 cache.
+    pub(super) hit_test_cache: [Option<HitTestCache>; MeasureSlot::COUNT],
     /// 캐시 miss 비율 추적 — 폭주 시 비트맵 경로 우회.
     pub(super) miss_tracker: MissTracker,
-    /// `measure_text_height` 결과 cache (고정 3슬롯 순환).
+    /// `measure_text_height` 결과 cache (유형별 direct-mapped).
     pub(super) measure_cache: MeasureCache,
 }
 
@@ -73,7 +73,7 @@ impl D2DRenderer {
                 text_cache: [const { None }; MeasureSlot::COUNT],
                 measure_cache: MeasureCache::new(),
                 outline_bitmap: [const { None }; MeasureSlot::COUNT],
-                hit_test_cache: None,
+                hit_test_cache: [const { None }; MeasureSlot::COUNT],
                 miss_tracker: MissTracker::new(),
             })
         }
@@ -224,9 +224,24 @@ impl D2DRenderer {
         self.text_cache = [const { None }; MeasureSlot::COUNT];
         self.measure_cache = MeasureCache::new();
         self.outline_bitmap = [const { None }; MeasureSlot::COUNT];
-        self.hit_test_cache = None;
+        self.hit_test_cache = [const { None }; MeasureSlot::COUNT];
         // 추적 상태도 함께 초기화한다.
         self.miss_tracker = MissTracker::new();
+    }
+
+    /// 이번 paint에서 사용된 슬롯 밖의 장치 종속 캐시를 정리한다.
+    ///
+    /// 표시가 꺼진 슬롯(예: `show_name` off 후의 Name, notice 미표시 시의
+    /// Notice)의 bitmap·layout·path geometry가 장치 손실/DPI 변경까지
+    /// 상주하지 않게 한다. `used`는 paint가 실제로 그린 슬롯 집합이다.
+    pub fn prune_unused_slots(&mut self, used: [bool; MeasureSlot::COUNT]) {
+        for (index, is_used) in used.into_iter().enumerate() {
+            if !is_used {
+                self.outline_bitmap[index] = None;
+                self.text_cache[index] = None;
+                self.hit_test_cache[index] = None;
+            }
+        }
     }
 
     /// 활성 frame의 antialiasing을 설정한다. Brush cache는 frame 사이에도 유지한다.

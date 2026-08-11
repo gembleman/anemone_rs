@@ -404,6 +404,16 @@ impl App {
         #[cfg(feature = "benchmark")]
         let _ = phase_record(PhaseField::HitRegion, t);
 
+        // 이번 프레임에서 사용하지 않은 슬롯의 bitmap/layout/hit-test 캐시를
+        // 정리해 표시가 꺼진 유형의 장치 종속 자원이 상주하지 않게 한다.
+        let mut used_slots = [false; MeasureSlot::COUNT];
+        for block in &render_blocks {
+            used_slots[block.slot as usize] = true;
+        }
+        if let Some(renderer) = self.d2d_renderer.as_mut() {
+            renderer.prune_unused_slots(used_slots);
+        }
+
         Ok(())
     }
 

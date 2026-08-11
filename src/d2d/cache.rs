@@ -429,16 +429,19 @@ pub(super) struct OutlineBitmap {
 
 /// 최근 bitmap cache miss가 임계치를 넘으면 직접 렌더링으로 우회한다.
 /// 텍스트가 안정되면 같은 key의 hit가 쌓여 자동으로 bitmap 경로로 복귀한다.
+///
+/// ring/filled도 슬롯별로 유지한다. 슬롯을 분리하지 않으면 안정 블록의 hit가
+/// 변동 블록의 miss와 한 창에 섞여 (a) 2블록 구성에서 overload에 진입하지 못해
+/// escape hatch가 꺼지고, (b) 3블록 구성에서 상시 overload가 되어 안정 블록까지
+/// direct 경로로 끌려간다.
 pub(super) struct MissTracker {
-    /// 최근 결과를 담은 bit ring. 1은 miss이며 높은 bit일수록 최신이다.
-    pub(super) ring: u16,
-    /// ring 에 쌓인 샘플 수 (0..=WINDOW). WINDOW 도달 후로는 계속 WINDOW.
-    pub(super) filled: u8,
+    /// 슬롯별 최근 결과 bit ring. 1은 miss이며 높은 bit일수록 최신이다.
+    rings: [u16; MeasureSlot::COUNT],
+    /// 슬롯별 ring에 쌓인 샘플 수 (0..=WINDOW). WINDOW 도달 후로는 계속 WINDOW.
+    filled: [u8; MeasureSlot::COUNT],
     /// 환경 변수로 조정 가능한 직접 렌더링 전환 임계치.
     pub(super) threshold: u8,
     /// 슬롯별 직전 key — Bitmap 없이도 텍스트 안정화를 판정하기 위한 것.
-    /// 슬롯을 분리하지 않으면 서로 다른 유형의 키가 last_key를 덮어써
-    /// 안정 블록의 hit 판정이 깨진다.
     last_keys: [Option<OutlineBitmapKey>; MeasureSlot::COUNT],
 }
 
@@ -450,8 +453,8 @@ impl MissTracker {
 
     pub(super) fn new() -> Self {
         Self {
-            ring: 0,
-            filled: 0,
+            rings: [0; MeasureSlot::COUNT],
+            filled: [0; MeasureSlot::COUNT],
             threshold: Self::resolve_threshold(),
             last_keys: [const { None }; MeasureSlot::COUNT],
         }
@@ -476,18 +479,21 @@ impl MissTracker {
             .unwrap_or(Self::DEFAULT_THRESHOLD)
     }
 
-    /// paint 1 회 결과를 기록. `miss=true` 면 outline 비트맵 캐시 miss.
-    pub(super) fn record(&mut self, miss: bool) {
+    /// 슬롯의 블록 1회 결과를 기록. `miss=true` 면 outline 비트맵 캐시 miss.
+    pub(super) fn record(&mut self, slot: MeasureSlot, miss: bool) {
         // 새 결과를 최상위 bit에 넣고 가장 오래된 bit를 버린다.
-        self.ring = ((self.ring << 1) & Self::RING_MASK) | (miss as u16);
-        if self.filled < Self::WINDOW {
-            self.filled += 1;
+        let ring = &mut self.rings[slot as usize];
+        *ring = ((*ring << 1) & Self::RING_MASK) | (miss as u16);
+        let filled = &mut self.filled[slot as usize];
+        if *filled < Self::WINDOW {
+            *filled += 1;
         }
     }
 
-    /// Window가 찬 뒤 miss 수가 임계치 이상인지 판정한다.
-    pub(super) fn is_overloaded(&self) -> bool {
-        self.filled >= Self::WINDOW && self.ring.count_ones() as u8 >= self.threshold
+    /// 슬롯의 window가 찬 뒤 miss 수가 임계치 이상인지 판정한다.
+    pub(super) fn is_overloaded(&self, slot: MeasureSlot) -> bool {
+        self.filled[slot as usize] >= Self::WINDOW
+            && self.rings[slot as usize].count_ones() as u8 >= self.threshold
     }
 }
 

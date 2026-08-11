@@ -309,6 +309,12 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
             shadow_offset_x: 2,
             shadow_offset_y: 2,
         };
+        // 정렬 3종을 서로 다른 슬롯으로 그려 슬롯 배열 회귀를 감지한다.
+        let slots = [
+            d2d::MeasureSlot::Name,
+            d2d::MeasureSlot::Original,
+            d2d::MeasureSlot::Translation,
+        ];
         for (line, align) in [TextAlign::Left, TextAlign::Center, TextAlign::Right]
             .into_iter()
             .enumerate()
@@ -317,7 +323,7 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
             style.text_align = align;
             d2d.draw_text(
                 ctx,
-                d2d::MeasureSlot::Translation,
+                slots[line],
                 "fij ÁW · 한글 · 日本語",
                 TextBox {
                     x: 20.0,

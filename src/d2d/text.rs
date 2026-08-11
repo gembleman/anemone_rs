@@ -137,13 +137,13 @@ impl D2DRenderer {
 
         // Miss가 잦으면 bitmap 생성을 건너뛰고 geometry를 직접 그린다.
         // 직전 key가 안정되면 hit가 쌓여 자동 복귀한다.
-        if self.miss_tracker.is_overloaded() {
+        if self.miss_tracker.is_overloaded(slot) {
             self.outline_bitmap[slot as usize] = None;
             let hit = self
                 .miss_tracker
                 .last_key(slot)
                 .is_some_and(|k| key_ref.matches(k));
-            self.miss_tracker.record(!hit);
+            self.miss_tracker.record(slot, !hit);
             let result = self.draw_text_direct(target, slot, text, bbox, style);
             // direct 경로가 만든 layout key의 문자열 소유권을 공유한다.
             if !hit
@@ -168,7 +168,7 @@ impl D2DRenderer {
                     "outline bitmap build failed ({error}); falling back to direct rendering"
                 );
                 self.outline_bitmap[slot as usize] = None;
-                self.miss_tracker.record(true);
+                self.miss_tracker.record(slot, true);
                 let result = self.draw_text_direct(target, slot, text, bbox, style);
                 if result.is_ok()
                     && let Some(layout) = self.text_cache[slot as usize].as_ref()
@@ -179,7 +179,7 @@ impl D2DRenderer {
                 return result;
             }
         };
-        self.miss_tracker.record(!hit);
+        self.miss_tracker.record(slot, !hit);
         // last_key 도 hit 여부에 따라 alloc 회피.
         let need_update_last = self
             .miss_tracker
@@ -561,7 +561,7 @@ impl D2DRenderer {
         inflate: f32,
     ) -> Result<&[RECT]> {
         if text.is_empty() {
-            self.hit_test_cache = None;
+            self.hit_test_cache[slot as usize] = None;
             return Ok(&[]);
         }
 
@@ -575,12 +575,12 @@ impl D2DRenderer {
             text, style, origin_x, origin_y, max_width, max_height, inflate,
         );
         if self
-            .hit_test_cache
+            .hit_test_cache[slot as usize]
             .as_ref()
             .is_some_and(|cache| key_ref.matches(&cache.key))
         {
             return Ok(&self
-                .hit_test_cache
+                .hit_test_cache[slot as usize]
                 .as_ref()
                 .expect("hit-test cache checked above")
                 .rects);
@@ -589,7 +589,7 @@ impl D2DRenderer {
         let layout = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
         let text_len: u32 = text.encode_utf16().count() as u32;
         if text_len == 0 {
-            self.hit_test_cache = None;
+            self.hit_test_cache[slot as usize] = None;
             return Ok(&[]);
         }
 
@@ -601,7 +601,7 @@ impl D2DRenderer {
             if needed == 0 {
                 return match probe {
                     Ok(()) => {
-                        self.hit_test_cache = None;
+                        self.hit_test_cache[slot as usize] = None;
                         Ok(&[])
                     }
                     Err(e) => Err(e),
@@ -638,9 +638,9 @@ impl D2DRenderer {
                 .expect("layout cache populated by get_or_create_layout")
                 .key,
         );
-        self.hit_test_cache = Some(HitTestCache { key, rects });
+        self.hit_test_cache[slot as usize] = Some(HitTestCache { key, rects });
         Ok(&self
-            .hit_test_cache
+            .hit_test_cache[slot as usize]
             .as_ref()
             .expect("hit-test cache stored above")
             .rects)

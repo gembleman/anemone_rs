@@ -281,24 +281,42 @@ fn hit_test_key_tracks_position_and_inflate() {
 
 #[test]
 fn miss_tracker_warms_up_enters_overload_and_recovers() {
+    let slot = MeasureSlot::Translation;
     let mut tracker = MissTracker::new();
     for _ in 0..7 {
-        tracker.record(true);
-        assert!(!tracker.is_overloaded(), "warmup must fill the full window");
+        tracker.record(slot, true);
+        assert!(!tracker.is_overloaded(slot), "warmup must fill the full window");
     }
-    tracker.record(false);
+    tracker.record(slot, false);
     assert!(
-        tracker.is_overloaded(),
+        tracker.is_overloaded(slot),
         "seven misses in eight samples overload"
     );
 
     for _ in 0..8 {
-        tracker.record(false);
+        tracker.record(slot, false);
     }
     assert!(
-        !tracker.is_overloaded(),
+        !tracker.is_overloaded(slot),
         "stable hits must leave overload mode"
     );
+}
+
+#[test]
+fn miss_tracker_overload_state_is_independent_per_slot() {
+    let mut tracker = MissTracker::new();
+    // Translation 슬롯만 miss로 채운다.
+    for _ in 0..8 {
+        tracker.record(MeasureSlot::Translation, true);
+    }
+    assert!(tracker.is_overloaded(MeasureSlot::Translation));
+    // Name 슬롯은 hit만 기록 — 전역 ring이었다면 같이 overload됐을 케이스.
+    for _ in 0..8 {
+        tracker.record(MeasureSlot::Name, false);
+    }
+    assert!(!tracker.is_overloaded(MeasureSlot::Name));
+    // 안정 Name의 hit가 Translation의 ring을 희석하지도 않는다.
+    assert!(tracker.is_overloaded(MeasureSlot::Translation));
 }
 
 #[test]
