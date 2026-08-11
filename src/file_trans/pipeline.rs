@@ -2,6 +2,7 @@
 
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use windows::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
@@ -17,12 +18,15 @@ use super::{
     validate_job_paths,
 };
 use crate::translation::{
-    EzTransBatchTranslator, EzTransProcessPoolRegistry,
+    EzTransBatchTranslator, EzTransProcessPoolRegistry, PreparedJob,
     http_common::create_client,
     worker::{TranslationDispatch, TranslationRequest},
 };
 
 const PROGRESS_REPORT_INTERVAL: usize = 256;
+/// non-blocking(HTTP) 엔진의 파일 번역 최대 in-flight 요청 수.
+/// GUI 워커는 4로 제한하는데, 파일 번역은 워커와 독립된 자체 게이트를 사용한다.
+const FILE_HTTP_CONCURRENCY: usize = 8;
 
 #[derive(Clone)]
 pub(super) struct FilePipelineServices {
@@ -275,18 +279,119 @@ fn process_single_file(
     pending_output.persist()
 }
 
+/// non-blocking 엔진 줄 번역을 제한된 동시성으로 실행하고 결과를 입력 순서로 재조립한다.
+///
+/// 1줄 = 1 HTTP 요청인 구조는 그대로지만, 줄 단위 완주 대기(`block_on`)를 없애고
+/// 최대 `FILE_HTTP_CONCURRENCY`개의 요청을 동시에 in-flight로 둔다. current_thread
+/// 런타임이어도 I/O await 지점에서 인터리빙되므로 줄당 왕복 대신 배치 단위로
+/// 지연이 겹친다. 취소 시 JoinSet을 drop해 in-flight 요청을 함께 취소한다.
 fn translate_lines(
     lines: &[InputLine],
     job_data: &FileTransJobData,
     translation: &TranslationContext<'_>,
 ) -> Result<Vec<String>, FileTranslationError> {
-    lines
-        .iter()
-        .map(|line| translate_line(&line.text, job_data, translation))
-        .collect()
+    if lines.is_empty() {
+        return Ok(Vec::new());
+    }
+    let originals: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+    let concurrency = std::sync::Arc::new(tokio::sync::Semaphore::new(FILE_HTTP_CONCURRENCY));
+    translation.runtime.block_on(translate_lines_async(
+        &originals,
+        job_data,
+        translation.http_client,
+        concurrency,
+    ))
+}
+
+async fn translate_lines_async(
+    lines: &[&str],
+    job_data: &FileTransJobData,
+    client: &reqwest::Client,
+    concurrency: std::sync::Arc<tokio::sync::Semaphore>,
+) -> Result<Vec<String>, FileTranslationError> {
+    let mut tasks = tokio::task::JoinSet::new();
+    for (index, &line) in lines.iter().enumerate() {
+        if !should_translate_line(line, job_data.no_trans_linefeed) {
+            continue;
+        }
+        let task_client = client.clone();
+        let task_job = job_data.translation.clone();
+        let task_cancel = Arc::clone(&job_data.cancel_token);
+        let task_concurrency = Arc::clone(&concurrency);
+        let text: Arc<str> = Arc::from(line);
+        tasks.spawn(async move {
+            (
+                index,
+                translate_line_task(text, task_job, task_client, task_cancel, task_concurrency).await,
+            )
+        });
+    }
+
+    let mut results: Vec<Option<String>> = vec![None; lines.len()];
+    let outcome: Result<(), FileTranslationError> = tokio::select! {
+        _ = wait_for_cancellation(&job_data.cancel_token) => Err(FileTranslationError::Cancelled),
+        _ = async {
+            while let Some(joined) = tasks.join_next().await {
+                match joined {
+                    Ok((index, translated)) => results[index] = Some(translated),
+                    Err(join_error) => {
+                        tracing::warn!("file translation task panicked: {join_error}");
+                    }
+                }
+            }
+        } => Ok(()),
+    };
+    outcome?;
+
+    Ok(results
+        .into_iter()
+        .zip(lines)
+        .map(|(result, &original)| match result {
+            Some(translated) => translated,
+            None => original.to_string(),
+        })
+        .collect())
+}
+
+/// 한 줄을 제한 동시성으로 번역한다. 빈 줄/줄바꿈 전용 줄은 유지하고
+/// HTTP 실패는 표식으로 바꿔 계속한다. Err 반환은 없어 JoinSet 드레인이
+/// 항상 완주한다 — 취소는 바깥 select의 JoinSet drop으로 처리된다.
+async fn translate_line_task(
+    text: Arc<str>,
+    job: PreparedJob,
+    client: reqwest::Client,
+    cancel_token: Arc<std::sync::atomic::AtomicBool>,
+    concurrency: Arc<tokio::sync::Semaphore>,
+) -> String {
+    let _permit = match concurrency.acquire_owned().await {
+        Ok(permit) => permit,
+        Err(_) => return "[번역 실패: 동시성 게이트가 닫혔습니다]".to_string(),
+    };
+    if cancel_token.load(Ordering::SeqCst) {
+        return "[번역 실패: 취소됨]".to_string();
+    }
+    let request = TranslationRequest {
+        id: 0,
+        text,
+        job,
+    };
+    match TranslationDispatch::translate_async(&request, &client).await {
+        Ok(translated) => translated,
+        Err(error) => {
+            tracing::warn!(
+                category = error.log_category(),
+                status_code = ?error.log_status_code(),
+                "file translation line failed"
+            );
+            format!("[번역 실패: {error}]")
+        }
+    }
 }
 
 /// 한 줄을 동기 번역한다. 빈 줄은 유지하고 HTTP 실패는 표식으로 바꿔 계속한다.
+/// 실제 파이프라인은 `translate_lines`(제한 동시성)를 쓰고, 이 함수는 단일 줄
+/// 취소 동작을 검증하는 테스트 전용으로 남긴다.
+#[cfg(test)]
 pub fn translate_line(
     line: &str,
     job_data: &FileTransJobData,
@@ -337,3 +442,7 @@ fn send_filename(path: &Path, report: &impl Fn(ProgressEvent)) {
         .unwrap_or_else(|| "unknown".to_string());
     report(ProgressEvent::FileName(filename));
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/file_trans/pipeline.rs"]
+mod tests;
