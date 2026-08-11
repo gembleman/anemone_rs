@@ -7,10 +7,13 @@ use super::FileTranslationError;
 
 /// UTF-8/UTF-8 BOM 입력을 스트리밍으로 읽을 reader를 연다. 인코딩 전체 검증은
 /// 소비자가 읽는 동안 수행하며, 여기서는 잘못된 BOM을 먼저 거른다.
+///
+/// 버퍼는 256KB로 키운다 — `read_input_line`이 fill_buf로 소비하므로 순차 읽기
+/// syscall 수가 기본 8KB 대비 1/32로 줄어든다 (파일 번역 2-pass 중 두 번째 읽기).
 pub(super) fn open_utf8_translation_input(path: &Path) -> Result<BufReader<File>, String> {
     let file = File::open(path)
         .map_err(|e| format!("입력 파일을 열 수 없습니다: {} ({e})", path.display()))?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::with_capacity(256 * 1024, file);
     let prefix = reader
         .fill_buf()
         .map_err(|e| format!("입력 파일을 읽을 수 없습니다: {} ({e})", path.display()))?;
