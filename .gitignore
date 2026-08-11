@@ -5,10 +5,8 @@
 nul
 /docs
 *.md
-/UI_screenshots
 /docs/*
 # bench / 임시 산출물
-bench_pid.txt
 bench_paint.log
 *.png
 !README.md
