@@ -36,4 +36,12 @@ pub enum MeasureSlot {
 
 impl MeasureSlot {
     pub(crate) const COUNT: usize = 4;
+
+    /// 슬롯 전체 목록 — 배열 순회/정리에 쓴다.
+    pub(crate) const ALL: [MeasureSlot; Self::COUNT] = [
+        Self::Name,
+        Self::Original,
+        Self::Translation,
+        Self::Notice,
+    ];
 }

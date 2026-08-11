@@ -470,6 +470,17 @@ impl MissTracker {
         self.last_keys[slot as usize] = key;
     }
 
+    /// 슬롯의 ring과 last_key를 초기화한다.
+    ///
+    /// prune이 해당 슬롯의 캐시를 폐기할 때 함께 호출해, 정지된 옛 ring으로
+    /// overload를 판정하거나 사라진 bitmap이 있는 것처럼 last_key가 일치하는
+    /// 일을 막는다. 다른 슬롯에는 영향이 없다.
+    pub(super) fn reset(&mut self, slot: MeasureSlot) {
+        self.rings[slot as usize] = 0;
+        self.filled[slot as usize] = 0;
+        self.last_keys[slot as usize] = None;
+    }
+
     /// 환경 변수의 1..=`WINDOW` 값을 읽고, 잘못되면 기본값을 쓴다.
     pub(super) fn resolve_threshold() -> u8 {
         std::env::var("ANEMONE_MISS_THRESHOLD")

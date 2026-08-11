@@ -320,6 +320,33 @@ fn miss_tracker_overload_state_is_independent_per_slot() {
 }
 
 #[test]
+fn miss_tracker_reset_clears_ring_filled_and_last_key() {
+    let base = style();
+    let mut tracker = MissTracker::new();
+    let slot = MeasureSlot::Translation;
+
+    for _ in 0..8 {
+        tracker.record(slot, true);
+    }
+    tracker.set_last_key(
+        slot,
+        Some(OutlineBitmapKeyRef::from_style("대사", &base, 100.0, 50.0).to_owned()),
+    );
+    assert!(tracker.is_overloaded(slot));
+
+    tracker.reset(slot);
+    assert!(!tracker.is_overloaded(slot), "ring and filled must reset");
+    assert!(tracker.last_key(slot).is_none(), "last_key must reset");
+    // 다른 슬롯은 영향받지 않는다.
+    for _ in 0..8 {
+        tracker.record(MeasureSlot::Name, true);
+    }
+    assert!(tracker.is_overloaded(MeasureSlot::Name));
+    tracker.reset(slot);
+    assert!(tracker.is_overloaded(MeasureSlot::Name));
+}
+
+#[test]
 fn miss_tracker_last_key_is_independent_per_slot() {
     let base = style();
     let mut tracker = MissTracker::new();
