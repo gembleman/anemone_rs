@@ -21,6 +21,13 @@ pub struct TextBox {
     pub max_height: f32,
 }
 
+/// measure/draw가 공유하는 layout 생성 상한 높이.
+///
+/// measure와 draw가 같은 layout 캐시 키를 공유하도록 `max_height`는 항상
+/// 이 상한을 쓴다. DirectWrite의 줄바꿈은 폭 기준이고 `DrawTextLayout`은
+/// CLIP 옵션을 쓰지 않으므로 이 값이 클리핑·시각에 영향을 주지 않는다.
+pub(crate) const MEASURE_MAX_HEIGHT: f32 = 1_000_000.0;
+
 /// measure 결과 캐시의 direct-mapped 슬롯. 값은 배열 인덱스로 쓰인다.
 ///
 /// paint가 측정하는 블록은 유형별로 최대 1개이므로, 슬롯을 텍스트 유형과

@@ -280,6 +280,20 @@ fn hit_test_key_tracks_position_and_inflate() {
 }
 
 #[test]
+fn hit_test_key_matches_when_layout_uses_measure_max_height() {
+    // 호출부 경로: layout 캐시 키는 항상 MEASURE_MAX_HEIGHT(1M) 박스이고,
+    // hit-test 조회 키도 같은 값을 써야 한다. bbox.max_height(bitmap 상한)를
+    // 조회 키에 넣으면 저장 키(1M)와 어긋나 매 paint miss가 되는 회귀를 고정한다.
+    let base = style();
+    let layout = LayoutKeyRef::from_style("text", &base, 100.0, 1_000_000.0).to_owned();
+    let key = HitTestKeyRef::from_style("text", &base, 5.0, 7.0, 100.0, 1_000_000.0, 3.0)
+        .to_owned_reusing_layout(&layout);
+
+    assert!(HitTestKeyRef::from_style("text", &base, 5.0, 7.0, 100.0, 1_000_000.0, 3.0).matches(&key));
+    assert!(!HitTestKeyRef::from_style("text", &base, 5.0, 7.0, 100.0, 200.0, 3.0).matches(&key));
+}
+
+#[test]
 fn miss_tracker_warms_up_enters_overload_and_recovers() {
     let slot = MeasureSlot::Translation;
     let mut tracker = MissTracker::new();

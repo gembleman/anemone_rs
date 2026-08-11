@@ -32,8 +32,8 @@ struct OutlineBitmapBounds {
 
 #[allow(clippy::too_many_arguments)]
 fn compute_outline_bitmap_bounds(
-    layout_width: f32,
-    layout_height: f32,
+    content_width: f32,
+    content_height: f32,
     overhang: DWRITE_OVERHANG_METRICS,
     outline_total: f32,
     shadow_dx: f32,
@@ -51,10 +51,10 @@ fn compute_outline_bitmap_bounds(
     let layout_origin_y = effect_top + overhang_top;
 
     OutlineBitmapBounds {
-        width: (layout_origin_x + layout_width.max(0.0) + overhang_right + effect_right)
+        width: (layout_origin_x + content_width.max(0.0) + overhang_right + effect_right)
             .ceil()
             .max(1.0),
-        height: (layout_origin_y + layout_height.max(0.0) + overhang_bottom + effect_bottom)
+        height: (layout_origin_y + content_height.max(0.0) + overhang_bottom + effect_bottom)
             .ceil()
             .max(1.0),
         layout_origin_x,
@@ -78,13 +78,20 @@ impl D2DRenderer {
         style: &TextRenderStyle,
         max_width: f32,
     ) -> Result<f32> {
-        const MEASURE_MAX_HEIGHT: f32 = 1_000_000.0;
         let key_ref = MeasureKeyRef::from_style(text, style, max_width);
         if let Some(height) = self.measure_cache.get(slot, &key_ref) {
             return Ok(height);
         }
-        let layout =
-            self.create_text_layout_uncached(text, style, max_width, MEASURE_MAX_HEIGHT)?;
+        // 만든 layout은 draw/hit-test 경로와 공유한다 — `max_height`를
+        // [`MEASURE_MAX_HEIGHT`]로 통일해 `get_or_create_layout`이 같은 키로
+        // hit하게 한다 (텍스트 변경당 layout 생성 2→1회).
+        let layout = self.get_or_create_layout(
+            slot,
+            text,
+            style,
+            max_width,
+            super::MEASURE_MAX_HEIGHT,
+        )?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
         unsafe {
             layout.GetMetrics(&mut metrics)?;
@@ -97,6 +104,10 @@ impl D2DRenderer {
     /// 활성 render target에 본문과 cache된 outline/shadow를 그린다.
     /// 효과가 없으면 중간 bitmap 없이 본문만 그린다.
     /// `slot`은 layout/outline/bitmap 캐시의 유형별 슬롯이다.
+    ///
+    /// `bbox.max_height`는 outline bitmap의 **높이 상한**(창 밖으로 나가는 텍스트의
+    /// bitmap 생성을 막는 용도)으로만 쓰인다. layout 자체는 measure와 캐시를
+    /// 공유하도록 [`MEASURE_MAX_HEIGHT`](super::MEASURE_MAX_HEIGHT)로 항상 만든다.
     pub fn draw_text(
         &mut self,
         target: &ID2D1RenderTarget,
@@ -117,8 +128,13 @@ impl D2DRenderer {
 
         // outline / shadow 둘 다 없으면 본문 한 줄만 그린다.
         if !has_outline && !has_shadow {
-            let text_layout =
-                self.get_or_create_layout(slot, text, style, max_width, max_height)?;
+            let text_layout = self.get_or_create_layout(
+                slot,
+                text,
+                style,
+                max_width,
+                super::MEASURE_MAX_HEIGHT,
+            )?;
             // SAFETY: target is a valid render target between BeginDraw/EndDraw.
             unsafe {
                 let text_brush = self.get_or_create_brush(target, style.color)?;
@@ -158,7 +174,7 @@ impl D2DRenderer {
 
         // 정상 경로는 실제 bitmap key로 hit를 판정하고 layout도 함께 얻는다.
         let (hit, text_layout) = match self
-            .ensure_outline_bitmap(slot, target, &key_ref, text, style, max_width, max_height)
+            .ensure_outline_bitmap(slot, target, &key_ref, text, style, max_width)
         {
             Ok(bitmap) => bitmap,
             Err(error) => {
@@ -242,15 +258,28 @@ impl D2DRenderer {
             x,
             y,
             max_width,
-            max_height,
+            max_height: _,
         } = bbox;
         let effects = EffectiveOutlineStyle::from_style(style);
         let outline_total = effects.outline_total;
         let has_shadow = effects.has_shadow;
 
         // outline geometry + layout 확보 (캐시 hit/miss 처리 포함).
-        let _ = self.get_or_create_outline_geometry(slot, text, style, max_width, max_height)?;
-        let text_layout = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
+        // layout/geometry는 measure·bitmap 경로와 공유하도록 1M 박스로 만든다.
+        let _ = self.get_or_create_outline_geometry(
+            slot,
+            text,
+            style,
+            max_width,
+            super::MEASURE_MAX_HEIGHT,
+        )?;
+        // 위에서 방금 캐시에 넣은 layout을 재조회(str 비교) 없이 쓴다.
+        let text_layout = self
+            .text_cache[slot as usize]
+            .as_ref()
+            .expect("layout cache populated by get_or_create_outline_geometry")
+            .layout
+            .clone();
 
         // SAFETY: target 은 caller (paint) 의 BeginDraw 안의 유효 RT.
         // SetTransform 은 각 블록 끝에서 identity 로 복구.
@@ -334,6 +363,9 @@ impl D2DRenderer {
     }
 
     /// Outline/shadow bitmap을 조회하거나 만들고 `(hit, layout)`을 반환한다.
+    ///
+    /// `key_ref`의 `max_height`는 bitmap 높이 상한이다 — layout은 measure와
+    /// 캐시를 공유하도록 [`MEASURE_MAX_HEIGHT`](super::MEASURE_MAX_HEIGHT)로 만든다.
     #[allow(clippy::too_many_arguments)]
     fn ensure_outline_bitmap(
         &mut self,
@@ -343,17 +375,28 @@ impl D2DRenderer {
         text: &str,
         style: &TextRenderStyle,
         max_width: f32,
-        max_height: f32,
     ) -> Result<(bool, IDWriteTextLayout)> {
         if let Some(c) = &self.outline_bitmap[slot as usize]
             && key_ref.matches(&c.key)
         {
             // hit — 비트맵 재사용. layout 도 같은 키 기준 캐시 hit.
-            let layout = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
+            let layout = self.get_or_create_layout(
+                slot,
+                text,
+                style,
+                max_width,
+                super::MEASURE_MAX_HEIGHT,
+            )?;
             return Ok((true, layout));
         }
         // miss — 비트맵 빌드. 키는 이 시점에만 alloc.
-        let layout = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
+        let layout = self.get_or_create_layout(
+            slot,
+            text,
+            style,
+            max_width,
+            super::MEASURE_MAX_HEIGHT,
+        )?;
         let owned_key = key_ref.to_owned_reusing_layout(
             &self
                 .text_cache[slot as usize]
@@ -367,6 +410,10 @@ impl D2DRenderer {
     }
 
     /// 호환 bitmap target에 효과를 그리고, 사용한 layout과 함께 반환한다.
+    ///
+    /// `key.max_height_bits`는 bitmap 높이 상한(창 밖 텍스트의 래스터화 방지)
+    /// 이다. outline geometry는 measure와 공유하는 1M layout으로 만들어
+    /// direct 경로와 같은 캐시 항목을 쓴다.
     fn build_outline_bitmap(
         &mut self,
         slot: MeasureSlot,
@@ -384,6 +431,9 @@ impl D2DRenderer {
         let shadow_dx = effects.shadow_offset_x as f32;
         let shadow_dy = effects.shadow_offset_y as f32;
         // Layout box와 italic/fallback glyph의 양수 overhang까지 담는다.
+        // `tm.width`/`tm.height`는 콘텐츠 크기이고 `layoutWidth`/`layoutHeight`는
+        // 박스 크기다 — measure와 공유하는 1M 박스로는 비트맵이 터지므로
+        // 콘텐츠 크기를 쓰고, 창 밖으로 나가는 부분은 `max_height`로 자른다.
         let mut tm = DWRITE_TEXT_METRICS::default();
         // SAFETY: layout 은 위에서 막 확보. metrics는 out 파라미터.
         let overhang = unsafe {
@@ -391,8 +441,14 @@ impl D2DRenderer {
             layout.GetOverhangMetrics()?
         };
         let bounds = compute_outline_bitmap_bounds(
-            tm.layoutWidth,
-            tm.layoutHeight,
+            // 이탤릭처럼 잉크가 콘텐츠 폭을 넘는 경우를 담는다 — overhang.right는
+            // 박스 기준 값이므로 잉크 우측 끝(layoutWidth + overhang.right)과
+            // 콘텐츠 폭 중 큰 쪽을 비트맵 폭으로 쓴다.
+            tm.width.max(tm.layoutWidth + overhang.right),
+            // overhang.bottom도 박스 기준 값이라 1M 박스에서는 죽는다 — 잉크 하단
+            // 끝(layoutHeight + overhang.bottom)과 콘텐츠 높이 중 큰 쪽을 쓰고,
+            // 창 높이 상한(max_height)으로 자른다.
+            tm.height.max(tm.layoutHeight + overhang.bottom).min(max_height),
             overhang,
             outline_total,
             shadow_dx,
@@ -446,7 +502,7 @@ impl D2DRenderer {
                             text,
                             style,
                             max_width,
-                            max_height,
+                            super::MEASURE_MAX_HEIGHT,
                             sx,
                             sy,
                             outline_total as i32,
@@ -471,7 +527,7 @@ impl D2DRenderer {
                         text,
                         style,
                         max_width,
-                        max_height,
+                        super::MEASURE_MAX_HEIGHT,
                         origin_x,
                         origin_y,
                         outline_total as i32,
@@ -489,7 +545,7 @@ impl D2DRenderer {
                         text,
                         style,
                         max_width,
-                        max_height,
+                        super::MEASURE_MAX_HEIGHT,
                         origin_x,
                         origin_y,
                         effects.outline1_size,
@@ -569,10 +625,19 @@ impl D2DRenderer {
             x: origin_x,
             y: origin_y,
             max_width,
-            max_height,
+            max_height: _,
         } = bbox;
+        // layout은 measure와 공유하는 1M 박스로 만들어지므로 키도 같은 값을 쓴다.
+        // bbox.max_height(= bitmap 높이 상한)를 넣으면 저장 키(1M)와 어긋나
+        // 영구 miss가 된다 — hit-test 경로는 bbox.max_height를 쓰지 않는다.
         let key_ref = HitTestKeyRef::from_style(
-            text, style, origin_x, origin_y, max_width, max_height, inflate,
+            text,
+            style,
+            origin_x,
+            origin_y,
+            max_width,
+            super::MEASURE_MAX_HEIGHT,
+            inflate,
         );
         if self
             .hit_test_cache[slot as usize]
@@ -586,7 +651,14 @@ impl D2DRenderer {
                 .rects);
         }
 
-        let layout = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
+        // layout은 measure/draw와 공유한다 — 캐시 키에 맞춰 1M 박스로 조회.
+        let layout = self.get_or_create_layout(
+            slot,
+            text,
+            style,
+            max_width,
+            super::MEASURE_MAX_HEIGHT,
+        )?;
         let text_len: u32 = text.encode_utf16().count() as u32;
         if text_len == 0 {
             self.hit_test_cache[slot as usize] = None;

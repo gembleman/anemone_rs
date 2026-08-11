@@ -60,6 +60,21 @@ impl<'a> LayoutKeyRef<'a> {
             && self.font_face == &*key.font_face
     }
 
+    /// `max_height_bits`를 제외하고 일치하는지 검사한다.
+    ///
+    /// bitmap 키는 `max_height`를 bitmap 높이 상한으로 쓰는 반면, layout은
+    /// measure와 공유하는 `MEASURE_MAX_HEIGHT` 박스로 만들어져 의도적으로
+    /// 어긋난다 — `OutlineBitmapKeyRef::to_owned_reusing_layout`의 문자열 재사용
+    /// 검증에서만 쓰인다 (hit-test 키는 조회/저장 모두 1M이라 `matches`로 충분).
+    pub(super) fn matches_ignoring_max_height(&self, key: &TextLayoutKey) -> bool {
+        self.font_size == key.font_size
+            && self.font_style == key.font_style
+            && self.text_align == key.text_align
+            && self.max_width_bits == key.max_width_bits
+            && self.text == &*key.text
+            && self.font_face == &*key.font_face
+    }
+
     pub(super) fn to_owned(&self) -> TextLayoutKey {
         TextLayoutKey {
             text: Arc::from(self.text),
@@ -336,9 +351,9 @@ impl<'a> OutlineBitmapKeyRef<'a> {
                 font_style: self.font_style,
                 text_align: self.text_align,
                 max_width_bits: self.max_width_bits,
-                max_height_bits: self.max_height_bits,
+                max_height_bits: layout_key.max_height_bits,
             }
-            .matches(layout_key)
+            .matches_ignoring_max_height(layout_key)
         );
         OutlineBitmapKey {
             text: Arc::clone(&layout_key.text),

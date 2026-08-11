@@ -220,7 +220,6 @@ impl App {
             ),
         };
         let margin_x = cfg.text_margin_x;
-        let margin_y = cfg.text_margin_y;
 
         let composition = match self.composition.as_ref() {
             Some(c) => c,
@@ -307,9 +306,8 @@ impl App {
 
         // 텍스트 그리기
         for block in &render_blocks {
-            let max_height = (client_height - block.top - margin_y as f32)
-                .max(1.0)
-                .min(block.height.max(1.0));
+            // bbox.max_height는 outline bitmap의 높이 상한(창 밖 래스터화 방지)이다.
+            // layout 자체는 measure와 공유되는 1M 박스로 만들어진다.
             if let Err(e) = renderer.draw_text(
                 ctx,
                 block.slot,
@@ -318,7 +316,7 @@ impl App {
                     x: margin_x as f32,
                     y: block.top,
                     max_width,
-                    max_height,
+                    max_height: client_height,
                 },
                 &block.style,
             ) {
@@ -364,9 +362,6 @@ impl App {
             && let Some(d2d) = self.d2d_renderer.as_mut()
         {
             for block in &render_blocks {
-                let max_height = (client_height - block.top - margin_y as f32)
-                    .max(1.0)
-                    .min(block.height.max(1.0));
                 let shadow_inflate = if block.style.shadow_enabled {
                     block
                         .style
@@ -390,7 +385,7 @@ impl App {
                         x: margin_x as f32,
                         y: block.top,
                         max_width,
-                        max_height,
+                        max_height: client_height,
                     },
                     inflate,
                 ) {
