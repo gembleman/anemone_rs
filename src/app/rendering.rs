@@ -406,9 +406,15 @@ impl App {
 
         // 이번 프레임에서 사용하지 않은 슬롯의 bitmap/layout/hit-test 캐시를
         // 정리해 표시가 꺼진 유형의 장치 종속 자원이 상주하지 않게 한다.
-        let mut used_slots = [false; MeasureSlot::COUNT];
-        for block in &render_blocks {
-            used_slots[block.slot as usize] = true;
+        // notice 표시 중에는 본문 슬롯이 notice 종료 직후에 필요하므로 전 슬롯을
+        // 사용 중으로 보고해 폐기를 막는다 (캐시는 어차피 4슬롯 바운드 — 회수
+        // 손실이 없다. notice가 끝난 뒤 paint가 이어지면 유예 카운터가 올라간다).
+        let mut used_slots = [true; MeasureSlot::COUNT];
+        if self.model.runtime.overlay_notice.is_none() {
+            used_slots = [false; MeasureSlot::COUNT];
+            for block in &render_blocks {
+                used_slots[block.slot as usize] = true;
+            }
         }
         if let Some(renderer) = self.d2d_renderer.as_mut() {
             renderer.prune_unused_slots(used_slots);
