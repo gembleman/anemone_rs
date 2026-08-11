@@ -478,6 +478,9 @@ impl EffectiveOutlineStyle {
 pub(super) struct OutlineBitmap {
     pub(super) key: OutlineBitmapKey,
     pub(super) bitmap: ID2D1Bitmap,
+    /// 비트맵을 만든 layout — bitmap 키가 layout 키를 포함하므로 hit 시
+    /// 재검증 없이 이 항목에서 바로 쓸 수 있다.
+    pub(super) layout: IDWriteTextLayout,
     /// 비트맵 가로/세로 크기 (DIP). DrawBitmap 의 dest 사각형 크기.
     pub(super) width: f32,
     pub(super) height: f32,

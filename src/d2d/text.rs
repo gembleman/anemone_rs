@@ -379,15 +379,10 @@ impl D2DRenderer {
         if let Some(c) = &self.outline_bitmap[slot as usize]
             && key_ref.matches(&c.key)
         {
-            // hit — 비트맵 재사용. layout 도 같은 키 기준 캐시 hit.
-            let layout = self.get_or_create_layout(
-                slot,
-                text,
-                style,
-                max_width,
-                super::MEASURE_MAX_HEIGHT,
-            )?;
-            return Ok((true, layout));
+            // hit — 비트맵 재사용. bitmap 키가 layout 키를 포함하므로 layout
+            // 일치가 보장된다 — layout 캐시 재검증(문자열 비교) 없이 보관된
+            // layout을 그대로 쓴다.
+            return Ok((true, c.layout.clone()));
         }
         // miss — 비트맵 빌드. 키는 이 시점에만 alloc.
         let layout = self.get_or_create_layout(
@@ -564,6 +559,7 @@ impl D2DRenderer {
             Ok(OutlineBitmap {
                 key,
                 bitmap,
+                layout: layout.clone(),
                 width: bm_w,
                 height: bm_h,
                 pad_left,
@@ -659,11 +655,9 @@ impl D2DRenderer {
             max_width,
             super::MEASURE_MAX_HEIGHT,
         )?;
+        // 함수 진입부의 `text.is_empty()` 가드 때문에 여기 텍스트는 항상
+        // 비어있지 않다 — UTF-16 단위 수도 0이 될 수 없다.
         let text_len: u32 = text.encode_utf16().count() as u32;
-        if text_len == 0 {
-            self.hit_test_cache[slot as usize] = None;
-            return Ok(&[]);
-        }
 
         // SAFETY: 첫 호출로 크기를 얻고 정확한 buffer를 할당해 다시 호출한다.
         // 크기가 0이면 빈 결과와 실제 오류를 구분하도록 probe 결과를 반환한다.
