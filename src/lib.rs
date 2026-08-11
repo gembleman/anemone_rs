@@ -10,7 +10,11 @@ mod cli;
 mod clipboard;
 mod config;
 #[cfg(feature = "benchmark")]
+pub use config::CustomApiConfig as BenchmarkCustomApiConfig;
+#[cfg(feature = "benchmark")]
 pub use config::EzTransPostprocessEntry as BenchmarkEzTransPostprocessEntry;
+#[cfg(feature = "benchmark")]
+pub use config::Config as BenchmarkConfig;
 mod d2d;
 mod dialogs;
 mod dpi;

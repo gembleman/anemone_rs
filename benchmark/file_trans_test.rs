@@ -25,3 +25,6 @@ mod translation_cache_benchmarks;
 
 #[path = "postprocess_bench.rs"]
 mod postprocess_benchmarks;
+
+#[path = "file_trans_workload_bench.rs"]
+mod file_trans_workload_benchmarks;
