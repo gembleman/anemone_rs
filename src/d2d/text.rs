@@ -96,9 +96,11 @@ impl D2DRenderer {
 
     /// 활성 render target에 본문과 cache된 outline/shadow를 그린다.
     /// 효과가 없으면 중간 bitmap 없이 본문만 그린다.
+    /// `slot`은 layout/outline/bitmap 캐시의 유형별 슬롯이다.
     pub fn draw_text(
         &mut self,
         target: &ID2D1RenderTarget,
+        slot: MeasureSlot,
         text: &str,
         bbox: TextBox,
         style: &TextRenderStyle,
@@ -115,7 +117,8 @@ impl D2DRenderer {
 
         // outline / shadow 둘 다 없으면 본문 한 줄만 그린다.
         if !has_outline && !has_shadow {
-            let text_layout = self.get_or_create_layout(text, style, max_width, max_height)?;
+            let text_layout =
+                self.get_or_create_layout(slot, text, style, max_width, max_height)?;
             // SAFETY: target is a valid render target between BeginDraw/EndDraw.
             unsafe {
                 let text_brush = self.get_or_create_brush(target, style.color)?;
@@ -135,27 +138,27 @@ impl D2DRenderer {
         // Miss가 잦으면 bitmap 생성을 건너뛰고 geometry를 직접 그린다.
         // 직전 key가 안정되면 hit가 쌓여 자동 복귀한다.
         if self.miss_tracker.is_overloaded() {
-            self.outline_bitmap = None;
+            self.outline_bitmap[slot as usize] = None;
             let hit = self
                 .miss_tracker
-                .last_key
-                .as_ref()
+                .last_key(slot)
                 .is_some_and(|k| key_ref.matches(k));
             self.miss_tracker.record(!hit);
-            let result = self.draw_text_direct(target, text, bbox, style);
+            let result = self.draw_text_direct(target, slot, text, bbox, style);
             // direct 경로가 만든 layout key의 문자열 소유권을 공유한다.
             if !hit
                 && result.is_ok()
-                && let Some(layout) = self.text_cache.as_ref()
+                && let Some(layout) = self.text_cache[slot as usize].as_ref()
             {
-                self.miss_tracker.last_key = Some(key_ref.to_owned_reusing_layout(&layout.key));
+                self.miss_tracker
+                    .set_last_key(slot, Some(key_ref.to_owned_reusing_layout(&layout.key)));
             }
             return result;
         }
 
         // 정상 경로는 실제 bitmap key로 hit를 판정하고 layout도 함께 얻는다.
         let (hit, text_layout) = match self
-            .ensure_outline_bitmap(target, &key_ref, text, style, max_width, max_height)
+            .ensure_outline_bitmap(slot, target, &key_ref, text, style, max_width, max_height)
         {
             Ok(bitmap) => bitmap,
             Err(error) => {
@@ -164,13 +167,14 @@ impl D2DRenderer {
                 tracing::warn!(
                     "outline bitmap build failed ({error}); falling back to direct rendering"
                 );
-                self.outline_bitmap = None;
+                self.outline_bitmap[slot as usize] = None;
                 self.miss_tracker.record(true);
-                let result = self.draw_text_direct(target, text, bbox, style);
+                let result = self.draw_text_direct(target, slot, text, bbox, style);
                 if result.is_ok()
-                    && let Some(layout) = self.text_cache.as_ref()
+                    && let Some(layout) = self.text_cache[slot as usize].as_ref()
                 {
-                    self.miss_tracker.last_key = Some(key_ref.to_owned_reusing_layout(&layout.key));
+                    self.miss_tracker
+                        .set_last_key(slot, Some(key_ref.to_owned_reusing_layout(&layout.key)));
                 }
                 return result;
             }
@@ -179,20 +183,21 @@ impl D2DRenderer {
         // last_key 도 hit 여부에 따라 alloc 회피.
         let need_update_last = self
             .miss_tracker
-            .last_key
-            .as_ref()
+            .last_key(slot)
             .is_none_or(|k| !key_ref.matches(k));
         if need_update_last {
-            self.miss_tracker.last_key = self
-                .outline_bitmap
-                .as_ref()
-                .map(|bitmap| bitmap.key.clone());
+            self.miss_tracker.set_last_key(
+                slot,
+                self.outline_bitmap[slot as usize]
+                    .as_ref()
+                    .map(|bitmap| bitmap.key.clone()),
+            );
         }
 
         // SAFETY: target is a valid render target between BeginDraw/EndDraw.
         unsafe {
             // Padding을 빼 bitmap의 layout 원점을 (x, y)에 맞춘다.
-            if let Some(bm) = &self.outline_bitmap {
+            if let Some(bm) = &self.outline_bitmap[slot as usize] {
                 let dest_left = x - bm.pad_left;
                 let dest_top = y - bm.pad_top;
                 let dest = D2D_RECT_F {
@@ -228,6 +233,7 @@ impl D2DRenderer {
     fn draw_text_direct(
         &mut self,
         target: &ID2D1RenderTarget,
+        slot: MeasureSlot,
         text: &str,
         bbox: TextBox,
         style: &TextRenderStyle,
@@ -243,8 +249,8 @@ impl D2DRenderer {
         let has_shadow = effects.has_shadow;
 
         // outline geometry + layout 확보 (캐시 hit/miss 처리 포함).
-        let _ = self.get_or_create_outline_geometry(text, style, max_width, max_height)?;
-        let text_layout = self.get_or_create_layout(text, style, max_width, max_height)?;
+        let _ = self.get_or_create_outline_geometry(slot, text, style, max_width, max_height)?;
+        let text_layout = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
 
         // SAFETY: target 은 caller (paint) 의 BeginDraw 안의 유효 RT.
         // SetTransform 은 각 블록 끝에서 identity 로 복구.
@@ -255,7 +261,7 @@ impl D2DRenderer {
                 let sy = y + effects.shadow_offset_y as f32;
                 let shadow_brush = self.get_or_create_brush(target, effects.shadow_color)?;
                 if outline_total > 0 {
-                    self.stroke_fill_outline_at(target, sx, sy, outline_total, &shadow_brush);
+                    self.stroke_fill_outline_at(slot, target, sx, sy, outline_total, &shadow_brush);
                 }
                 target.DrawTextLayout(
                     Vector2::new(sx, sy),
@@ -268,13 +274,13 @@ impl D2DRenderer {
             // 2. 외곽선2 (OutlineOut) — 전체 두께로 한 번.
             if effects.outline2_size > 0 && outline_total > 0 {
                 let brush = self.get_or_create_brush(target, effects.outline2_color)?;
-                self.stroke_fill_outline_at(target, x, y, outline_total, &brush);
+                self.stroke_fill_outline_at(slot, target, x, y, outline_total, &brush);
             }
 
             // 3. 외곽선1 (OutlineIn) — outline1_size 두께.
             if effects.outline1_size > 0 {
                 let brush = self.get_or_create_brush(target, effects.outline1_color)?;
-                self.stroke_fill_outline_at(target, x, y, effects.outline1_size, &brush);
+                self.stroke_fill_outline_at(slot, target, x, y, effects.outline1_size, &brush);
             }
 
             // 4. 본문.
@@ -293,6 +299,7 @@ impl D2DRenderer {
     /// Transform을 잠시 이동해 cache된 geometry를 stroke/fill하고 복원한다.
     fn stroke_fill_outline_at(
         &mut self,
+        slot: MeasureSlot,
         target: &ID2D1RenderTarget,
         x: f32,
         y: f32,
@@ -300,7 +307,7 @@ impl D2DRenderer {
         brush: &ID2D1SolidColorBrush,
     ) {
         let Some(geometry) = self
-            .text_cache
+            .text_cache[slot as usize]
             .as_ref()
             .and_then(|c| c.outline.as_ref())
             .cloned()
@@ -327,8 +334,10 @@ impl D2DRenderer {
     }
 
     /// Outline/shadow bitmap을 조회하거나 만들고 `(hit, layout)`을 반환한다.
+    #[allow(clippy::too_many_arguments)]
     fn ensure_outline_bitmap(
         &mut self,
+        slot: MeasureSlot,
         target: &ID2D1RenderTarget,
         key_ref: &OutlineBitmapKeyRef<'_>,
         text: &str,
@@ -336,30 +345,31 @@ impl D2DRenderer {
         max_width: f32,
         max_height: f32,
     ) -> Result<(bool, IDWriteTextLayout)> {
-        if let Some(c) = &self.outline_bitmap
+        if let Some(c) = &self.outline_bitmap[slot as usize]
             && key_ref.matches(&c.key)
         {
             // hit — 비트맵 재사용. layout 도 같은 키 기준 캐시 hit.
-            let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
+            let layout = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
             return Ok((true, layout));
         }
         // miss — 비트맵 빌드. 키는 이 시점에만 alloc.
-        let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
+        let layout = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
         let owned_key = key_ref.to_owned_reusing_layout(
             &self
-                .text_cache
+                .text_cache[slot as usize]
                 .as_ref()
                 .expect("layout cache populated by get_or_create_layout")
                 .key,
         );
-        let bm = self.build_outline_bitmap(target, style, owned_key, &layout)?;
-        self.outline_bitmap = Some(bm);
+        let bm = self.build_outline_bitmap(slot, target, style, owned_key, &layout)?;
+        self.outline_bitmap[slot as usize] = Some(bm);
         Ok((false, layout))
     }
 
     /// 호환 bitmap target에 효과를 그리고, 사용한 layout과 함께 반환한다.
     fn build_outline_bitmap(
         &mut self,
+        slot: MeasureSlot,
         target: &ID2D1RenderTarget,
         style: &TextRenderStyle,
         key: OutlineBitmapKey,
@@ -431,6 +441,7 @@ impl D2DRenderer {
 
                     if outline_total > 0.0 {
                         self.draw_outline_only(
+                            slot,
                             inner_rt,
                             text,
                             style,
@@ -455,6 +466,7 @@ impl D2DRenderer {
                     let brush = inner_rt
                         .CreateSolidColorBrush(&argb_to_color_f(effects.outline2_color), None)?;
                     self.draw_outline_only(
+                        slot,
                         inner_rt,
                         text,
                         style,
@@ -472,6 +484,7 @@ impl D2DRenderer {
                     let brush = inner_rt
                         .CreateSolidColorBrush(&argb_to_color_f(effects.outline1_color), None)?;
                     self.draw_outline_only(
+                        slot,
                         inner_rt,
                         text,
                         style,
@@ -507,6 +520,7 @@ impl D2DRenderer {
     #[allow(clippy::too_many_arguments)]
     fn draw_outline_only(
         &mut self,
+        slot: MeasureSlot,
         target: &ID2D1RenderTarget,
         text: &str,
         style: &TextRenderStyle,
@@ -518,7 +532,7 @@ impl D2DRenderer {
         brush: &ID2D1SolidColorBrush,
     ) -> Result<()> {
         let path_geometry =
-            self.get_or_create_outline_geometry(text, style, max_width, max_height)?;
+            self.get_or_create_outline_geometry(slot, text, style, max_width, max_height)?;
         // SAFETY: target 은 caller (build_outline_bitmap) 가 BeginDraw 한 유효
         // 비트맵 RT. transform 은 함수 끝에서 identity 로 복구.
         unsafe {
@@ -537,8 +551,10 @@ impl D2DRenderer {
 
     /// `WM_NCHITTEST`용 줄별 text 사각형을 client 좌표로 반환한다.
     /// `inflate`는 outline/shadow 여유이며 빈 text면 빈 배열을 반환한다.
+    /// `slot`은 layout 캐시의 유형별 슬롯이다.
     pub fn compute_text_line_rects(
         &mut self,
+        slot: MeasureSlot,
         text: &str,
         style: &TextRenderStyle,
         bbox: TextBox,
@@ -570,7 +586,7 @@ impl D2DRenderer {
                 .rects);
         }
 
-        let layout = self.get_or_create_layout(text, style, max_width, max_height)?;
+        let layout = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
         let text_len: u32 = text.encode_utf16().count() as u32;
         if text_len == 0 {
             self.hit_test_cache = None;
@@ -617,7 +633,7 @@ impl D2DRenderer {
             .collect();
         let key = key_ref.to_owned_reusing_layout(
             &self
-                .text_cache
+                .text_cache[slot as usize]
                 .as_ref()
                 .expect("layout cache populated by get_or_create_layout")
                 .key,

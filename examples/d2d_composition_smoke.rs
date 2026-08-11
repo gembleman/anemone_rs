@@ -317,6 +317,7 @@ fn draw_interactive(ctx: &ID2D1DeviceContext) -> Result<()> {
             style.text_align = align;
             d2d.draw_text(
                 ctx,
+                d2d::MeasureSlot::Translation,
                 "fij ÁW · 한글 · 日本語",
                 TextBox {
                     x: 20.0,
@@ -375,6 +376,7 @@ fn draw_bench_match_app(ctx: &ID2D1DeviceContext) -> Result<()> {
 
         d2d.draw_text(
             ctx,
+            d2d::MeasureSlot::Translation,
             "아네모네 시작됨 - 클립보드를 복사해보세요",
             TextBox {
                 x: MARGIN as f32,

@@ -300,3 +300,29 @@ fn miss_tracker_warms_up_enters_overload_and_recovers() {
         "stable hits must leave overload mode"
     );
 }
+
+#[test]
+fn miss_tracker_last_key_is_independent_per_slot() {
+    let base = style();
+    let mut tracker = MissTracker::new();
+
+    let name_key = OutlineBitmapKeyRef::from_style("이름", &base, 100.0, 50.0).to_owned();
+    let trans_key = OutlineBitmapKeyRef::from_style("대사", &base, 100.0, 50.0).to_owned();
+
+    tracker.set_last_key(MeasureSlot::Name, Some(name_key.clone()));
+    // 다른 슬롯은 아직 비어 있다 — 슬롯 간에 키가 섞이지 않는다.
+    assert!(tracker.last_key(MeasureSlot::Translation).is_none());
+    assert!(OutlineBitmapKeyRef::from_style("이름", &base, 100.0, 50.0)
+        .matches(tracker.last_key(MeasureSlot::Name).unwrap()));
+
+    tracker.set_last_key(MeasureSlot::Translation, Some(trans_key.clone()));
+    assert!(OutlineBitmapKeyRef::from_style("대사", &base, 100.0, 50.0)
+        .matches(tracker.last_key(MeasureSlot::Translation).unwrap()));
+    // Name 슬롯은 Translation 갱신의 영향을 받지 않는다.
+    assert!(OutlineBitmapKeyRef::from_style("이름", &base, 100.0, 50.0)
+        .matches(tracker.last_key(MeasureSlot::Name).unwrap()));
+
+    tracker.set_last_key(MeasureSlot::Name, None);
+    assert!(tracker.last_key(MeasureSlot::Name).is_none());
+    assert!(tracker.last_key(MeasureSlot::Translation).is_some());
+}

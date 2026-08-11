@@ -312,6 +312,7 @@ impl App {
                 .min(block.height.max(1.0));
             if let Err(e) = renderer.draw_text(
                 ctx,
+                block.slot,
                 &block.text,
                 crate::d2d::TextBox {
                     x: margin_x as f32,
@@ -382,6 +383,7 @@ impl App {
                     .saturating_add(shadow_inflate)
                     .saturating_add(1) as f32;
                 match d2d.compute_text_line_rects(
+                    block.slot,
                     &block.text,
                     &block.style,
                     crate::d2d::TextBox {

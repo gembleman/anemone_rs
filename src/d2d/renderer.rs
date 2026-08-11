@@ -10,7 +10,7 @@ use windows::{
 use windows_numerics::Matrix3x2;
 
 use super::{
-    cache::*,
+    MeasureSlot, cache::*,
     color::{argb_to_color_f, font_style_to_dwrite, text_align_to_dwrite},
     outline_text_renderer::OutlineTextRenderer,
     style::TextRenderStyle,
@@ -27,16 +27,17 @@ pub struct D2DRenderer {
     pub(super) brush_cache: HashMap<u32, ID2D1SolidColorBrush>,
     /// 외곽선 스트로크 스타일 캐시 (불변이므로 한 번만 생성)
     pub(super) stroke_style: Option<ID2D1StrokeStyle>,
-    /// 현재 표시 중인 text layout과 outline geometry cache.
-    pub(super) text_cache: Option<TextLayoutCache>,
-    /// `measure_text_height` 결과 cache (고정 3슬롯 순환).
-    pub(super) measure_cache: MeasureCache,
-    /// 현재 outline과 shadow를 합성한 bitmap cache.
-    pub(super) outline_bitmap: Option<OutlineBitmap>,
+    /// 유형별 text layout과 outline geometry cache. paint는 유형별로 1블록만
+    /// 그리므로 슬롯을 유형과 1:1로 두면 고정 블록(Name)의 layout이 유지된다.
+    pub(super) text_cache: [Option<TextLayoutCache>; MeasureSlot::COUNT],
+    /// 유형별 outline/shadow 합성 bitmap cache.
+    pub(super) outline_bitmap: [Option<OutlineBitmap>; MeasureSlot::COUNT],
     /// 투명 배경의 `WM_NCHITTEST`용 줄별 사각형 cache.
     pub(super) hit_test_cache: Option<HitTestCache>,
     /// 캐시 miss 비율 추적 — 폭주 시 비트맵 경로 우회.
     pub(super) miss_tracker: MissTracker,
+    /// `measure_text_height` 결과 cache (고정 3슬롯 순환).
+    pub(super) measure_cache: MeasureCache,
 }
 
 impl D2DRenderer {
@@ -69,9 +70,9 @@ impl D2DRenderer {
                 dwrite_factory,
                 brush_cache: HashMap::new(),
                 stroke_style: Some(stroke_style),
-                text_cache: None,
+                text_cache: [const { None }; MeasureSlot::COUNT],
                 measure_cache: MeasureCache::new(),
-                outline_bitmap: None,
+                outline_bitmap: [const { None }; MeasureSlot::COUNT],
                 hit_test_cache: None,
                 miss_tracker: MissTracker::new(),
             })
@@ -108,21 +109,23 @@ impl D2DRenderer {
     }
 
     /// Layout cache를 조회하고 miss면 outline geometry와 함께 교체한다.
+    /// `slot`은 텍스트 유형별 캐시 슬롯이다.
     pub(super) fn get_or_create_layout(
         &mut self,
+        slot: MeasureSlot,
         text: &str,
         style: &TextRenderStyle,
         max_width: f32,
         max_height: f32,
     ) -> Result<IDWriteTextLayout> {
         let key_ref = LayoutKeyRef::from_style(text, style, max_width, max_height);
-        if let Some(c) = &self.text_cache
+        if let Some(c) = &self.text_cache[slot as usize]
             && key_ref.matches(&c.key)
         {
             return Ok(c.layout.clone());
         }
         let layout = self.create_text_layout_uncached(text, style, max_width, max_height)?;
-        self.text_cache = Some(TextLayoutCache {
+        self.text_cache[slot as usize] = Some(TextLayoutCache {
             key: key_ref.to_owned(),
             layout: layout.clone(),
             outline: None,
@@ -133,15 +136,16 @@ impl D2DRenderer {
     /// Layout 원점 기준 outline geometry를 만들거나 cache에서 가져온다.
     pub(super) fn get_or_create_outline_geometry(
         &mut self,
+        slot: MeasureSlot,
         text: &str,
         style: &TextRenderStyle,
         max_width: f32,
         max_height: f32,
     ) -> Result<ID2D1PathGeometry> {
         // layout 먼저 확보 (캐시 hit/miss 처리 포함).
-        let _ = self.get_or_create_layout(text, style, max_width, max_height)?;
+        let _ = self.get_or_create_layout(slot, text, style, max_width, max_height)?;
 
-        if let Some(c) = &self.text_cache
+        if let Some(c) = &self.text_cache[slot as usize]
             && let Some(g) = &c.outline
         {
             return Ok(g.clone());
@@ -155,7 +159,7 @@ impl D2DRenderer {
             let renderer: IDWriteTextRenderer =
                 OutlineTextRenderer::new(self.d2d_factory.clone(), sink.clone()).into();
             let layout = self
-                .text_cache
+                .text_cache[slot as usize]
                 .as_ref()
                 .expect("text_cache populated by get_or_create_layout")
                 .layout
@@ -165,7 +169,7 @@ impl D2DRenderer {
             geom
         };
 
-        if let Some(c) = self.text_cache.as_mut() {
+        if let Some(c) = self.text_cache[slot as usize].as_mut() {
             c.outline = Some(path_geometry.clone());
         }
         Ok(path_geometry)
@@ -217,9 +221,9 @@ impl D2DRenderer {
     /// Device loss나 render target 교체 후 모든 장치 종속 cache를 비운다.
     pub fn invalidate_device_caches(&mut self) {
         self.brush_cache.clear();
-        self.text_cache = None;
+        self.text_cache = [const { None }; MeasureSlot::COUNT];
         self.measure_cache = MeasureCache::new();
-        self.outline_bitmap = None;
+        self.outline_bitmap = [const { None }; MeasureSlot::COUNT];
         self.hit_test_cache = None;
         // 추적 상태도 함께 초기화한다.
         self.miss_tracker = MissTracker::new();

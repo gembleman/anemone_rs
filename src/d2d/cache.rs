@@ -436,8 +436,10 @@ pub(super) struct MissTracker {
     pub(super) filled: u8,
     /// 환경 변수로 조정 가능한 직접 렌더링 전환 임계치.
     pub(super) threshold: u8,
-    /// Bitmap 없이도 텍스트 안정화를 판정하기 위한 직전 key.
-    pub(super) last_key: Option<OutlineBitmapKey>,
+    /// 슬롯별 직전 key — Bitmap 없이도 텍스트 안정화를 판정하기 위한 것.
+    /// 슬롯을 분리하지 않으면 서로 다른 유형의 키가 last_key를 덮어써
+    /// 안정 블록의 hit 판정이 깨진다.
+    last_keys: [Option<OutlineBitmapKey>; MeasureSlot::COUNT],
 }
 
 impl MissTracker {
@@ -451,8 +453,18 @@ impl MissTracker {
             ring: 0,
             filled: 0,
             threshold: Self::resolve_threshold(),
-            last_key: None,
+            last_keys: [const { None }; MeasureSlot::COUNT],
         }
+    }
+
+    /// 슬롯의 직전 key를 읽는다.
+    pub(super) fn last_key(&self, slot: MeasureSlot) -> Option<&OutlineBitmapKey> {
+        self.last_keys[slot as usize].as_ref()
+    }
+
+    /// 슬롯의 직전 key를 갱신한다.
+    pub(super) fn set_last_key(&mut self, slot: MeasureSlot, key: Option<OutlineBitmapKey>) {
+        self.last_keys[slot as usize] = key;
     }
 
     /// 환경 변수의 1..=`WINDOW` 값을 읽고, 잘못되면 기본값을 쓴다.
