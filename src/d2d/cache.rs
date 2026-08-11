@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::config::TextAlign;
 
+use super::MeasureSlot;
 use super::style::TextRenderStyle;
 use windows::Win32::{
     Foundation::RECT,
@@ -140,38 +141,32 @@ pub(super) struct MeasureCacheEntry {
     pub(super) height: f32,
 }
 
-/// `measure_text_height` 결과 캐시 — 고정 3슬롯 순환.
+/// `measure_text_height` 결과 캐시 — 텍스트 유형별 direct-mapped 단일 엔트리.
 ///
-/// paint는 최대 3개 블록(Name/Original/Translation)을 순서대로 측정하므로,
-/// 슬롯이 3개면 한 paint의 워밍업 뒤 같은 블록 순서가 항상 hit한다.
-/// 단일 슬롯이라면 블록 2개 이상에서 교대 miss가 반복된다. 크기가 고정이라
-/// 무한 성장하지 않는다.
+/// paint는 유형별로 최대 1블록만 측정하므로(이름·원문·번역·notice), 슬롯을
+/// 유형과 1:1로 두면 퇴거 정책이 필요 없다. "이름 고정 + 대사만 변경" 패턴에서
+/// 고정 블록의 hit가 유지된다. 크기가 고정이라 무한 성장하지 않는다.
 pub(super) struct MeasureCache {
-    entries: [Option<MeasureCacheEntry>; 3],
-    /// miss 때 덮어쓸 슬롯 (FIFO 순환). hit는 이 인덱스를 움직이지 않는다.
-    next_replace: usize,
+    entries: [Option<MeasureCacheEntry>; MeasureSlot::COUNT],
 }
 
 impl MeasureCache {
-    const CAPACITY: usize = 3;
-
     pub(super) fn new() -> Self {
         Self {
-            entries: [const { None }, const { None }, const { None }],
-            next_replace: 0,
+            entries: [const { None }; MeasureSlot::COUNT],
         }
     }
 
-    pub(super) fn get(&self, key: &MeasureKeyRef<'_>) -> Option<f32> {
-        self.entries
-            .iter()
-            .find_map(|entry| entry.as_ref().filter(|e| key.matches(&e.key)).map(|e| e.height))
+    pub(super) fn get(&self, slot: MeasureSlot, key: &MeasureKeyRef<'_>) -> Option<f32> {
+        self.entries[slot as usize]
+            .as_ref()
+            .filter(|entry| key.matches(&entry.key))
+            .map(|entry| entry.height)
     }
 
-    /// miss 시 호출: FIFO 순환으로 한 슬롯을 덮어쓴다.
-    pub(super) fn insert(&mut self, key: MeasureKey, height: f32) {
-        self.entries[self.next_replace] = Some(MeasureCacheEntry { key, height });
-        self.next_replace = (self.next_replace + 1) % Self::CAPACITY;
+    /// miss 시 호출: 해당 슬롯을 덮어쓴다. 다른 슬롯은 건드리지 않는다.
+    pub(super) fn insert(&mut self, slot: MeasureSlot, key: MeasureKey, height: f32) {
+        self.entries[slot as usize] = Some(MeasureCacheEntry { key, height });
     }
 }
 

@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::d2d::MeasureSlot;
+
 fn style() -> TextRenderStyle {
     TextRenderStyle {
         font_size: 22,
@@ -86,70 +88,143 @@ fn measure_cache_warms_up_and_hits_multi_block_sequence() {
     let block_b = MeasureKeyRef::from_style("대사", &base, 100.0).to_owned();
 
     // 2블록 paint: 첫 paint는 전부 miss (워밍업)
-    cache.insert(block_a.clone(), 30.0);
-    cache.insert(block_b.clone(), 20.0);
+    cache.insert(MeasureSlot::Name, block_a.clone(), 30.0);
+    cache.insert(MeasureSlot::Translation, block_b.clone(), 20.0);
     assert!(cache
-        .get(&MeasureKeyRef::from_style("이름", &base, 100.0))
+        .get(MeasureSlot::Name, &MeasureKeyRef::from_style("이름", &base, 100.0))
         .is_some());
 
-    // 두 번째 paint: 같은 순서 호출이면 두 블록 모두 hit
+    // 두 번째 paint: 같은 슬롯 순서 호출이면 두 블록 모두 hit
     assert_eq!(
-        cache.get(&MeasureKeyRef::from_style("이름", &base, 100.0)),
+        cache.get(MeasureSlot::Name, &MeasureKeyRef::from_style("이름", &base, 100.0)),
         Some(30.0)
     );
     assert_eq!(
-        cache.get(&MeasureKeyRef::from_style("대사", &base, 100.0)),
+        cache
+            .get(MeasureSlot::Translation, &MeasureKeyRef::from_style("대사", &base, 100.0)),
         Some(20.0)
     );
 
-    // hit는 순환 인덱스를 움직이지 않으므로 세 번째 paint도 hit 유지
+    // hit는 아무 상태도 바꾸지 않으므로 세 번째 paint도 hit 유지
     assert_eq!(
-        cache.get(&MeasureKeyRef::from_style("이름", &base, 100.0)),
+        cache.get(MeasureSlot::Name, &MeasureKeyRef::from_style("이름", &base, 100.0)),
         Some(30.0)
     );
     assert_eq!(
-        cache.get(&MeasureKeyRef::from_style("대사", &base, 100.0)),
+        cache
+            .get(MeasureSlot::Translation, &MeasureKeyRef::from_style("대사", &base, 100.0)),
         Some(20.0)
     );
 }
 
 #[test]
-fn measure_cache_fifo_evicts_oldest_slot_on_fourth_key() {
+fn measure_cache_slots_are_independent_by_text_type() {
     let base = style();
     let mut cache = MeasureCache::new();
-    let keys: Vec<MeasureKey> = (0..4)
-        .map(|i| {
-            MeasureKeyRef::from_style(&format!("block{i}"), &base, 100.0)
-                .to_owned()
-        })
-        .collect();
-
-    for key in &keys[..3] {
-        cache.insert(key.clone(), 10.0);
-    }
-    // 3슬롯이 다 찬 뒤 4번째 키는 가장 오래된 슬롯(첫 키)을 덮어쓴다.
-    cache.insert(keys[3].clone(), 40.0);
-
-    assert_eq!(cache.get(&MeasureKeyRef::from_style("block0", &base, 100.0)), None);
-    assert_eq!(
-        cache.get(&MeasureKeyRef::from_style("block1", &base, 100.0)),
-        Some(10.0)
+    cache.insert(
+        MeasureSlot::Name,
+        MeasureKeyRef::from_style("이름", &base, 100.0).to_owned(),
+        30.0,
     );
-    assert_eq!(
-        cache.get(&MeasureKeyRef::from_style("block2", &base, 100.0)),
-        Some(10.0)
-    );
-    assert_eq!(
-        cache.get(&MeasureKeyRef::from_style("block3", &base, 100.0)),
-        Some(40.0)
+    cache.insert(
+        MeasureSlot::Translation,
+        MeasureKeyRef::from_style("대사", &base, 100.0).to_owned(),
+        20.0,
     );
 
-    // 블록 1~3 순서 호출(2블록/3블록 paint와 유사)은 전부 hit한다.
-    for i in 1..4 {
-        assert!(cache
-            .get(&MeasureKeyRef::from_style(&format!("block{i}"), &base, 100.0))
-            .is_some());
-    }
+    // 같은 슬롯·같은 키: hit.
+    assert_eq!(
+        cache.get(MeasureSlot::Name, &MeasureKeyRef::from_style("이름", &base, 100.0)),
+        Some(30.0)
+    );
+    assert_eq!(
+        cache
+            .get(MeasureSlot::Translation, &MeasureKeyRef::from_style("대사", &base, 100.0)),
+        Some(20.0)
+    );
+
+    // Translation 슬롯을 다른 텍스트로 덮어써도 Name 슬롯은 그대로 hit
+    // (FIFO라면 순환 퇴거로 밀려났을 케이스).
+    cache.insert(
+        MeasureSlot::Translation,
+        MeasureKeyRef::from_style("새 대사", &base, 100.0).to_owned(),
+        25.0,
+    );
+    assert_eq!(
+        cache.get(MeasureSlot::Name, &MeasureKeyRef::from_style("이름", &base, 100.0)),
+        Some(30.0)
+    );
+    assert_eq!(
+        cache
+            .get(MeasureSlot::Translation, &MeasureKeyRef::from_style("새 대사", &base, 100.0)),
+        Some(25.0)
+    );
+}
+
+#[test]
+fn measure_cache_same_slot_replaces_on_key_change() {
+    let base = style();
+    let mut cache = MeasureCache::new();
+    cache.insert(
+        MeasureSlot::Name,
+        MeasureKeyRef::from_style("이름", &base, 100.0).to_owned(),
+        30.0,
+    );
+    cache.insert(
+        MeasureSlot::Translation,
+        MeasureKeyRef::from_style("대사", &base, 100.0).to_owned(),
+        20.0,
+    );
+
+    // 같은 슬롯(Name)에 다른 텍스트가 오면 옛 키는 miss, 새 키는 hit.
+    cache.insert(
+        MeasureSlot::Name,
+        MeasureKeyRef::from_style("다른 이름", &base, 100.0).to_owned(),
+        35.0,
+    );
+    assert_eq!(
+        cache.get(MeasureSlot::Name, &MeasureKeyRef::from_style("이름", &base, 100.0)),
+        None
+    );
+    assert_eq!(
+        cache
+            .get(MeasureSlot::Name, &MeasureKeyRef::from_style("다른 이름", &base, 100.0)),
+        Some(35.0)
+    );
+    // 다른 슬롯(Translation)은 불변.
+    assert_eq!(
+        cache
+            .get(MeasureSlot::Translation, &MeasureKeyRef::from_style("대사", &base, 100.0)),
+        Some(20.0)
+    );
+}
+
+#[test]
+fn measure_cache_notice_slot_does_not_evict_translation() {
+    let base = style();
+    let mut cache = MeasureCache::new();
+    cache.insert(
+        MeasureSlot::Translation,
+        MeasureKeyRef::from_style("대사", &base, 100.0).to_owned(),
+        20.0,
+    );
+
+    // notice 슬롯을 사용해도 Translation 슬롯은 건드리지 않는다.
+    cache.insert(
+        MeasureSlot::Notice,
+        MeasureKeyRef::from_style("업데이트 확인 중...", &base, 100.0).to_owned(),
+        15.0,
+    );
+    assert_eq!(
+        cache
+            .get(MeasureSlot::Translation, &MeasureKeyRef::from_style("대사", &base, 100.0)),
+        Some(20.0)
+    );
+    assert_eq!(
+        cache
+            .get(MeasureSlot::Notice, &MeasureKeyRef::from_style("업데이트 확인 중...", &base, 100.0)),
+        Some(15.0)
+    );
 }
 
 #[test]

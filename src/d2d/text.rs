@@ -20,6 +20,7 @@ use super::{
     renderer::D2DRenderer,
     style::TextRenderStyle,
 };
+use super::MeasureSlot;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct OutlineBitmapBounds {
@@ -65,20 +66,21 @@ impl D2DRenderer {
     /// 주어진 폭에서 DirectWrite가 계산한 실제 시각적 줄 높이를 반환한다.
     /// 명시적 개행 수가 아니라 layout metrics를 사용하므로 자동 줄바꿈도 포함한다.
     ///
-    /// 결과는 고정 3슬롯 순환 캐시에 보관한다. paint가 최대 3개 블록
-    /// (Name/Original/Translation)을 같은 순서로 측정하므로, 한 paint의 워밍업
-    /// 뒤에는 매 paint마다 `CreateTextFormat`(글꼴 로딩 포함)과
-    /// `CreateTextLayout`(폴백 분석)을 다시 만들지 않는다. 캐시는
-    /// `invalidate_device_caches`(장치 손실·DPI 변경)에서 폐기된다.
+    /// `slot`은 결과 캐시의 direct-mapped 슬롯이다. 텍스트 유형(Name/Original/
+    /// Translation/Notice)별로 1블록만 측정되므로, "이름 고정 + 대사만 변경"
+    /// 패턴에서 고정 블록의 측정 결과가 유지된다. 같은 슬롯이라도 키가 다르면
+    /// miss로 보고 재측정한다. 캐시는 `invalidate_device_caches`(장치 손실·DPI
+    /// 변경)에서 폐기된다.
     pub fn measure_text_height(
         &mut self,
+        slot: MeasureSlot,
         text: &str,
         style: &TextRenderStyle,
         max_width: f32,
     ) -> Result<f32> {
         const MEASURE_MAX_HEIGHT: f32 = 1_000_000.0;
         let key_ref = MeasureKeyRef::from_style(text, style, max_width);
-        if let Some(height) = self.measure_cache.get(&key_ref) {
+        if let Some(height) = self.measure_cache.get(slot, &key_ref) {
             return Ok(height);
         }
         let layout =
@@ -88,7 +90,7 @@ impl D2DRenderer {
             layout.GetMetrics(&mut metrics)?;
         }
         let height = metrics.height.max(style.font_size.max(1) as f32);
-        self.measure_cache.insert(key_ref.to_owned(), height);
+        self.measure_cache.insert(slot, key_ref.to_owned(), height);
         Ok(height)
     }
 

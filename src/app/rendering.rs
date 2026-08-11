@@ -7,15 +7,26 @@ use windows::{
 
 use super::{App, COMPOSITION_RETRY_TIMER, state};
 use crate::config::{Config, TextStyle, TextType};
+use crate::d2d::MeasureSlot;
 use crate::d2d::TextRenderStyle;
 use crate::d2d::{CompositionRenderer, WaitOutcome};
 
 struct RenderBlock {
     text: String,
     style: TextRenderStyle,
+    slot: MeasureSlot,
     top: f32,
     height: f32,
     gap_after: f32,
+}
+
+/// 텍스트 유형별 measure 결과 슬롯. paint는 유형별로 최대 1블록만 측정한다.
+fn measure_slot_for(text_type: TextType) -> MeasureSlot {
+    match text_type {
+        TextType::Name => MeasureSlot::Name,
+        TextType::Original => MeasureSlot::Original,
+        TextType::Translation => MeasureSlot::Translation,
+    }
 }
 
 fn split_name(text: &str) -> Option<(&str, &str)> {
@@ -85,6 +96,7 @@ fn build_render_blocks(config: &Config, original: &str, translated: &str) -> Vec
             let block = RenderBlock {
                 text,
                 style,
+                slot: measure_slot_for(text_type),
                 top,
                 height,
                 gap_after: if text_type == TextType::Name {
@@ -102,11 +114,13 @@ fn build_render_blocks(config: &Config, original: &str, translated: &str) -> Vec
 
 fn build_notice_render_blocks(config: &Config, text: &str) -> Vec<RenderBlock> {
     let style = render_style(config, &config.translation_style);
+    let height = text.lines().count().max(1) as f32 * (style.font_size.max(1) as f32 * 1.35);
     vec![RenderBlock {
         text: text.to_string(),
-        top: config.text_margin_y as f32,
-        height: text.lines().count().max(1) as f32 * (style.font_size.max(1) as f32 * 1.35),
         style,
+        slot: MeasureSlot::Notice,
+        top: config.text_margin_y as f32,
+        height,
         gap_after: 0.0,
     }]
 }
@@ -229,7 +243,8 @@ impl App {
             let mut top = first.top;
             for block in &mut render_blocks {
                 block.top = top;
-                match renderer.measure_text_height(&block.text, &block.style, max_width) {
+                match renderer.measure_text_height(block.slot, &block.text, &block.style, max_width)
+                {
                     Ok(height) => block.height = height,
                     Err(error) => {
                         tracing::warn!("DirectWrite text measurement failed: {error}");
