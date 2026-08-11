@@ -235,7 +235,7 @@ impl D2DRenderer {
 
     /// 이번 paint에서 사용된 슬롯 밖의 장치 종속 캐시를 정리한다.
     ///
-    /// 폐기 판정은 [`UnusedSlotTracker`]에 위임한다 — 연속 `GRACE` 프레임
+    /// 폐기 판정은 [`UnusedSlotTracker`]에 위임한다 — 연속 `GRACE` paint
     /// 미사용인 슬롯만 폐기하므로, 대사↔지문 교대(줄 단위 Name 블록 소멸)는
     /// 캐시를 유지하고 `show_name` off·notice 미표시 같은 진짜 미사용만
     /// 회수된다. 폐기 시 miss tracker의 ring/last_key도 함께 리셋해 판정

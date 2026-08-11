@@ -141,23 +141,24 @@ pub(super) struct MeasureCacheEntry {
     pub(super) height: f32,
 }
 
-/// prune 유예 기간 판정을 위한 슬롯별 연속 미사용 프레임 추적기.
+/// prune 유예 기간 판정을 위한 슬롯별 연속 미사용 paint 추적기.
 ///
 /// `D2DRenderer` 밖의 순수 상태로 분리해 유예 로직을 단위 테스트로 고정한다.
-/// Name 블록은 줄 단위로 사라질 수 있으므로(구분자 없는 지문) 프레임 단위
-/// 즉시 폐기는 대사↔지문 교대에서 캐시를 매번 파괴한다. 연속 `GRACE` 프레임
-/// 미사용인 슬롯만 폐기 대상으로 보고한다.
+/// Name 블록은 줄 단위로 사라질 수 있으므로(구분자 없는 지문) paint 단위
+/// 즉시 폐기는 대사↔지문 교대에서 캐시를 매번 파괴한다. 연속 `GRACE` paint
+/// 미사용인 슬롯만 폐기 대상으로 보고한다. 여기서 paint는 **성공한 paint
+/// 호출 1회**를 뜻한다 — 이 앱에는 렌더 루프가 없어 벽시계 시간과 무관하다.
 pub(super) struct UnusedSlotTracker {
-    frames: [u8; MeasureSlot::COUNT],
+    paints: [u8; MeasureSlot::COUNT],
 }
 
 impl UnusedSlotTracker {
-    /// 유예 프레임 수 — 이 이상 연속 미사용이면 폐기 대상.
+    /// 유예 paint 호출 수 — 이 이상 연속 미사용(성공한 paint)이면 폐기 대상.
     pub(super) const GRACE: u8 = 16;
 
     pub(super) fn new() -> Self {
         Self {
-            frames: [0; MeasureSlot::COUNT],
+            paints: [0; MeasureSlot::COUNT],
         }
     }
 
@@ -171,12 +172,12 @@ impl UnusedSlotTracker {
         let mut to_prune = [false; MeasureSlot::COUNT];
         for (slot, is_used) in MeasureSlot::ALL.into_iter().zip(used) {
             if is_used {
-                self.frames[slot as usize] = 0;
+                self.paints[slot as usize] = 0;
                 continue;
             }
-            self.frames[slot as usize] = self.frames[slot as usize].saturating_add(1);
-            if self.frames[slot as usize] >= Self::GRACE {
-                self.frames[slot as usize] = 0;
+            self.paints[slot as usize] = self.paints[slot as usize].saturating_add(1);
+            if self.paints[slot as usize] >= Self::GRACE {
+                self.paints[slot as usize] = 0;
                 to_prune[slot as usize] = true;
             }
         }

@@ -50,10 +50,22 @@ impl MeasureSlot {
 ///
 /// `MeasureSlot::ALL.into_iter().zip(used)`는 슬롯 순서를 배열 위치에
 /// 암묵 의존한다 — `ALL`을 재정렬하면 조용히 엉뚱한 슬롯을 폐기한다.
+/// variant를 추가했는데 `ALL`/`COUNT`를 갱신하지 않으면 배열이 예전 크기
+/// 그대로 컴파일되고, 새 슬롯이 쓰이는 순간 인덱스 초과 패닉이 난다 —
+/// 아래 exhaustive match가 variant 추가를 컴파일 에러로 승격한다.
 const _: () = {
     let mut index = 0;
     while index < MeasureSlot::COUNT {
         assert!(MeasureSlot::ALL[index] as usize == index);
         index += 1;
+    }
+    // variant를 추가하면 이 match가 깨진다 → `ALL`/`COUNT` 갱신을 강제한다.
+    const fn _exhaustive(slot: MeasureSlot) {
+        match slot {
+            MeasureSlot::Name
+            | MeasureSlot::Original
+            | MeasureSlot::Translation
+            | MeasureSlot::Notice => {}
+        }
     }
 };

@@ -357,12 +357,12 @@ fn unused_slot_tracker_prunes_after_grace_period_and_restarts() {
     let mut tracker = UnusedSlotTracker::new();
     let used = [true; MeasureSlot::COUNT];
 
-    // 연속 GRACE 프레임 미사용 → 폐기 대상 보고.
-    for frame in 0..UnusedSlotTracker::GRACE {
+    // 연속 GRACE paint 미사용 → 폐기 대상 보고.
+    for paint in 0..UnusedSlotTracker::GRACE {
         let mut used = used;
         used[MeasureSlot::Translation as usize] = false;
         let to_prune = tracker.record(used);
-        if frame < UnusedSlotTracker::GRACE - 1 {
+        if paint < UnusedSlotTracker::GRACE - 1 {
             assert!(!to_prune[MeasureSlot::Translation as usize]);
         } else {
             assert!(to_prune[MeasureSlot::Translation as usize]);
@@ -381,12 +381,12 @@ fn unused_slot_tracker_slots_are_independent() {
 
     // Notice만 장기 미사용(show notice off 후) — 유예 주기 동안 Name은
     // 계속 사용되어 폐기 대상이 되지 않는다.
-    for frame in 0..UnusedSlotTracker::GRACE {
+    for paint in 0..UnusedSlotTracker::GRACE {
         let mut used = used;
         used[MeasureSlot::Notice as usize] = false;
         let to_prune = tracker.record(used);
         assert!(!to_prune[MeasureSlot::Name as usize]);
-        if frame == UnusedSlotTracker::GRACE - 1 {
+        if paint == UnusedSlotTracker::GRACE - 1 {
             assert!(to_prune[MeasureSlot::Notice as usize]);
         } else {
             assert!(!to_prune[MeasureSlot::Notice as usize]);
