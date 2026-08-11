@@ -68,9 +68,6 @@ impl EzTransProcessPool {
         let process_count =
             crate::config::limits::eztrans_process_count_usize(config.process_count);
         let (ready_sender, ready_receiver) = mpsc::channel();
-        // EHND 초기화는 여러 프로세스에서도 DAT 내부의 공유 파일을 동시에 만질 수 있다.
-        // 프로세스는 병렬 실행하되 초기화 구간만 직렬화해 간헐적 시작 실패를 막는다.
-        let initialization_gate = Arc::new(Mutex::new(()));
         let mut workers = Vec::with_capacity(process_count);
         let mut joins = Vec::with_capacity(process_count);
 
@@ -78,12 +75,9 @@ impl EzTransProcessPool {
             let (sender, receiver) = mpsc::channel();
             let ready = ready_sender.clone();
             let worker_config = config.clone();
-            let worker_initialization_gate = initialization_gate.clone();
             let join = std::thread::Builder::new()
                 .name(format!("anemone-eztrans-process-{index}"))
-                .spawn(move || {
-                    worker_loop(worker_config, receiver, ready, worker_initialization_gate)
-                })
+                .spawn(move || worker_loop(worker_config, receiver, ready))
                 .map_err(|error| format!("EzTrans helper 관리 스레드 시작 실패: {error}"))?;
             workers.push(sender);
             joins.push(join);
@@ -204,9 +198,11 @@ fn worker_loop(
     config: EzTransProcessConfig,
     receiver: mpsc::Receiver<PoolCommand>,
     ready: mpsc::Sender<Result<(), String>>,
-    initialization_gate: Arc<Mutex<()>>,
 ) {
-    let initialized = initialization_gate
+    // EHND 초기화는 여러 프로세스에서도 DAT 내부의 공유 파일을 동시에 만질 수 있다.
+    // 프로세스는 병렬 실행하되 초기화 구간만 전역 게이트(GUI actor와 공유)로
+    // 직렬화해 간헐적 시작 실패를 막는다.
+    let initialized = super::eztrans_actor::eztrans_initialization_gate()
         .lock()
         .map_err(|_| "EzTrans helper 초기화 잠금이 손상되었습니다".to_string())
         .and_then(|_guard| WorkerClient::spawn(&config));

@@ -1,6 +1,17 @@
 use super::{EzTransTranslator, Language, TranslationError, TranslationResult};
 use std::path::Path;
-use std::sync::{OnceLock, mpsc};
+use std::sync::{Mutex, OnceLock, mpsc};
+
+/// EHND/DAT 초기화는 프로세스 경계를 넘어 공유 파일을 만진다. GUI in-process
+/// 로드(`EzTransState::init`)와 파일 번역 helper 프로세스 풀
+/// (`eztrans_process::worker_loop`)이 동시에 초기화하면 간헐적 시작 실패가
+/// 난다 — 초기화 구간을 프로세스 전역으로 직렬화한다.
+static EZTRANS_INITIALIZATION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// GUI actor와 파일 번역 풀이 함께 쓰는 전역 초기화 직렬화 게이트.
+pub(super) fn eztrans_initialization_gate() -> &'static Mutex<()> {
+    EZTRANS_INITIALIZATION_GATE.get_or_init(|| Mutex::new(()))
+}
 
 /// 무거운 32-bit EzTrans DLL 인스턴스를 하나만 유지하는 전역 관리자.
 struct EzTransState {
@@ -30,6 +41,10 @@ impl EzTransState {
             self.loaded_paths = None;
             self.registered_dll_dir = None;
         }
+        // 풀 초기화와 DAT 공유 파일 경합을 막기 위해 전역 게이트 아래에서만 로드한다.
+        let _gate = eztrans_initialization_gate()
+            .lock()
+            .map_err(|_| "EzTrans 초기화 잠금이 손상되었습니다".to_string())?;
         let directory = RegisteredDllDirectory::register(dll_path)?;
         let engine = EzTransTranslator::new(dll_path, dat_path)?;
         self.registered_dll_dir = Some(directory);
