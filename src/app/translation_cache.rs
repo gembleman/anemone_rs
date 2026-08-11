@@ -85,11 +85,18 @@ impl TranslationCacheStore {
     /// 만료(TTL 초과) 항목과 행 수 상한 초과분을 삭제한다.
     /// get 지연과 clear() 프리즈의 근원인 무한 누적을 막는 유일한 회수 경로다.
     fn prune(&self) {
+        self.prune_at(Self::now_secs());
+    }
+
+    /// `prune`의 본체. 기준 시각을 인자로 받아 TTL 경계 테스트가 저장소와
+    /// 동일한 `now`를 공유할 수 있게 한다 — 각자 `now_secs()`를 부르면 그 사이
+    /// 초 경계를 넘길 때 경계 판정이 1초 밀려 테스트가 간헐적으로 깨진다.
+    fn prune_at(&self, now: i64) {
         let Some(conn) = self.conn.as_ref() else {
             return;
         };
         let conn = conn.borrow();
-        let cutoff = Self::now_secs() - CACHE_TTL_SECS;
+        let cutoff = now - CACHE_TTL_SECS;
         match conn.execute("DELETE FROM translation_cache WHERE updated_at < ?1", [cutoff]) {
             Ok(removed) if removed > 0 => {
                 tracing::debug!(removed, "translation cache TTL prune");

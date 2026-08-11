@@ -248,8 +248,11 @@ fn prune_ttl_boundary_is_inclusive_of_cutoff() {
     let just_expired = sample_key("just_expired");
     store.put(&just_expired, "v");
 
+    // prune과 동일한 `now`를 공유한다. 각자 now_secs()를 부르면 두 호출 사이에
+    // 초 경계를 넘길 때 prune 쪽 cutoff만 1초 커져 at_cutoff 행이 삭제된다.
+    let now = TranslationCacheStore::now_secs();
     let raw = rusqlite::Connection::open(&path).unwrap();
-    let cutoff = TranslationCacheStore::now_secs() - super::CACHE_TTL_SECS;
+    let cutoff = now - super::CACHE_TTL_SECS;
     raw.execute(
         "UPDATE translation_cache SET updated_at = ?1 WHERE original = 'at_cutoff'",
         [cutoff],
@@ -261,7 +264,7 @@ fn prune_ttl_boundary_is_inclusive_of_cutoff() {
     )
     .unwrap();
 
-    store.prune();
+    store.prune_at(now);
 
     assert!(
         store.get(&at_cutoff).is_some(),
