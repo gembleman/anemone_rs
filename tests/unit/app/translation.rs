@@ -4,11 +4,23 @@ use std::sync::{Arc, Mutex};
 use super::*;
 
 #[test]
-fn debounce_is_scoped_to_llm_requests() {
+fn debounce_covers_paid_engines_and_llm() {
     assert_eq!(debounce_delay_ms(TranslationEngine::Llm, 300), 300);
     assert_eq!(debounce_delay_ms(TranslationEngine::Llm, 0), 0);
-    assert_eq!(debounce_delay_ms(TranslationEngine::Google, 300), 0);
+    assert_eq!(
+        debounce_delay_ms(TranslationEngine::Google, 300),
+        PAID_ENGINE_DEBOUNCE_MS
+    );
+    assert_eq!(
+        debounce_delay_ms(TranslationEngine::DeepL, 300),
+        PAID_ENGINE_DEBOUNCE_MS
+    );
+    assert_eq!(
+        debounce_delay_ms(TranslationEngine::Papago, 300),
+        PAID_ENGINE_DEBOUNCE_MS
+    );
     assert_eq!(debounce_delay_ms(TranslationEngine::EzTrans, 300), 0);
+    assert_eq!(debounce_delay_ms(TranslationEngine::Custom, 300), 0);
 }
 
 #[derive(Clone)]

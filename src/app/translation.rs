@@ -5,11 +5,19 @@ use super::{App, state};
 use crate::clipboard::ClipboardUpdate;
 use crate::translation::TranslationEngine;
 
+/// 유료 HTTP 엔진(Google/DeepL/Papago)의 클립보드 연속 변경 코얼레싱 지연.
+/// LLM은 설정값을 따르고, 로컬 무료인 EzTrans는 즉시 번역을 유지한다. 유료
+/// 엔진은 클립보드가 연속 변경되면 취소될 요청도 이미 발신되어 과금되므로,
+/// 짧은 디바운스로 발신 자체를 막는다.
+const PAID_ENGINE_DEBOUNCE_MS: u32 = 150;
+
 fn debounce_delay_ms(engine: TranslationEngine, configured_ms: u32) -> u32 {
-    if engine == TranslationEngine::Llm {
-        configured_ms
-    } else {
-        0
+    match engine {
+        TranslationEngine::Llm => configured_ms,
+        TranslationEngine::Google | TranslationEngine::DeepL | TranslationEngine::Papago => {
+            PAID_ENGINE_DEBOUNCE_MS
+        }
+        TranslationEngine::EzTrans | TranslationEngine::Custom => 0,
     }
 }
 
