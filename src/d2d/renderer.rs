@@ -35,7 +35,7 @@ pub struct D2DRenderer {
     /// 유형별 `WM_NCHITTEST`용 줄별 사각형 cache.
     pub(super) hit_test_cache: [Option<HitTestCache>; MeasureSlot::COUNT],
     /// 슬롯별 연속 미사용 프레임 수 — prune 유예 기간 판정에 쓴다.
-    unused_frames: [u8; MeasureSlot::COUNT],
+    unused_frames: UnusedSlotTracker,
     /// 캐시 miss 비율 추적 — 폭주 시 비트맵 경로 우회.
     pub(super) miss_tracker: MissTracker,
     /// `measure_text_height` 결과 cache (유형별 direct-mapped).
@@ -76,7 +76,7 @@ impl D2DRenderer {
                 measure_cache: MeasureCache::new(),
                 outline_bitmap: [const { None }; MeasureSlot::COUNT],
                 hit_test_cache: [const { None }; MeasureSlot::COUNT],
-                unused_frames: [0; MeasureSlot::COUNT],
+                unused_frames: UnusedSlotTracker::new(),
                 miss_tracker: MissTracker::new(),
             })
         }
@@ -228,29 +228,24 @@ impl D2DRenderer {
         self.measure_cache = MeasureCache::new();
         self.outline_bitmap = [const { None }; MeasureSlot::COUNT];
         self.hit_test_cache = [const { None }; MeasureSlot::COUNT];
-        self.unused_frames = [0; MeasureSlot::COUNT];
+        self.unused_frames = UnusedSlotTracker::new();
         // 추적 상태도 함께 초기화한다.
         self.miss_tracker = MissTracker::new();
     }
 
     /// 이번 paint에서 사용된 슬롯 밖의 장치 종속 캐시를 정리한다.
     ///
-    /// Name 블록은 설정이 아니라 줄 단위로 사라질 수 있으므로(구분자 없는
-    /// 지문), 프레임 단위 즉시 폐기는 대사↔지문 교대에서 캐시를 매번 파괴한다.
-    /// 연속 `GRACE` 프레임 동안 미사용인 슬롯만 폐기하고, 폐기 시 miss
-    /// tracker의 ring/last_key도 함께 리셋해 판정 근거와 캐시 상태가
-    /// 어긋나지 않게 한다. 표시가 꺼진 슬롯(`show_name` off, notice 미표시)은
-    /// 여전히 회수된다.
+    /// 폐기 판정은 [`UnusedSlotTracker`]에 위임한다 — 연속 `GRACE` 프레임
+    /// 미사용인 슬롯만 폐기하므로, 대사↔지문 교대(줄 단위 Name 블록 소멸)는
+    /// 캐시를 유지하고 `show_name` off·notice 미표시 같은 진짜 미사용만
+    /// 회수된다. 폐기 시 miss tracker의 ring/last_key도 함께 리셋해 판정
+    /// 근거와 캐시 상태가 어긋나지 않게 한다.
     pub fn prune_unused_slots(&mut self, used: [bool; MeasureSlot::COUNT]) {
-        const GRACE: u8 = 16;
-        for (slot, is_used) in MeasureSlot::ALL.into_iter().zip(used) {
-            if is_used {
-                self.unused_frames[slot as usize] = 0;
-                continue;
-            }
-            self.unused_frames[slot as usize] =
-                self.unused_frames[slot as usize].saturating_add(1);
-            if self.unused_frames[slot as usize] >= GRACE {
+        for (slot, to_prune) in MeasureSlot::ALL
+            .into_iter()
+            .zip(self.unused_frames.record(used))
+        {
+            if to_prune {
                 self.outline_bitmap[slot as usize] = None;
                 self.text_cache[slot as usize] = None;
                 self.hit_test_cache[slot as usize] = None;

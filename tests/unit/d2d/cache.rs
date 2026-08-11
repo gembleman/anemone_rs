@@ -320,6 +320,68 @@ fn miss_tracker_overload_state_is_independent_per_slot() {
 }
 
 #[test]
+fn unused_slot_tracker_keeps_cache_through_short_unused_span() {
+    let mut tracker = UnusedSlotTracker::new();
+    let mut used = [true; MeasureSlot::COUNT];
+
+    // 대사↔지문 교대: Name이 몇 paint 동안만 빠졌다가 돌아온다.
+    for _ in 0..(UnusedSlotTracker::GRACE - 1) {
+        used[MeasureSlot::Name as usize] = false;
+        let to_prune = tracker.record(used);
+        assert!(
+            !to_prune[MeasureSlot::Name as usize],
+            "unused span within grace must keep the cache"
+        );
+        used[MeasureSlot::Name as usize] = true;
+    }
+    // 사용된 프레임이 카운터를 리셋했으므로 여전히 폐기 대상이 아니다.
+    let to_prune = tracker.record(used);
+    assert!(!to_prune[MeasureSlot::Name as usize]);
+}
+
+#[test]
+fn unused_slot_tracker_prunes_after_grace_period_and_restarts() {
+    let mut tracker = UnusedSlotTracker::new();
+    let used = [true; MeasureSlot::COUNT];
+
+    // 연속 GRACE 프레임 미사용 → 폐기 대상 보고.
+    for frame in 0..UnusedSlotTracker::GRACE {
+        let mut used = used;
+        used[MeasureSlot::Translation as usize] = false;
+        let to_prune = tracker.record(used);
+        if frame < UnusedSlotTracker::GRACE - 1 {
+            assert!(!to_prune[MeasureSlot::Translation as usize]);
+        } else {
+            assert!(to_prune[MeasureSlot::Translation as usize]);
+        }
+    }
+    // 폐기 보고 후 카운터가 리셋되어 다음 유예 주기가 시작된다.
+    let mut used = used;
+    used[MeasureSlot::Translation as usize] = false;
+    assert!(!tracker.record(used)[MeasureSlot::Translation as usize]);
+}
+
+#[test]
+fn unused_slot_tracker_slots_are_independent() {
+    let mut tracker = UnusedSlotTracker::new();
+    let used = [true; MeasureSlot::COUNT];
+
+    // Notice만 장기 미사용(show notice off 후) — 유예 주기 동안 Name은
+    // 계속 사용되어 폐기 대상이 되지 않는다.
+    for frame in 0..UnusedSlotTracker::GRACE {
+        let mut used = used;
+        used[MeasureSlot::Notice as usize] = false;
+        let to_prune = tracker.record(used);
+        assert!(!to_prune[MeasureSlot::Name as usize]);
+        if frame == UnusedSlotTracker::GRACE - 1 {
+            assert!(to_prune[MeasureSlot::Notice as usize]);
+        } else {
+            assert!(!to_prune[MeasureSlot::Notice as usize]);
+        }
+    }
+}
+
+#[test]
 fn miss_tracker_reset_clears_ring_filled_and_last_key() {
     let base = style();
     let mut tracker = MissTracker::new();

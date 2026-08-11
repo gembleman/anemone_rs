@@ -141,6 +141,49 @@ pub(super) struct MeasureCacheEntry {
     pub(super) height: f32,
 }
 
+/// prune 유예 기간 판정을 위한 슬롯별 연속 미사용 프레임 추적기.
+///
+/// `D2DRenderer` 밖의 순수 상태로 분리해 유예 로직을 단위 테스트로 고정한다.
+/// Name 블록은 줄 단위로 사라질 수 있으므로(구분자 없는 지문) 프레임 단위
+/// 즉시 폐기는 대사↔지문 교대에서 캐시를 매번 파괴한다. 연속 `GRACE` 프레임
+/// 미사용인 슬롯만 폐기 대상으로 보고한다.
+pub(super) struct UnusedSlotTracker {
+    frames: [u8; MeasureSlot::COUNT],
+}
+
+impl UnusedSlotTracker {
+    /// 유예 프레임 수 — 이 이상 연속 미사용이면 폐기 대상.
+    pub(super) const GRACE: u8 = 16;
+
+    pub(super) fn new() -> Self {
+        Self {
+            frames: [0; MeasureSlot::COUNT],
+        }
+    }
+
+    /// 이번 paint의 슬롯 사용 여부를 반영하고, 폐기 대상 슬롯 집합을 반환한다.
+    ///
+    /// 사용된 슬롯은 카운터를 리셋하고, 미사용 슬롯은 증가시킨다. `GRACE`
+    /// 도달 시 해당 슬롯을 폐기 대상으로 보고하고 카운터를 리셋해 다음
+    /// 유예 주기를 시작한다. 반환된 `to_prune`에서만 캐시·추적 상태를
+    /// 폐기하면 판정 근거와 캐시 상태가 어긋나지 않는다.
+    pub(super) fn record(&mut self, used: [bool; MeasureSlot::COUNT]) -> [bool; MeasureSlot::COUNT] {
+        let mut to_prune = [false; MeasureSlot::COUNT];
+        for (slot, is_used) in MeasureSlot::ALL.into_iter().zip(used) {
+            if is_used {
+                self.frames[slot as usize] = 0;
+                continue;
+            }
+            self.frames[slot as usize] = self.frames[slot as usize].saturating_add(1);
+            if self.frames[slot as usize] >= Self::GRACE {
+                self.frames[slot as usize] = 0;
+                to_prune[slot as usize] = true;
+            }
+        }
+        to_prune
+    }
+}
+
 /// `measure_text_height` 결과 캐시 — 텍스트 유형별 direct-mapped 단일 엔트리.
 ///
 /// paint는 유형별로 최대 1블록만 측정하므로(이름·원문·번역·notice), 슬롯을
