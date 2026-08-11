@@ -8,6 +8,12 @@ pub use anemone_rs::file_trans::{
 };
 pub use anemone_rs::translation;
 
+#[path = "mem.rs"]
+mod mem;
+
+#[global_allocator]
+static ALLOCATOR: mem::CountingAllocator = mem::CountingAllocator;
+
 #[path = "file_trans/mod.rs"]
 mod benchmarks;
 

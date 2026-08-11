@@ -1,4 +1,7 @@
 mod app;
+#[cfg(feature = "benchmark")]
+#[path = "../benchmark/mem.rs"]
+pub mod bench_mem;
 mod cli;
 mod clipboard;
 mod config;

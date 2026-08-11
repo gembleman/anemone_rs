@@ -1,6 +1,7 @@
 use super::{
     BoundedTranslationCache, read_input_line, translate_eztrans_window, validate_and_count_reader,
 };
+use super::mem::MemSnapshot;
 use crate::translation::BenchmarkEzTransBatchTranslator as EzTransBatchTranslator;
 use std::fs::File;
 use std::io::BufReader;
@@ -64,7 +65,8 @@ fn large_fixture_streams_in_bounded_windows_and_translates_each_unique_line_once
         .join("benchmark")
         .join("large_japanese_translation_sample.txt");
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    let reader = BufReader::new(File::open(&path).unwrap());
+    // 실제 번역 경로(input.rs)와 같은 256KB 버퍼로 재현한다.
+    let reader = BufReader::with_capacity(256 * 1024, File::open(&path).unwrap());
     assert_eq!(
         validate_and_count_reader(reader, &path, &cancel).unwrap(),
         200_000
@@ -76,9 +78,10 @@ fn large_fixture_streams_in_bounded_windows_and_translates_each_unique_line_once
     };
     let job = eztrans_job();
     let mut cache = BoundedTranslationCache::new(100_000);
-    let mut reader = BufReader::new(File::open(&path).unwrap());
+    let mut reader = BufReader::with_capacity(256 * 1024, File::open(&path).unwrap());
     let mut first_line = true;
     let mut processed = 0usize;
+    let mem_before = MemSnapshot::now();
     loop {
         let mut window = Vec::with_capacity(50_000);
         while window.len() < 50_000 {
@@ -96,6 +99,10 @@ fn large_fixture_streams_in_bounded_windows_and_translates_each_unique_line_once
         assert_eq!(translated[0], format!("번역:{}", window[0].text));
         processed += translated.len();
     }
+    MemSnapshot::now().delta(mem_before).report_per(
+        "window-200k (read+translate+cache)",
+        200_000,
+    );
 
     assert_eq!(processed, 200_000);
     assert_eq!(translator.translated_lines.load(Ordering::Relaxed), 10_000);

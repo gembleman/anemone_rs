@@ -1,4 +1,5 @@
 use super::{FileTransJobData, FileTransTask, FileTranslationSupervisor, ProgressEvent, WriteType};
+use super::mem::MemSnapshot;
 use crate::translation::{Language, PreparedJob};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -53,9 +54,15 @@ fn receive_through_terminal(task: &FileTransTask) -> Vec<ProgressEvent> {
     }
 }
 
+/// EzTrans DLL 벤치 테스트는 병렬 실행 시 공유 DLL 상태가 서로 충돌해 랜덤
+/// 실패한다(변경 전 상태에서 재현 확인). 실제 사용 경로인 전체 파이프라인
+/// 테스트 2건이 lock을 공유해 순차로 돌게 한다.
+static EZTRANS_BENCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 #[ignore = "benchmark that translates all 1,000 sample lines with bundled EzTrans"]
 fn translates_japanese_translation_sample_with_eztrans() {
+    let _guard = EZTRANS_BENCH_LOCK.lock().unwrap();
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let input = project_root
         .join("benchmark")
@@ -110,6 +117,7 @@ fn translates_japanese_translation_sample_with_eztrans() {
 #[test]
 #[ignore = "performance benchmark that uses the bundled EzTrans DLL"]
 fn measures_repeated_and_unique_sample_translation_performance() {
+    let _guard = EZTRANS_BENCH_LOCK.lock().unwrap();
     assert!(
         !std::hint::black_box(cfg!(debug_assertions)),
         "performance measurements must run with cargo test --release"
@@ -144,10 +152,15 @@ fn measures_repeated_and_unique_sample_translation_performance() {
         .unwrap();
 
         let started = Instant::now();
+        let mem_before = MemSnapshot::now();
         let supervisor = FileTranslationSupervisor::new();
         let task = supervisor.start(sample_job).unwrap();
         let events = receive_through_terminal(&task);
         let elapsed = started.elapsed();
+        MemSnapshot::now().delta(mem_before).report_per(
+            &format!("eztrans-{label}"),
+            expected_lines,
+        );
 
         assert!(matches!(
             events.last(),
