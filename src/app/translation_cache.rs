@@ -2,11 +2,19 @@
 //!
 //! Win32 UI와 독립적이며, 동일 (엔진, 언어쌍, 원문) 조합의 조회 결과를 재사용한다.
 
+use std::cell::Cell;
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::translation::CacheKey;
+
+/// updated_at 기준 보존 기간. 이보다 오래된 항목은 prune에서 삭제된다.
+const CACHE_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+/// 최대 캐시 행 수. 초과분은 updated_at 오래된 순(LRU)으로 삭제된다.
+const CACHE_MAX_ROWS: i64 = 10_000;
+/// put N회마다 prune을 실행한다. put 경로마다 실행할 필요는 없다.
+const PUTS_PER_PRUNE: u64 = 100;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
@@ -19,16 +27,70 @@ pub enum CacheError {
 /// 클립보드 번역 이력을 영속 저장하고, 동일 요청에 대해 캐시 히트를 제공한다.
 pub struct TranslationCacheStore {
     conn: Option<Connection>,
+    puts_since_prune: Cell<u64>,
 }
 
 impl TranslationCacheStore {
     /// 연결 실패 시에도 앱이 캐시 없이 계속 동작하도록 `None`을 담은 채로 반환한다.
+    /// 앱 시작 시 만료/상한 초과 항목을 1회 정리한다.
     pub fn open(path: &Path) -> Self {
         match Self::open_inner(path) {
-            Ok(conn) => Self { conn: Some(conn) },
+            Ok(conn) => {
+                let store = Self {
+                    conn: Some(conn),
+                    puts_since_prune: Cell::new(0),
+                };
+                store.prune();
+                store
+            }
             Err(error) => {
                 tracing::warn!("번역 캐시를 열 수 없어 캐싱 없이 진행합니다: {error}");
-                Self { conn: None }
+                Self {
+                    conn: None,
+                    puts_since_prune: Cell::new(0),
+                }
+            }
+        }
+    }
+
+    fn now_secs() -> i64 {
+        time::OffsetDateTime::now_utc().unix_timestamp()
+    }
+
+    /// 만료(TTL 초과) 항목과 행 수 상한 초과분을 삭제한다.
+    /// get 지연과 clear() 프리즈의 근원인 무한 누적을 막는 유일한 회수 경로다.
+    fn prune(&self) {
+        let Some(conn) = self.conn.as_ref() else {
+            return;
+        };
+        let cutoff = Self::now_secs() - CACHE_TTL_SECS;
+        match conn.execute("DELETE FROM translation_cache WHERE updated_at < ?1", [cutoff]) {
+            Ok(removed) if removed > 0 => {
+                tracing::debug!(removed, "translation cache TTL prune");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!("번역 캐시 TTL 정리 실패: {error}");
+                return;
+            }
+        }
+        // 상한 초과분은 최신 updated_at 기준 상위 N개만 남기고 나머지를 삭제한다.
+        match conn.execute(
+            "DELETE FROM translation_cache
+             WHERE (engine_id, source_lang, target_lang, original) NOT IN (
+                 SELECT engine_id, source_lang, target_lang, original
+                 FROM translation_cache
+                 ORDER BY updated_at DESC
+                 LIMIT ?1
+             )",
+            [CACHE_MAX_ROWS],
+        ) {
+            Ok(removed) if removed > 0 => {
+                tracing::debug!(removed, "translation cache cap prune");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!("번역 캐시 상한 정리 실패: {error}");
             }
         }
     }
@@ -88,7 +150,7 @@ impl TranslationCacheStore {
         let Some(conn) = self.conn.as_ref() else {
             return;
         };
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let now = Self::now_secs();
         let result = conn.execute(
             "INSERT INTO translation_cache (engine_id, source_lang, target_lang, original, translation, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -105,11 +167,21 @@ impl TranslationCacheStore {
         );
         if let Err(error) = result {
             tracing::warn!("번역 캐시 저장 실패: {error}");
+            return;
+        }
+        // put 경로마다 prune하지 않고 N회마다 한 번만 실행한다.
+        let puts = self.puts_since_prune.get() + 1;
+        if puts >= PUTS_PER_PRUNE {
+            self.puts_since_prune.set(0);
+            self.prune();
+        } else {
+            self.puts_since_prune.set(puts);
         }
     }
 
     /// 캐시에 저장된 모든 항목을 비운다.
     pub fn clear(&self) {
+        self.puts_since_prune.set(0);
         let Some(conn) = self.conn.as_ref() else {
             return;
         };
