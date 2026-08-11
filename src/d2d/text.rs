@@ -13,8 +13,8 @@ use windows_numerics::{Matrix3x2, Vector2};
 use super::{
     TextBox,
     cache::{
-        EffectiveOutlineStyle, HitTestCache, HitTestKeyRef, OutlineBitmap, OutlineBitmapKey,
-        OutlineBitmapKeyRef,
+        EffectiveOutlineStyle, HitTestCache, HitTestKeyRef, MeasureCache, MeasureKeyRef,
+        OutlineBitmap, OutlineBitmapKey, OutlineBitmapKeyRef,
     },
     color::argb_to_color_f,
     renderer::D2DRenderer,
@@ -64,20 +64,36 @@ fn compute_outline_bitmap_bounds(
 impl D2DRenderer {
     /// 주어진 폭에서 DirectWrite가 계산한 실제 시각적 줄 높이를 반환한다.
     /// 명시적 개행 수가 아니라 layout metrics를 사용하므로 자동 줄바꿈도 포함한다.
+    ///
+    /// 결과는 단일 슬롯 캐시에 보관한다. 텍스트·폭·폰트가 불변인 한 동일
+    /// measure는 재현될 수 없으므로, paint마다 `CreateTextFormat`(글꼴 로딩 포함)
+    /// 과 `CreateTextLayout`(폴백 분석)을 다시 만들지 않는다. 캐시는
+    /// `invalidate_device_caches`(장치 손실·DPI 변경)에서 폐기된다.
     pub fn measure_text_height(
-        &self,
+        &mut self,
         text: &str,
         style: &TextRenderStyle,
         max_width: f32,
     ) -> Result<f32> {
         const MEASURE_MAX_HEIGHT: f32 = 1_000_000.0;
+        let key_ref = MeasureKeyRef::from_style(text, style, max_width);
+        if let Some(c) = &self.measure_cache
+            && key_ref.matches(&c.key)
+        {
+            return Ok(c.height);
+        }
         let layout =
             self.create_text_layout_uncached(text, style, max_width, MEASURE_MAX_HEIGHT)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
         unsafe {
             layout.GetMetrics(&mut metrics)?;
         }
-        Ok(metrics.height.max(style.font_size.max(1) as f32))
+        let height = metrics.height.max(style.font_size.max(1) as f32);
+        self.measure_cache = Some(MeasureCache {
+            key: key_ref.to_owned(),
+            height,
+        });
+        Ok(height)
     }
 
     /// 활성 render target에 본문과 cache된 outline/shadow를 그린다.

@@ -42,6 +42,43 @@ fn paint_only_colors_do_not_invalidate_layout_key() {
 }
 
 #[test]
+fn measure_key_ignores_max_height_and_paint_only_colors() {
+    let base = style();
+    let key = MeasureKeyRef::from_style("text", &base, 100.0).to_owned();
+
+    // measure는 항상 같은 높이 상한을 쓰므로 max_height는 키 변별력이 없다.
+    assert!(MeasureKeyRef::from_style("text", &base, 100.0).matches(&key));
+    // 색상·외곽선·그림자는 layout metrics 높이에 영향이 없다.
+    let mut changed = base.clone();
+    changed.color ^= u32::MAX;
+    changed.outline1_color ^= u32::MAX;
+    changed.shadow_color ^= u32::MAX;
+    changed.outline1_size = 3;
+    changed.shadow_enabled = true;
+    assert!(MeasureKeyRef::from_style("text", &changed, 100.0).matches(&key));
+}
+
+#[test]
+fn measure_key_tracks_text_font_and_width() {
+    let base = style();
+    let key = MeasureKeyRef::from_style("text", &base, 100.0).to_owned();
+
+    let mut changed = base.clone();
+    changed.font_size = 30;
+    assert!(!MeasureKeyRef::from_style("text", &changed, 100.0).matches(&key));
+
+    let mut changed = base.clone();
+    changed.font_style = 1;
+    assert!(!MeasureKeyRef::from_style("text", &changed, 100.0).matches(&key));
+
+    let mut changed = base;
+    changed.text_align = TextAlign::Center;
+    assert!(!MeasureKeyRef::from_style("text", &changed, 100.0).matches(&key));
+    assert!(!MeasureKeyRef::from_style("other", &changed, 100.0).matches(&key));
+    assert!(!MeasureKeyRef::from_style("text", &changed, 80.0).matches(&key));
+}
+
+#[test]
 fn inactive_effect_values_do_not_invalidate_bitmap_key() {
     let base = style();
     let key = OutlineBitmapKeyRef::from_style("text", &base, 100.0, 50.0).to_owned();
