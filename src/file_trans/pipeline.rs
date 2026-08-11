@@ -1,5 +1,6 @@
 //! 파일과 줄 처리 흐름 및 번역 backend 연결.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -27,6 +28,14 @@ const PROGRESS_REPORT_INTERVAL: usize = 256;
 /// non-blocking(HTTP) 엔진의 파일 번역 최대 in-flight 요청 수.
 /// GUI 워커는 4로 제한하는데, 파일 번역은 워커와 독립된 자체 게이트를 사용한다.
 const FILE_HTTP_CONCURRENCY: usize = 8;
+/// non-blocking(HTTP) 엔진의 파일 번역 배치 크기(줄 단위).
+/// EzTrans처럼 서버 창(window) 개념이 없어 줄 수 자체에는 제한이 없지만, 배치가
+/// 너무 작으면(예: 이전처럼 1줄) FILE_HTTP_CONCURRENCY로 올린 JoinSet 동시성이
+/// 전혀 발휘되지 못한다. 반대로 너무 크게 잡으면 진행률 보고가 배치 완료
+/// 시점에 몰리는데, PROGRESS_REPORT_INTERVAL(256)과 너무 가까우면 진행률 바가
+/// 뚝뚝 끊긴다. 상시 FILE_HTTP_CONCURRENCY개를 in-flight로 유지하기에 충분하면서도
+/// PROGRESS_REPORT_INTERVAL보다 한참 작은 동시성의 4배(32)로 잡는다.
+const FILE_HTTP_BATCH_LINES: usize = FILE_HTTP_CONCURRENCY * 4;
 
 #[derive(Clone)]
 pub(super) struct FilePipelineServices {
@@ -100,6 +109,10 @@ fn run_inner(
     let translation = TranslationContext {
         runtime: &runtime,
         http_client: &services.http_client,
+        // 배치(process_single_file 호출)마다 새로 만들지 않고 작업(job) 전체에서
+        // 공유한다 — 배치 경계마다 세마포어가 새로 생기면 그 순간 in-flight가
+        // 0으로 떨어져 전역 상한이 아니라 배치 내부 상한이 돼버린다.
+        http_concurrency: Arc::new(tokio::sync::Semaphore::new(FILE_HTTP_CONCURRENCY)),
     };
 
     let file_line_counts = preflight_inputs(&job_data.input_files, &job_data.cancel_token)?;
@@ -167,6 +180,10 @@ fn run_inner(
 pub struct TranslationContext<'a> {
     runtime: &'a tokio::runtime::Runtime,
     http_client: &'a reqwest::Client,
+    /// non-blocking 엔진 요청의 in-flight 상한 게이트. `translate_lines` 호출(배치)
+    /// 마다 새로 만들지 않고 이 컨텍스트 수명(=파일 번역 작업 전체) 동안 공유해야
+    /// 실제로 전역 상한으로 동작한다.
+    http_concurrency: Arc<tokio::sync::Semaphore>,
 }
 
 impl<'a> TranslationContext<'a> {
@@ -175,6 +192,7 @@ impl<'a> TranslationContext<'a> {
         Self {
             runtime,
             http_client,
+            http_concurrency: Arc::new(tokio::sync::Semaphore::new(FILE_HTTP_CONCURRENCY)),
         }
     }
 }
@@ -213,11 +231,17 @@ fn process_single_file(
         while let Some(line) = next_line.take() {
             let blocking = job_data.translation.engine().is_blocking();
             if !blocking {
-                // non-blocking 엔진은 창 배치가 없어 항상 1줄 단위다 —
-                // separator/window char 카운트 없이 바로 넘긴다.
+                // non-blocking 엔진은 EzTrans 같은 서버 창(window) 개념이 없어
+                // separator/window char 카운트는 필요 없다. 다만 JoinSet 동시성이
+                // 실제로 발휘되려면 여러 줄을 모아 한 번에 translate_lines로 넘겨야
+                // 하므로, FILE_HTTP_BATCH_LINES에 도달하거나 파일 끝(next_line이
+                // None)에 도달할 때까지 계속 모은다.
                 lines.push(line);
                 next_line = read_input_line(&mut reader, input_path, false)?;
-                break;
+                if lines.len() >= FILE_HTTP_BATCH_LINES {
+                    break;
+                }
+                continue;
             }
 
             let separator_chars = usize::from(!lines.is_empty());
@@ -273,6 +297,15 @@ fn process_single_file(
                 report(ProgressEvent::FileProgress(line_index as i32));
                 report(ProgressEvent::TotalProgress(*global_current));
             }
+
+            // 배치 하나에 여러 줄이 모여도(non-blocking 배치, EzTrans 창) 취소
+            // 응답성은 줄 단위를 유지해야 한다. 배치 시작 전 한 번만 검사하면
+            // 배치가 커질수록 취소가 늦게 반영되고, 이미 번역된 나머지 줄까지
+            // 써버린 뒤 persist까지 끝나버릴 수 있다 — 여기서 즉시 끊어
+            // 남은 줄을 쓰지 않고 pending_output을 persist하지 않은 채 반환한다.
+            if job_data.cancel_token.load(Ordering::SeqCst) {
+                return Err(FileTranslationError::Cancelled);
+            }
         }
     }
 
@@ -294,12 +327,11 @@ fn translate_lines(
         return Ok(Vec::new());
     }
     let originals: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
-    let concurrency = std::sync::Arc::new(tokio::sync::Semaphore::new(FILE_HTTP_CONCURRENCY));
     translation.runtime.block_on(translate_lines_async(
         &originals,
         job_data,
         translation.http_client,
-        concurrency,
+        Arc::clone(&translation.http_concurrency),
     ))
 }
 
@@ -310,6 +342,10 @@ async fn translate_lines_async(
     concurrency: std::sync::Arc<tokio::sync::Semaphore>,
 ) -> Result<Vec<String>, FileTranslationError> {
     let mut tasks = tokio::task::JoinSet::new();
+    // JoinSet::join_next()의 Err(JoinError)는 어떤 태스크가 panic했는지 값으로
+    // 알려주지 않는다. spawn 시점에 발급되는 task::Id를 index로 되짚을 수 있게
+    // 맵으로 남겨 둔다 — panic한 줄을 조용히 원문으로 흘리지 않기 위해서다.
+    let mut task_indices: HashMap<tokio::task::Id, usize> = HashMap::new();
     for (index, &line) in lines.iter().enumerate() {
         if !should_translate_line(line, job_data.no_trans_linefeed) {
             continue;
@@ -319,29 +355,48 @@ async fn translate_lines_async(
         let task_cancel = Arc::clone(&job_data.cancel_token);
         let task_concurrency = Arc::clone(&concurrency);
         let text: Arc<str> = Arc::from(line);
-        tasks.spawn(async move {
+        let abort_handle = tasks.spawn(async move {
             (
                 index,
                 translate_line_task(text, task_job, task_client, task_cancel, task_concurrency).await,
             )
         });
+        task_indices.insert(abort_handle.id(), index);
     }
 
     let mut results: Vec<Option<String>> = vec![None; lines.len()];
     let outcome: Result<(), FileTranslationError> = tokio::select! {
         _ = wait_for_cancellation(&job_data.cancel_token) => Err(FileTranslationError::Cancelled),
         _ = async {
-            while let Some(joined) = tasks.join_next().await {
+            while let Some(joined) = tasks.join_next_with_id().await {
                 match joined {
-                    Ok((index, translated)) => results[index] = Some(translated),
+                    Ok((_, (index, translated))) => results[index] = Some(translated),
                     Err(join_error) => {
                         tracing::warn!("file translation task panicked: {join_error}");
+                        // should_translate_line이 false라 애초에 spawn하지 않은 줄은
+                        // task_indices에 없으므로 여기서 건드리지 않는다 — 그 경우
+                        // results[index]가 None으로 남아 원문 유지되는 것이 정상이다.
+                        // 반면 panic한 태스크는 반드시 실패 표식을 남겨야 한다: None을
+                        // 그대로 두면 최종 조립에서 원문으로 대체돼 "번역 실패"가 아니라
+                        // "번역 안 된 원문"이 조용히 출력된다.
+                        if let Some(&index) = task_indices.get(&join_error.id()) {
+                            results[index] = Some(format!("[번역 실패: 작업 패닉: {join_error}]"));
+                        }
                     }
                 }
             }
         } => Ok(()),
     };
     outcome?;
+
+    // 드레인 브랜치가 wait_for_cancellation(20ms 폴링)보다 먼저 끝나면 취소가
+    // 진행 중이어도 위 select 전체가 Ok(())로 빠질 수 있다. 그 사이 개별 태스크가
+    // 취소를 감지해 남긴 "[번역 실패: 취소됨]" 결과가 정상 번역인 것처럼
+    // write_output까지 흘러가지 않도록, 드레인이 끝난 뒤에도 취소 상태를 다시
+    // 확인해 취소면 결과를 버리고 명시적으로 실패시킨다.
+    if job_data.cancel_token.load(Ordering::SeqCst) {
+        return Err(FileTranslationError::Cancelled);
+    }
 
     Ok(results
         .into_iter()

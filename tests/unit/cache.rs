@@ -198,6 +198,85 @@ fn prune_caps_row_count_to_most_recent() {
 }
 
 #[test]
+fn ui_connection_has_busy_timeout_configured() {
+    // 결함 1 회귀: UI 스레드 연결에 busy_timeout이 없으면 백그라운드 VACUUM이
+    // write lock을 쥔 순간 get/put이 즉시 실패(캐시 미스로 위장)한다.
+    let path = temp_db_path();
+    let store = TranslationCacheStore::open(&path);
+
+    let conn = store.conn.as_ref().expect("연결이 열려 있어야 합니다").borrow();
+    let timeout_ms: i64 = conn
+        .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+        .unwrap();
+    assert_eq!(timeout_ms, UI_BUSY_TIMEOUT.as_millis() as i64);
+    drop(conn);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn updated_at_index_exists() {
+    // 결함 2 회귀: 인덱스가 없으면 TTL DELETE와 cap prune의 ORDER BY가 매번
+    // 풀스캔 + 전체 정렬로 빠진다.
+    let path = temp_db_path();
+    let store = TranslationCacheStore::open(&path);
+
+    let conn = store.conn.as_ref().expect("연결이 열려 있어야 합니다").borrow();
+    let index_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'index' AND name = 'idx_translation_cache_updated_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index_count, 1, "updated_at 인덱스가 생성되어 있어야 합니다");
+    drop(conn);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn prune_ttl_boundary_is_inclusive_of_cutoff() {
+    // 결함 2 회귀: cap prune을 rowid 기반으로 바꾼 뒤에도 TTL 경계(<) 동작은
+    // 그대로 유지되어야 한다 — cutoff와 정확히 같은 시각은 아직 만료 전이다.
+    let path = temp_db_path();
+    let store = TranslationCacheStore::open(&path);
+
+    let at_cutoff = sample_key("at_cutoff");
+    store.put(&at_cutoff, "v");
+    let just_expired = sample_key("just_expired");
+    store.put(&just_expired, "v");
+
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    let cutoff = TranslationCacheStore::now_secs() - super::CACHE_TTL_SECS;
+    raw.execute(
+        "UPDATE translation_cache SET updated_at = ?1 WHERE original = 'at_cutoff'",
+        [cutoff],
+    )
+    .unwrap();
+    raw.execute(
+        "UPDATE translation_cache SET updated_at = ?1 WHERE original = 'just_expired'",
+        [cutoff - 1],
+    )
+    .unwrap();
+
+    store.prune();
+
+    assert!(
+        store.get(&at_cutoff).is_some(),
+        "cutoff와 같은 시각의 항목은 아직 만료 전이어야 합니다"
+    );
+    assert_eq!(
+        store.get(&just_expired),
+        None,
+        "cutoff보다 오래된 항목은 삭제되어야 합니다"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn prune_runs_every_n_puts() {
     let path = temp_db_path();
     let store = TranslationCacheStore::open(&path);

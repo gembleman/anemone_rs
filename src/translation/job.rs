@@ -218,10 +218,19 @@ impl PreparedJob {
         config: &TranslationConfig,
     ) -> Result<Arc<PreparedJob>, TranslationConfigError> {
         let fingerprint = config_fingerprint(config)?;
-        let mut cache = PREPARED_JOB_CACHE.lock().expect("prepared job cache poisoned");
+        // 캐시는 성능 최적화일 뿐이라 poison되어도 치명적이지 않다 — 다른 스레드가
+        // 락을 쥔 채 패닉해도 내용물을 그대로 복구해 계속 쓴다. `expect`로 패닉시키면
+        // 이후 모든 클립보드 번역이 이 함수 호출마다 패닉하게 된다.
+        let mut cache = PREPARED_JOB_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some((_, job)) = cache.iter().find(|(key, _)| *key == fingerprint) {
             return Ok(job.clone());
         }
+        // 락을 잡은 채 from_config를 호출한다 (EzTrans 사전이 크면 aho-corasick
+        // automaton 빌드에 수십 ms). 현재 호출자가 UI 스레드 하나뿐이라 당장은
+        // 문제가 없지만, 훗날 다른 스레드(예: 파일 번역)에서도 이 함수를 호출하게
+        // 되면 그 스레드가 여기서 오래 대기하게 된다는 점을 유의할 것.
         let job = Arc::new(Self::from_config(config)?);
         cache.insert(0, (fingerprint, job.clone()));
         cache.truncate(PREPARED_JOB_CACHE_MAX);

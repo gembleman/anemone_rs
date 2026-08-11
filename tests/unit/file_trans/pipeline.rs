@@ -135,6 +135,98 @@ fn translate_lines_runs_concurrently_and_preserves_input_order() {
     assert_eq!(results, vec!["line 0", "line 1", "line 2", "line 3"]);
 }
 
+/// `process_single_file`의 배치 수집 루프(결함 1)를 실제 파이프라인 경로로
+/// 태워서 검증한다. 기존 `translate_lines_runs_concurrently_and_preserves_input_order`는
+/// `translate_lines`를 직접 호출해 이미 여러 줄이 모인 슬라이스를 넘기므로,
+/// non-blocking 엔진에서 배치가 항상 1줄로 쪼개지는 버그를 잡아내지 못했다.
+/// 이 테스트는 `run`(=`run_inner` -> `process_single_file`)을 그대로 실행해
+/// 배치 수집부터 검증한다.
+#[test]
+fn pipeline_batches_non_blocking_lines_and_overlaps_requests() {
+    const LINE_COUNT: usize = 4;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    // 배치가 실제로 겹쳤는지는 벽시계 시간이 아니라 서버가 관측한 동시 in-flight
+    // 요청 수의 최댓값으로 판정한다. 시간 임계값은 테스트 350여 개를 병렬 실행할
+    // 때의 CPU 경합만으로도 흔들려(단독 0.4s vs 전체 실행 0.8s) flaky해진다.
+    let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let max_in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let server_in_flight = Arc::clone(&in_flight);
+    let server_max = Arc::clone(&max_in_flight);
+    std::thread::spawn(move || {
+        for _ in 0..LINE_COUNT {
+            let (mut stream, _) = listener.accept().unwrap();
+            let in_flight = Arc::clone(&server_in_flight);
+            let max_in_flight = Arc::clone(&server_max);
+            std::thread::spawn(move || {
+                let body = read_request_body(&mut stream);
+                let line = extract_user_text(&body);
+                // 본문을 다 읽은 시점부터가 진짜 in-flight 구간이다.
+                let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                max_in_flight.fetch_max(current, Ordering::SeqCst);
+                // 모든 요청이 겹칠 기회를 갖도록 충분히 붙잡아 둔다. 결함 1이
+                // 되살아나 줄마다 순차 왕복이 되면 동시 관측치는 1을 넘지 못한다.
+                std::thread::sleep(Duration::from_millis(200));
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                write_llm_response(&mut stream, &line);
+            });
+        }
+    });
+
+    let directory = std::env::temp_dir().join(format!(
+        "anemone-pipeline-batch-test-{}-{}",
+        std::process::id(),
+        address.port()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let input_path = directory.join("input.txt");
+    let output_path = directory.join("output.txt");
+    let input_text = (0..LINE_COUNT)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&input_path, input_text).unwrap();
+
+    let mut job = llm_job(&format!("http://{address}"));
+    job.input_files = vec![input_path];
+    job.output_files = vec![output_path.clone()];
+
+    let events = std::sync::Mutex::new(Vec::new());
+    run(&job, |event| events.lock().unwrap().push(event));
+
+    let events = events.into_inner().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, ProgressEvent::Finished(Ok(_))))
+            .count(),
+        1,
+        "pipeline should finish successfully exactly once: {events:?}"
+    );
+
+    // 결함 1이 되살아나 배치가 1줄로 쪼개지면 요청이 절대 겹치지 않아 관측
+    // 최댓값이 1이 된다. LINE_COUNT(4)는 FILE_HTTP_CONCURRENCY(8) 이하이므로
+    // 세마포어에 걸리지 않고 전부 동시에 in-flight가 되어야 한다.
+    assert_eq!(
+        max_in_flight.load(Ordering::SeqCst),
+        LINE_COUNT,
+        "non-blocking engine lines should be batched and overlapped end-to-end"
+    );
+
+    let output = std::fs::read_to_string(&output_path).unwrap();
+    let output = output.strip_prefix('\u{feff}').unwrap_or(&output);
+    let translated_lines: Vec<&str> = output.lines().collect();
+    assert_eq!(
+        translated_lines,
+        (0..LINE_COUNT)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 #[test]
 fn translate_lines_batch_cancellation_is_prompt() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

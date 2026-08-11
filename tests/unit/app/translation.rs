@@ -19,8 +19,11 @@ fn debounce_covers_paid_engines_and_llm() {
         debounce_delay_ms(TranslationEngine::Papago, 300),
         PAID_ENGINE_DEBOUNCE_MS
     );
+    assert_eq!(
+        debounce_delay_ms(TranslationEngine::Custom, 300),
+        PAID_ENGINE_DEBOUNCE_MS
+    );
     assert_eq!(debounce_delay_ms(TranslationEngine::EzTrans, 300), 0);
-    assert_eq!(debounce_delay_ms(TranslationEngine::Custom, 300), 0);
 }
 
 #[derive(Clone)]

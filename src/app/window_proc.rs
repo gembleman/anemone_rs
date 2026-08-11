@@ -134,7 +134,11 @@ impl App {
                     self.model.runtime.resizing = false;
                     if let Some(size) = self.model.runtime.pending_resize.take() {
                         if let Err(e) = self.resize(size.width, size.height) {
+                            // take()로 목표 크기는 이미 사라졌다 — 그대로 두면 model의
+                            // client_size가 실제 창 크기/swap chain과 어긋난 채 남는다.
+                            // 실제 client 영역을 다시 읽어 재동기화한다.
                             tracing::warn!("exit-resize failed: {e}");
+                            self.sync_client_size(hwnd);
                         }
                     } else {
                         self.sync_client_size(hwnd);

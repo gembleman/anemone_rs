@@ -4,6 +4,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -19,6 +21,12 @@ const PUTS_PER_PRUNE: u64 = 100;
 /// 백그라운드 VACUUM 연결이 UI 스레드의 get/put을 기다리는 최대 시간.
 /// WAL은 쓰기 1개만 허용하므로 VACUUM이 잠깐 대기할 수 있다.
 const VACUUM_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+/// UI 스레드 연결의 busy_timeout. SQLite 기본값은 0(즉시 SQLITE_BUSY 실패)이라
+/// 백그라운드 VACUUM이 write lock을 쥔 순간 UI의 put은 실패하고 get은 에러를
+/// `None`으로 변환해 캐시 미스로 위장한다 — 캐시 미스는 유료 엔진 API 재호출
+/// (재과금)로 이어지므로 VACUUM_BUSY_TIMEOUT보다 짧게라도 대기를 준다.
+/// UI 체감 지연을 과하게 늘리지 않도록 VACUUM_BUSY_TIMEOUT(30초)보다 짧게 잡는다.
+const UI_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
@@ -37,6 +45,10 @@ pub struct TranslationCacheStore {
     conn: Option<RefCell<Connection>>,
     db_path: Option<PathBuf>,
     puts_since_prune: Cell<u64>,
+    /// 이 저장소의 VACUUM이 백그라운드에서 실행 중인지. 프로세스 전역이 아니라
+    /// 인스턴스별로 두어야 한다 — 전역 플래그는 서로 다른 DB 파일의 VACUUM끼리도
+    /// 막아버린다. 백그라운드 스레드와 공유하므로 `Arc`.
+    vacuum_in_progress: Arc<AtomicBool>,
 }
 
 impl TranslationCacheStore {
@@ -49,6 +61,7 @@ impl TranslationCacheStore {
                     conn: Some(RefCell::new(conn)),
                     db_path: Some(path.to_path_buf()),
                     puts_since_prune: Cell::new(0),
+                    vacuum_in_progress: Arc::new(AtomicBool::new(false)),
                 };
                 store.prune();
                 store
@@ -59,6 +72,7 @@ impl TranslationCacheStore {
                     conn: None,
                     db_path: None,
                     puts_since_prune: Cell::new(0),
+                    vacuum_in_progress: Arc::new(AtomicBool::new(false)),
                 }
             }
         }
@@ -87,10 +101,13 @@ impl TranslationCacheStore {
             }
         }
         // 상한 초과분은 최신 updated_at 기준 상위 N개만 남기고 나머지를 삭제한다.
+        // rowid 기반 NOT IN은 PK(복합 컬럼) row-value 비교보다 인덱스를 훨씬 잘
+        // 타므로 O(N×M) 최악 케이스를 피한다 — 이 테이블은 WITHOUT ROWID가 아니라
+        // rowid가 항상 존재한다.
         match conn.execute(
             "DELETE FROM translation_cache
-             WHERE (engine_id, source_lang, target_lang, original) NOT IN (
-                 SELECT engine_id, source_lang, target_lang, original
+             WHERE rowid NOT IN (
+                 SELECT rowid
                  FROM translation_cache
                  ORDER BY updated_at DESC
                  LIMIT ?1
@@ -109,6 +126,9 @@ impl TranslationCacheStore {
 
     fn open_inner(path: &Path) -> Result<Connection, CacheError> {
         let conn = Connection::open(path).map_err(CacheError::Open)?;
+        // 백그라운드 VACUUM이 write lock을 쥔 짧은 구간 동안 UI 스레드의 get/put이
+        // 즉시 SQLITE_BUSY로 실패해 캐시 미스로 위장되지 않도록 대기 시간을 둔다.
+        conn.busy_timeout(UI_BUSY_TIMEOUT).map_err(CacheError::Query)?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(CacheError::Query)?;
         // WAL에서 fsync를 checkpoint 시점으로 미룬다. 번역 캐시는 재생성 가능
@@ -126,6 +146,14 @@ impl TranslationCacheStore {
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (engine_id, source_lang, target_lang, original)
             )",
+            [],
+        )
+        .map_err(CacheError::Query)?;
+        // TTL DELETE와 cap prune의 ORDER BY updated_at이 매번 풀스캔+전체 정렬로
+        // 빠지지 않도록 인덱스를 둔다. 기존 DB에도 적용되도록 IF NOT EXISTS.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_translation_cache_updated_at
+             ON translation_cache(updated_at)",
             [],
         )
         .map_err(CacheError::Query)?;
@@ -221,15 +249,40 @@ impl TranslationCacheStore {
         let Some(path) = self.db_path.as_ref() else {
             return;
         };
-        Self::vacuum_in_background(path);
+        Self::vacuum_in_background(path, Arc::clone(&self.vacuum_in_progress));
     }
 
     /// VACUUM은 DB 전체를 재작성하므로 별도 연결의 백그라운드 스레드에서 실행한다.
     /// WAL 모드에서 쓰기는 하나뿐이므로 get/put과 경합하면 busy_timeout으로
     /// 대기한다. 결과를 기다리는 호출자는 없어 실패해도 로그만 남긴다.
-    fn vacuum_in_background(path: &Path) {
+    ///
+    /// `clear()`가 연달아 호출되면(예: 사용자가 버튼을 연타) 매번 새 스레드 +
+    /// 새 연결의 VACUUM이 만들어져 서로 busy 경합을 벌인다. 이미 VACUUM이
+    /// 진행 중이면 이번 호출은 건너뛴다 — DELETE는 이미 끝났으므로 논리적
+    /// 정합성엔 문제가 없고, 다음 clear()가 다시 VACUUM을 예약해 준다.
+    /// 이 게이트는 저장소 인스턴스별이다: 전역이면 서로 다른 DB 파일의 VACUUM도
+    /// 부당하게 막힌다.
+    fn vacuum_in_background(path: &Path, in_progress: Arc<AtomicBool>) {
+        if in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            tracing::debug!("translation cache VACUUM already running; skipping");
+            return;
+        }
+
+        // 패닉 경로에서도 플래그가 반드시 풀리도록 Drop으로 해제한다 — 스레드
+        // 안에서 앞으로 코드가 늘어나도 unlock 누락을 걱정할 필요가 없다.
+        struct ResetOnDrop(Arc<AtomicBool>);
+        impl Drop for ResetOnDrop {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+
         let path = path.to_path_buf();
         std::thread::spawn(move || {
+            let _guard = ResetOnDrop(in_progress);
             let result = Connection::open(&path)
                 .and_then(|conn| {
                     conn.busy_timeout(VACUUM_BUSY_TIMEOUT)?;
