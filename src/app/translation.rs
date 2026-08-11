@@ -171,6 +171,9 @@ impl App {
 
         if cache_enabled && let Some(cached) = self.services.translation_cache.get(&cache_key) {
             tracing::debug!("clipboard translation cache hit");
+            // 캐시 히트로 새 요청을 보내지 않으면 워커의 supersede가 일어나지 않으므로,
+            // in-flight 상태였던 이전 요청을 직접 취소해 유료 엔진 낭비 호출을 막는다.
+            self.services.translation_ui.cancel(self.hwnd);
             self.model.runtime.pending_translation = None;
             self.model.runtime.original_text = text.to_string();
             self.model.runtime.translated_text = cached.clone();
