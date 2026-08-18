@@ -12,10 +12,9 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::Input::KeyboardAndMouse::EnableWindow,
         UI::WindowsAndMessaging::{
-            CreateDialogParamW, DWL_USER, DestroyWindow, GetWindowLongPtrW, GetWindowRect,
-            IsWindow, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
-            SetWindowLongPtrW, SetWindowPos, WINDOW_LONG_PTR_INDEX, WM_CLOSE, WM_DESTROY,
-            WM_DPICHANGED,
+            CreateDialogParamW, DestroyWindow, GetWindowLongPtrW, GetWindowRect, IsWindow, MSG,
+            SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW,
+            SetWindowPos, WINDOW_LONG_PTR_INDEX, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
         },
     },
     core::{Error, PCWSTR, Result},
@@ -27,7 +26,11 @@ use super::helpers::{
     show_dialog_window, unregister_resource_dialog,
 };
 
-const DWLP_USER_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(DWL_USER as i32);
+// DWLP_USER follows the pointer-sized DWLP_MSGRESULT and DWLP_DLGPROC slots.
+// The windows crate exposes only the legacy 32-bit DWL_USER constant (8), which
+// overwrites DWLP_DLGPROC in a 64-bit dialog where this offset is 16.
+const DWLP_USER_INDEX: WINDOW_LONG_PTR_INDEX =
+    WINDOW_LONG_PTR_INDEX((2 * std::mem::size_of::<isize>()) as i32);
 
 unsafe fn set_dialog_user(hwnd: HWND, value: isize) {
     unsafe { SetWindowLongPtrW(hwnd, DWLP_USER_INDEX, value) };
