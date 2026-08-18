@@ -16,7 +16,7 @@ pub enum TranslationSettingChange {
     PapagoClientId(String),
     PapagoClientSecret(String),
     EzTransDictionaryPath(String),
-    EzTransDatPath(String),
+    EzTransEhndPath(String),
     LlmModel(String),
     LlmApiKey(String),
     LlmSystemPrompt(String),
@@ -65,7 +65,7 @@ impl TranslationSettingsEditor {
             change,
             TranslationSettingChange::Engine(_)
                 | TranslationSettingChange::EzTransDictionaryPath(_)
-                | TranslationSettingChange::EzTransDatPath(_)
+                | TranslationSettingChange::EzTransEhndPath(_)
         );
         let changed = match change {
             TranslationSettingChange::Engine(value) => {
@@ -199,8 +199,8 @@ impl TranslationSettingsEditor {
             TranslationSettingChange::EzTransDictionaryPath(value) => {
                 set_if_changed(&mut config.eztrans_dictionary_path, value)
             }
-            TranslationSettingChange::EzTransDatPath(value) => {
-                set_if_changed(&mut config.eztrans_dat_path, value)
+            TranslationSettingChange::EzTransEhndPath(value) => {
+                set_if_changed(&mut config.eztrans_ehnd_path, value)
             }
             TranslationSettingChange::LlmModel(value) => {
                 set_if_changed(&mut config.llm.model, value)
@@ -248,37 +248,29 @@ impl TranslationSettingsEditor {
 
     /// 설정된 EzTrans 사전 경로가 쓸 수 있는 평면 사전인지 확인한다.
     ///
-    /// 경로는 "찾아보기"로만 지정하므로 파일이 없는 경우는 사실상 나오지 않는다.
-    /// 새 설정은 `JisJK.flat.bin`을 가리킨다. 예전 설정의 DLL 경로도
-    /// 같은 폴더에서 평면 사전을 찾는 호환 경로로 허용한다.
+    /// 경로는 `JisJK.flat.bin` 파일을 직접 가리켜야 한다.
     pub fn eztrans_dictionary_invalid(configured: &str) -> bool {
         path_invalid(configured, |path| {
             path.is_file()
-                && path.file_name().is_some_and(|name| {
-                    name.eq_ignore_ascii_case("JisJK.flat.bin")
-                        || path
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
-                })
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("JisJK.flat.bin"))
         })
     }
 
-    /// 설정된 EzTrans Dat 경로가 쓸 수 있는 사전 폴더인지 확인한다.
-    ///
-    /// 사전 경로와 같은 이유로, 폴더가 없는 경우보다 엉뚱한 폴더를 고른 경우가 문제다.
-    /// 일→한 번역에 필요한 사전 `JisJK.da`가 실제로 들어 있는지까지 본다.
-    pub fn eztrans_dat_invalid(configured: &str) -> bool {
+    /// 설정된 EzTrans Ehnd 경로가 실제 Ehnd 폴더인지 확인한다.
+    pub fn eztrans_ehnd_invalid(configured: &str) -> bool {
         path_invalid(configured, |path| {
-            path.is_dir() && path.join("JisJK.da").is_file()
+            path.is_dir()
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("Ehnd"))
         })
     }
 
-    /// 선택된 EzTrans 설정이 완전할 때만 런타임 초기화를 시도한다.
+    /// EzTrans가 선택되면 두 필수 경로를 포함해 런타임 초기화를 검증한다.
     pub fn sync_runtime(config: &TranslationConfig) -> Result<(), String> {
-        if config.get_engine().map_err(|error| error.to_string())? != TranslationEngine::EzTrans
-            || config.eztrans_dictionary_path.trim().is_empty()
-            || config.eztrans_dat_path.trim().is_empty()
-        {
+        if config.get_engine().map_err(|error| error.to_string())? != TranslationEngine::EzTrans {
             return Ok(());
         }
         PreparedJob::from_config(config)
@@ -292,8 +284,8 @@ impl TranslationSettingsEditor {
 /// 상대 경로는 런타임과 동일하게 데이터 디렉터리 기준으로 해석한다.
 fn path_invalid(configured: &str, valid: fn(&std::path::Path) -> bool) -> bool {
     let configured = configured.trim();
-    !configured.is_empty()
-        && !valid(std::path::Path::new(
+    configured.is_empty()
+        || !valid(std::path::Path::new(
             &crate::translation::resolve_configured_eztrans_path(configured),
         ))
 }

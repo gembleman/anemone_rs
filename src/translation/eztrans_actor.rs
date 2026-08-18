@@ -1,7 +1,7 @@
 use super::{EzTransTranslator, Language, TranslationError, TranslationResult};
 use std::sync::{Mutex, OnceLock, mpsc};
 
-/// EHND/DAT 초기화는 프로세스 경계를 넘어 공유 파일을 만진다. GUI in-process
+/// EHND 초기화는 프로세스 경계를 넘어 같은 자산을 읽는다. GUI in-process
 /// 로드(`EzTransState::init`)와 파일 번역 helper 프로세스 풀
 /// (`eztrans_process::worker_loop`)이 동시에 초기화하면 간헐적 시작 실패가
 /// 난다 — 초기화 구간을 프로세스 전역으로 직렬화한다.
@@ -15,7 +15,7 @@ pub(super) fn eztrans_initialization_gate() -> &'static Mutex<()> {
 /// 무거운 EzTrans 세션 인스턴스를 하나만 유지하는 전역 관리자.
 struct EzTransState {
     engine: Option<EzTransTranslator>,
-    /// 현재 사전/data 경로. 같으면 재사용하고 다르면 다시 로드한다.
+    /// 현재 사전/Ehnd 경로. 같으면 재사용하고 다르면 다시 로드한다.
     loaded_paths: Option<(String, String)>,
 }
 
@@ -28,10 +28,10 @@ impl EzTransState {
     }
 
     /// EzTrans를 초기화하거나 경로가 바뀌면 다시 로드한다.
-    fn init(&mut self, dictionary_path: &str, dat_path: &str) -> Result<(), String> {
-        if let Some((loaded_dictionary, loaded_dat)) = &self.loaded_paths {
+    fn init(&mut self, dictionary_path: &str, ehnd_path: &str) -> Result<(), String> {
+        if let Some((loaded_dictionary, loaded_ehnd)) = &self.loaded_paths {
             if loaded_dictionary == dictionary_path
-                && loaded_dat == dat_path
+                && loaded_ehnd == ehnd_path
                 && self.engine.is_some()
             {
                 return Ok(());
@@ -39,13 +39,13 @@ impl EzTransState {
             self.engine = None;
             self.loaded_paths = None;
         }
-        // 풀 초기화와 DAT 공유 파일 경합을 막기 위해 전역 게이트 아래에서만 로드한다.
+        // GUI와 helper 풀이 동시에 큰 자산을 로드하지 않도록 직렬화한다.
         let _gate = eztrans_initialization_gate()
             .lock()
             .map_err(|_| "EzTrans 초기화 잠금이 손상되었습니다".to_string())?;
-        let engine = EzTransTranslator::new(dictionary_path, dat_path)?;
+        let engine = EzTransTranslator::new(dictionary_path, ehnd_path)?;
         self.engine = Some(engine);
-        self.loaded_paths = Some((dictionary_path.to_string(), dat_path.to_string()));
+        self.loaded_paths = Some((dictionary_path.to_string(), ehnd_path.to_string()));
         Ok(())
     }
 }
@@ -53,7 +53,7 @@ impl EzTransState {
 enum EzTransCommand {
     Init {
         dictionary_path: String,
-        dat_path: String,
+        ehnd_path: String,
         response: mpsc::Sender<Result<(), String>>,
     },
     Translate {
@@ -79,10 +79,10 @@ impl EzTransActor {
                     match command {
                         EzTransCommand::Init {
                             dictionary_path,
-                            dat_path,
+                            ehnd_path,
                             response,
                         } => {
-                            let _ = response.send(state.init(&dictionary_path, &dat_path));
+                            let _ = response.send(state.init(&dictionary_path, &ehnd_path));
                         }
                         EzTransCommand::Translate {
                             text,
@@ -104,12 +104,12 @@ impl EzTransActor {
         Self { sender }
     }
 
-    fn init(&self, dictionary_path: &str, dat_path: &str) -> Result<(), String> {
+    fn init(&self, dictionary_path: &str, ehnd_path: &str) -> Result<(), String> {
         let (response, receiver) = mpsc::channel();
         self.sender
             .send(EzTransCommand::Init {
                 dictionary_path: dictionary_path.to_string(),
-                dat_path: dat_path.to_string(),
+                ehnd_path: ehnd_path.to_string(),
                 response,
             })
             .map_err(|_| "EzTrans 전용 스레드가 종료되었습니다".to_string())?;
@@ -140,8 +140,8 @@ fn eztrans_actor() -> &'static EzTransActor {
     EZTRANS_ACTOR.get_or_init(EzTransActor::spawn)
 }
 
-pub fn prepare_eztrans(dictionary_path: &str, dat_path: &str) -> Result<(), String> {
-    eztrans_actor().init(dictionary_path, dat_path)
+pub fn prepare_eztrans(dictionary_path: &str, ehnd_path: &str) -> Result<(), String> {
+    eztrans_actor().init(dictionary_path, ehnd_path)
 }
 
 /// 전역 EzTrans 인스턴스로 번역하며 미초기화 시 `EngineNotInitialized`를 반환한다.

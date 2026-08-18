@@ -42,7 +42,7 @@ enum Command {
         #[arg(long)]
         dictionary: String,
         #[arg(long)]
-        dat: String,
+        ehnd: String,
     },
 }
 
@@ -104,8 +104,8 @@ pub fn run() -> CliOutcome {
         Command::FileTrans(args) => file_trans::run(args),
         Command::ListEngines => list::engines(),
         Command::ListLangs(args) => list::languages(args),
-        Command::EztransWorker { dictionary, dat } => {
-            crate::translation::run_eztrans_worker(&dictionary, &dat)
+        Command::EztransWorker { dictionary, ehnd } => {
+            crate::translation::run_eztrans_worker(&dictionary, &ehnd)
         }
     };
 

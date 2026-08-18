@@ -691,13 +691,13 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
     let mut config = Config::default();
     config.translation.engine = "eztrans".into();
     config.translation.eztrans_dictionary_path = "C:\\없는경로\\NotJisJK.flat.bin".into();
-    config.translation.eztrans_dat_path = "C:\\없는경로\\NotDat".into();
+    config.translation.eztrans_ehnd_path = "C:\\없는경로\\NotEhnd".into();
 
     let hwnd = SettingsDialog::show(unsafe { GetDesktopWindow() }, config, None).unwrap();
     let _dialog = DialogGuard(hwnd);
 
     let dll_warning = control(hwnd, ctrl_id::EZTRANS_DICTIONARY_WARNING_LABEL);
-    let dat_warning = control(hwnd, ctrl_id::EZTRANS_DAT_WARNING_LABEL);
+    let ehnd_warning = control(hwnd, ctrl_id::EZTRANS_EHND_WARNING_LABEL);
 
     // 잘못된 경로이므로 경고 문구가 실제로 채워져야 한다. 문구가 비면 라벨이
     // 보이든 말든 사용자에게는 아무 경고도 없는 것이고, 아래 가시성 검사도
@@ -712,11 +712,11 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
         "잘못된 평면 사전 경로인데 경고 문구가 비어 있습니다"
     );
     assert!(
-        crate::dialogs::helpers::get_window_text(dat_warning).contains("사전 폴더가 아닙니다"),
-        "잘못된 Dat 경로인데 경고 문구가 비어 있습니다"
+        crate::dialogs::helpers::get_window_text(ehnd_warning).contains("필터 폴더가 아닙니다"),
+        "잘못된 Ehnd 경로인데 경고 문구가 비어 있습니다"
     );
     assert!(unsafe { IsWindowVisible(dll_warning).as_bool() });
-    assert!(unsafe { IsWindowVisible(dat_warning).as_bool() });
+    assert!(unsafe { IsWindowVisible(ehnd_warning).as_bool() });
 
     // 외관 탭으로 나가면 두 라벨 모두 숨겨져야 한다.
     super::with_settings_instance(|instance| {
@@ -727,24 +727,29 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
         "EzTrans 사전 경고 라벨이 외관 탭 위에 남아 있습니다"
     );
     assert!(
-        !unsafe { IsWindowVisible(dat_warning).as_bool() },
-        "EzTrans Dat 경고 라벨이 외관 탭 위에 남아 있습니다"
+        !unsafe { IsWindowVisible(ehnd_warning).as_bool() },
+        "EzTrans Ehnd 경고 라벨이 외관 탭 위에 남아 있습니다"
     );
 
-    // 올바른 경로로 바꾸면 경고가 사라져야 한다 — 라벨이 항상 켜져 있는 것이
-    // 아님을 확인해 위 가시성 검사가 자명하게 통과하는 것을 막는다.
+    // 경로를 비우면 필수 설정 누락 경고가 표시되어야 한다. 라벨이 항상 켜져
+    // 있는 것이 아님을 확인해 위 가시성 검사가 자명하게 통과하는 것을 막는다.
     super::with_settings_instance(|instance| {
         instance.switch_tab(super::TAB_TRANSLATION);
         {
             let mut draft = instance.draft.borrow_mut();
             draft.translation.eztrans_dictionary_path = String::new();
-            draft.translation.eztrans_dat_path = String::new();
+            draft.translation.eztrans_ehnd_path = String::new();
         }
         instance.refresh_eztrans_path_warnings();
     });
     assert!(
-        crate::dialogs::helpers::get_window_text(dll_warning).is_empty(),
-        "경로가 비었는데도 사전 경고가 남아 있습니다"
+        crate::dialogs::helpers::get_window_text(dll_warning)
+            .contains("EzTrans 평면 사전이 아닙니다"),
+        "경로가 비었는데도 사전 경고가 표시되지 않습니다"
+    );
+    assert!(
+        crate::dialogs::helpers::get_window_text(ehnd_warning).contains("필터 폴더가 아닙니다"),
+        "Ehnd 경로가 비었는데도 필수 설정 경고가 표시되지 않습니다"
     );
 }
 

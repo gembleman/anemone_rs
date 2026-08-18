@@ -4,7 +4,7 @@
 # 최초 사용자용 full zip(exe + eztrans_dll/)은 사람이 직접 같은 릴리스에 추가한다.
 #
 # eztrans_dll/을 이 워크플로에 절대 추가하지 마라. 사용자가 편집하는 사전
-# (Dat/UserDict.jk, Ehnd/UserDict_*.txt, Ehnd/ehnd_conf.ini)이 들어 있어
+# (Ehnd/UserDict_*.txt, Ehnd/ehnd_conf.ini)이 들어 있어
 # 업데이트로 덮어쓰면 사용자 데이터가 사라지고, 재배포도 라이선스상 민감하다.
 name: release
 

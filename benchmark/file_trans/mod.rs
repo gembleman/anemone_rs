@@ -68,14 +68,14 @@ fn translates_japanese_translation_sample_with_eztrans() {
         .join("benchmark")
         .join("japanese_translation_sample.txt");
     let dictionary_path = project_root.join("eztrans_dll").join("JisJK.flat.bin");
-    let dat_path = project_root.join("eztrans_dll").join("Dat");
+    let ehnd_path = project_root.join("eztrans_dll").join("Ehnd");
     let directory = BenchDirectory::new();
     let output = directory.0.join("japanese_translation_sample_ko.txt");
     let expected_lines = std::fs::read_to_string(&input).unwrap().lines().count() as i32;
     let mut sample_job = job(vec![input], vec![output.clone()]);
     sample_job.translation = PreparedJob::eztrans(
         dictionary_path.to_string_lossy().into_owned(),
-        dat_path.to_string_lossy().into_owned(),
+        ehnd_path.to_string_lossy().into_owned(),
         4,
         Language::Jpn,
         Language::Kor,
@@ -124,7 +124,7 @@ fn measures_repeated_and_unique_sample_translation_performance() {
     );
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dictionary_path = project_root.join("eztrans_dll").join("JisJK.flat.bin");
-    let dat_path = project_root.join("eztrans_dll").join("Dat");
+    let ehnd_path = project_root.join("eztrans_dll").join("Ehnd");
     let directory = BenchDirectory::new();
 
     for (label, filename, expected_lines) in [
@@ -144,7 +144,7 @@ fn measures_repeated_and_unique_sample_translation_performance() {
         let mut sample_job = job(vec![input], vec![output.clone()]);
         sample_job.translation = PreparedJob::eztrans(
             dictionary_path.to_string_lossy().into_owned(),
-            dat_path.to_string_lossy().into_owned(),
+            ehnd_path.to_string_lossy().into_owned(),
             4,
             Language::Jpn,
             Language::Kor,

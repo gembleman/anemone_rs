@@ -34,9 +34,14 @@ pub struct TranslationConfig {
     /// EzTrans 평면 사전 경로. 이전 설정 키 이름은 serde 별칭으로 호환한다.
     #[serde(default, alias = "eztrans_dll_path")]
     pub eztrans_dictionary_path: String,
-    /// EzTrans Dat 경로
-    #[serde(default)]
-    pub eztrans_dat_path: String,
+    /// EzTrans Ehnd 필터/사용자 사전 경로.
+    /// 이전 `eztrans_dat_path`는 역직렬화 시 형제 `Ehnd` 경로로 변환한다.
+    #[serde(
+        default,
+        alias = "eztrans_dat_path",
+        deserialize_with = "deserialize_eztrans_ehnd_path"
+    )]
+    pub eztrans_ehnd_path: String,
     /// 파일 번역에서 동시에 유지할 EzTrans helper 프로세스 수
     #[serde(default = "default_eztrans_process_count")]
     pub eztrans_process_count: u32,
@@ -90,6 +95,26 @@ fn default_deepl_strategy() -> String {
 
 fn default_eztrans_process_count() -> u32 {
     2
+}
+
+fn deserialize_eztrans_ehnd_path<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    let path = std::path::Path::new(&value);
+    if path
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("Dat"))
+    {
+        return Ok(path
+            .parent()
+            .map(|parent| parent.join("Ehnd"))
+            .unwrap_or_else(|| PathBuf::from("Ehnd"))
+            .to_string_lossy()
+            .into_owned());
+    }
+    Ok(value)
 }
 
 impl TranslationConfig {
@@ -320,7 +345,7 @@ impl Default for TranslationConfig {
             source_lang: "ja".to_string(),
             target_lang: "ko".to_string(),
             eztrans_dictionary_path: default_eztrans_subpath("JisJK.flat.bin"),
-            eztrans_dat_path: default_eztrans_subpath("Dat"),
+            eztrans_ehnd_path: default_eztrans_subpath("Ehnd"),
             eztrans_process_count: default_eztrans_process_count(),
             eztrans_postprocess_dictionary: Vec::new(),
             deepl_api_key: String::new(),

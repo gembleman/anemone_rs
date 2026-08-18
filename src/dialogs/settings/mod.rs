@@ -156,7 +156,7 @@ impl HostedDialog for SettingsDialog {
             // EzTrans 경로 경고만 붉은 글자로 그려 다른 안내 문구와 구분한다.
             let control_id = GetDlgCtrlID(HWND(lparam.0 as *mut _)) as u16;
             if control_id == ctrl_id::EZTRANS_DICTIONARY_WARNING_LABEL
-                || control_id == ctrl_id::EZTRANS_DAT_WARNING_LABEL
+                || control_id == ctrl_id::EZTRANS_EHND_WARNING_LABEL
             {
                 SetTextColor(hdc, COLORREF(0x00_00_00_CC));
             }

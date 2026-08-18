@@ -75,8 +75,8 @@ pub(super) const ENGINE_CONTROL_IDS: &[(EngineGroup, &[u16])] = &[
         &[
             ctrl_id::EZTRANS_DICTIONARY_EDIT,
             ctrl_id::EZTRANS_DICTIONARY_BROWSE,
-            ctrl_id::EZTRANS_DAT_EDIT,
-            ctrl_id::EZTRANS_DAT_BROWSE,
+            ctrl_id::EZTRANS_EHND_EDIT,
+            ctrl_id::EZTRANS_EHND_BROWSE,
             ctrl_id::EZTRANS_DICTIONARY_EDIT_BTN,
         ],
     ),
@@ -339,14 +339,14 @@ impl SettingsDialog {
         self.set_text(ctrl_id::EZTRANS_DICTIONARY_EDIT, dictionary_display)?;
         self.set_text(ctrl_id::EZTRANS_DICTIONARY_WARNING_LABEL, "")?;
 
-        let dat_path = &config.translation.eztrans_dat_path;
-        let dat_display = if TranslationSettingsEditor::eztrans_dat_invalid(dat_path) {
+        let ehnd_path = &config.translation.eztrans_ehnd_path;
+        let ehnd_display = if TranslationSettingsEditor::eztrans_ehnd_invalid(ehnd_path) {
             ""
         } else {
-            dat_path.as_str()
+            ehnd_path.as_str()
         };
-        self.set_text(ctrl_id::EZTRANS_DAT_EDIT, dat_display)?;
-        self.set_text(ctrl_id::EZTRANS_DAT_WARNING_LABEL, "")?;
+        self.set_text(ctrl_id::EZTRANS_EHND_EDIT, ehnd_display)?;
+        self.set_text(ctrl_id::EZTRANS_EHND_WARNING_LABEL, "")?;
         self.set_text(
             ctrl_id::EZTRANS_DICTIONARY_COUNT_LABEL,
             &format!(

@@ -19,7 +19,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EzTransProcessConfig {
     pub dictionary_path: String,
-    pub dat_path: String,
+    pub ehnd_path: String,
     pub process_count: usize,
 }
 
@@ -118,7 +118,7 @@ impl EzTransProcessPool {
 
     fn matches(&self, config: &EzTransProcessConfig) -> bool {
         self.config.dictionary_path == config.dictionary_path
-            && self.config.dat_path == config.dat_path
+            && self.config.ehnd_path == config.ehnd_path
             && self.config.process_count
                 == crate::config::limits::eztrans_process_count_usize(config.process_count)
     }
@@ -198,7 +198,7 @@ fn worker_loop(
     receiver: mpsc::Receiver<PoolCommand>,
     ready: mpsc::Sender<Result<(), String>>,
 ) {
-    // EHND 초기화는 여러 프로세스에서도 DAT 내부의 공유 파일을 동시에 만질 수 있다.
+    // EHND 초기화가 여러 프로세스에서 동시에 몰리지 않도록 한다.
     // 프로세스는 병렬 실행하되 초기화 구간만 전역 게이트(GUI actor와 공유)로
     // 직렬화해 간헐적 시작 실패를 막는다.
     let initialized = super::eztrans_actor::eztrans_initialization_gate()
@@ -336,8 +336,8 @@ impl WorkerClient {
             .arg("eztrans-worker")
             .arg("--dictionary")
             .arg(&config.dictionary_path)
-            .arg("--dat")
-            .arg(&config.dat_path)
+            .arg("--ehnd")
+            .arg(&config.ehnd_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -455,12 +455,12 @@ impl EzTransProcessPoolRegistry {
 }
 
 /// 숨김 CLI worker 진입점. stdout은 부모와의 프로토콜 전용이다.
-pub(crate) fn run_eztrans_worker(dictionary_path: &str, dat_path: &str) -> Result<(), String> {
+pub(crate) fn run_eztrans_worker(dictionary_path: &str, ehnd_path: &str) -> Result<(), String> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut reader = stdin.lock();
     let mut writer = BufWriter::new(stdout.lock());
-    let mut translator = match EzTransTranslator::new(dictionary_path, dat_path) {
+    let mut translator = match EzTransTranslator::new(dictionary_path, ehnd_path) {
         Ok(translator) => {
             write_worker_response(&mut writer, Ok("ready".into()))?;
             translator

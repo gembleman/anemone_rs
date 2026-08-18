@@ -388,13 +388,11 @@ fn eztrans_fixture_dir(case: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn an_unset_eztrans_path_is_not_reported_as_invalid() {
-    assert!(!TranslationSettingsEditor::eztrans_dictionary_invalid(""));
-    assert!(!TranslationSettingsEditor::eztrans_dictionary_invalid(
-        "   "
-    ));
-    assert!(!TranslationSettingsEditor::eztrans_dat_invalid(""));
-    assert!(!TranslationSettingsEditor::eztrans_dat_invalid("   "));
+fn both_eztrans_paths_are_required() {
+    assert!(TranslationSettingsEditor::eztrans_dictionary_invalid(""));
+    assert!(TranslationSettingsEditor::eztrans_dictionary_invalid("   "));
+    assert!(TranslationSettingsEditor::eztrans_ehnd_invalid(""));
+    assert!(TranslationSettingsEditor::eztrans_ehnd_invalid("   "));
 }
 
 #[test]
@@ -435,11 +433,36 @@ fn a_directory_is_not_accepted_as_the_dictionary() {
 }
 
 #[test]
-fn a_dat_folder_holding_the_translation_dictionary_is_accepted() {
-    let directory = eztrans_fixture_dir("dat_ok");
-    std::fs::write(directory.join("JisJK.da"), b"stub").unwrap();
+fn a_legacy_dll_is_not_accepted_as_the_dictionary() {
+    let directory = eztrans_fixture_dir("dictionary_legacy_dll");
+    let dictionary = directory.join("JisJK.dll");
+    std::fs::write(&dictionary, b"stub").unwrap();
 
-    assert!(!TranslationSettingsEditor::eztrans_dat_invalid(
+    assert!(TranslationSettingsEditor::eztrans_dictionary_invalid(
+        &dictionary.to_string_lossy()
+    ));
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn an_ehnd_folder_is_accepted() {
+    let root = eztrans_fixture_dir("ehnd_ok");
+    let directory = root.join("Ehnd");
+    std::fs::create_dir(&directory).unwrap();
+
+    assert!(!TranslationSettingsEditor::eztrans_ehnd_invalid(
+        &directory.to_string_lossy()
+    ));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_folder_not_named_ehnd_is_reported_as_invalid() {
+    let directory = eztrans_fixture_dir("not_ehnd");
+
+    assert!(TranslationSettingsEditor::eztrans_ehnd_invalid(
         &directory.to_string_lossy()
     ));
 
@@ -447,23 +470,12 @@ fn a_dat_folder_holding_the_translation_dictionary_is_accepted() {
 }
 
 #[test]
-fn a_folder_without_the_translation_dictionary_is_reported_as_invalid() {
-    let directory = eztrans_fixture_dir("dat_no_dictionary");
-
-    assert!(TranslationSettingsEditor::eztrans_dat_invalid(
-        &directory.to_string_lossy()
-    ));
-
-    let _ = std::fs::remove_dir_all(&directory);
-}
-
-#[test]
-fn a_file_is_not_accepted_as_the_dat_folder() {
-    let directory = eztrans_fixture_dir("dat_is_file");
-    let file = directory.join("JisJK.da");
+fn a_file_is_not_accepted_as_the_ehnd_folder() {
+    let directory = eztrans_fixture_dir("ehnd_is_file");
+    let file = directory.join("Ehnd");
     std::fs::write(&file, b"stub").unwrap();
 
-    assert!(TranslationSettingsEditor::eztrans_dat_invalid(
+    assert!(TranslationSettingsEditor::eztrans_ehnd_invalid(
         &file.to_string_lossy()
     ));
 

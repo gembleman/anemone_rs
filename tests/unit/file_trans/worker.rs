@@ -220,7 +220,7 @@ fn eztrans_job() -> crate::file_trans::FileTransJobData {
         cancel_token: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         translation: PreparedJob::eztrans(
             "test.dll".into(),
-            "test-dat".into(),
+            "test-ehnd".into(),
             1,
             Language::Jpn,
             Language::Kor,
@@ -259,7 +259,7 @@ fn eztrans_window_applies_postprocess_dictionary_before_caching() {
     let translator = MockBatchTranslator::new(1);
     let mut config = crate::config::TranslationConfig::default();
     config.eztrans_dictionary_path = "test.dll".into();
-    config.eztrans_dat_path = "test-dat".into();
+    config.eztrans_ehnd_path = "test-ehnd".into();
     config.eztrans_postprocess_dictionary = vec![crate::config::EzTransPostprocessEntry {
         source: "번역:".into(),
         target: "후처리:".into(),

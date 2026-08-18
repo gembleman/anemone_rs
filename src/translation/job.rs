@@ -169,19 +169,19 @@ impl PreparedJob {
 
     pub fn eztrans(
         dictionary_path: String,
-        dat_path: String,
+        ehnd_path: String,
         process_count: usize,
         source: Language,
         target: Language,
     ) -> Result<Self, TranslationConfigError> {
-        if dictionary_path.trim().is_empty() || dat_path.trim().is_empty() {
+        if dictionary_path.trim().is_empty() || ehnd_path.trim().is_empty() {
             return Err(TranslationConfigError::MissingEzTransPath);
         }
         Self::from_kind(
             PreparedEngineKind::EzTrans {
                 process: EzTransProcessConfig {
                     dictionary_path,
-                    dat_path,
+                    ehnd_path,
                     process_count: crate::config::limits::eztrans_process_count_usize(
                         process_count,
                     ),
@@ -248,7 +248,7 @@ impl PreparedJob {
             match engine {
                 TranslationEngine::EzTrans => {
                     if config.eztrans_dictionary_path.trim().is_empty()
-                        || config.eztrans_dat_path.trim().is_empty()
+                        || config.eztrans_ehnd_path.trim().is_empty()
                     {
                         return Err(TranslationConfigError::MissingEzTransPath);
                     }
@@ -257,7 +257,7 @@ impl PreparedJob {
                             dictionary_path: resolve_configured_eztrans_path(
                                 &config.eztrans_dictionary_path,
                             ),
-                            dat_path: resolve_configured_eztrans_path(&config.eztrans_dat_path),
+                            ehnd_path: resolve_configured_eztrans_path(&config.eztrans_ehnd_path),
                             process_count: crate::config::limits::eztrans_process_count(
                                 config.eztrans_process_count,
                             ) as usize,
@@ -349,7 +349,7 @@ impl PreparedJob {
         let Some(config) = self.engine.eztrans_process() else {
             return Ok(());
         };
-        prepare_eztrans(&config.dictionary_path, &config.dat_path)
+        prepare_eztrans(&config.dictionary_path, &config.ehnd_path)
             .map_err(TranslationPrepareError::EzTransInitialization)
     }
 
@@ -412,7 +412,7 @@ fn config_fingerprint(config: &TranslationConfig) -> Result<u64, TranslationConf
     match engine {
         TranslationEngine::EzTrans => {
             config.eztrans_dictionary_path.hash(&mut hasher);
-            config.eztrans_dat_path.hash(&mut hasher);
+            config.eztrans_ehnd_path.hash(&mut hasher);
             config.eztrans_process_count.hash(&mut hasher);
             config.eztrans_postprocess_dictionary.hash(&mut hasher);
         }
@@ -496,7 +496,7 @@ impl std::fmt::Debug for PreparedJob {
 pub enum TranslationConfigError {
     #[error("{0}가 설정되지 않았습니다.")]
     MissingCredential(&'static str),
-    #[error("EzTrans 사전/Dat 경로가 설정되지 않았습니다.")]
+    #[error("EzTrans 평면 사전/Ehnd 경로가 설정되지 않았습니다.")]
     MissingEzTransPath,
     #[error("{engine} 엔진은 선택한 언어 조합을 지원하지 않습니다.")]
     UnsupportedLanguagePair { engine: &'static str },

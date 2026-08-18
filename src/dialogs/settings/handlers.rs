@@ -312,13 +312,14 @@ impl SettingsDialog {
                 Err(error) => self.show_file_dialog_error(&error),
             },
 
-            // EzTrans Dat 폴더 찾아보기
-            EZTRANS_DAT_BROWSE => match self.browse_folder_with_title("EzTrans Dat 폴더 선택") {
+            // EzTrans Ehnd 폴더 찾아보기
+            EZTRANS_EHND_BROWSE => match self.browse_folder_with_title("EzTrans Ehnd 폴더 선택")
+            {
                 Ok(Some(path)) => {
                     let _ = self.apply_translation_change(
-                        TranslationSettingChange::EzTransDatPath(path.clone()),
+                        TranslationSettingChange::EzTransEhndPath(path.clone()),
                     );
-                    self.set_control_text(EZTRANS_DAT_EDIT, &path);
+                    self.set_control_text(EZTRANS_EHND_EDIT, &path);
                     self.refresh_eztrans_path_warnings();
                 }
                 Ok(None) => {}
@@ -784,11 +785,11 @@ impl SettingsDialog {
     /// 선택된 EzTrans 경로를 찾을 수 없으면 각 입력란 아래 라벨에 경고를 표시하고,
     /// 찾을 수 있으면 라벨을 비운다. 선택한 경로는 그대로 두며 저장도 막지 않는다.
     pub(super) fn refresh_eztrans_path_warnings(&self) {
-        let (dictionary_path, dat_path) = {
+        let (dictionary_path, ehnd_path) = {
             let config = self.draft.borrow();
             (
                 config.translation.eztrans_dictionary_path.clone(),
-                config.translation.eztrans_dat_path.clone(),
+                config.translation.eztrans_ehnd_path.clone(),
             )
         };
 
@@ -806,14 +807,14 @@ impl SettingsDialog {
             },
         );
 
-        let dat_invalid = TranslationSettingsEditor::eztrans_dat_invalid(&dat_path);
-        if dat_invalid {
-            tracing::warn!("EzTrans Dat 폴더로 쓸 수 없는 경로입니다: {dat_path}");
+        let ehnd_invalid = TranslationSettingsEditor::eztrans_ehnd_invalid(&ehnd_path);
+        if ehnd_invalid {
+            tracing::warn!("EzTrans Ehnd 폴더로 쓸 수 없는 경로입니다: {ehnd_path}");
         }
         self.set_control_text(
-            ctrl_id::EZTRANS_DAT_WARNING_LABEL,
-            if dat_invalid {
-                "⚠ EzTrans 사전 폴더가 아닙니다. Dat 폴더를 선택하세요."
+            ctrl_id::EZTRANS_EHND_WARNING_LABEL,
+            if ehnd_invalid {
+                "⚠ EzTrans 필터 폴더가 아닙니다. Ehnd 폴더를 선택하세요."
             } else {
                 ""
             },

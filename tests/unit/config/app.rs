@@ -86,9 +86,12 @@ eztrans_dat_path = "Dat"
     .expect("legacy EzTrans path key should remain readable");
 
     assert_eq!(loaded.translation.eztrans_dictionary_path, "legacy.dll");
+    assert_eq!(loaded.translation.eztrans_ehnd_path, "Ehnd");
     let serialized = toml::to_string(&loaded).expect("serialize migrated config");
     assert!(serialized.contains("eztrans_dictionary_path"));
+    assert!(serialized.contains("eztrans_ehnd_path"));
     assert!(!serialized.contains("eztrans_dll_path"));
+    assert!(!serialized.contains("eztrans_dat_path"));
 }
 
 #[test]
@@ -326,14 +329,14 @@ fn stale_bundled_eztrans_paths_follow_the_config_location() {
     let root = unique_test_dir("relocate-eztrans");
     let path = root.join("config.toml");
     let bundled = root.join("eztrans_dll");
-    std::fs::create_dir_all(bundled.join("Dat")).unwrap();
+    std::fs::create_dir_all(bundled.join("Ehnd")).unwrap();
     std::fs::write(bundled.join("JisJK.flat.bin"), b"test").unwrap();
 
     let mut config = Config::default();
     let stale = root.join("old-worktree").join("eztrans_dll");
     config.translation.eztrans_dictionary_path =
         stale.join("JisJK.flat.bin").to_string_lossy().into_owned();
-    config.translation.eztrans_dat_path = stale.join("Dat").to_string_lossy().into_owned();
+    config.translation.eztrans_ehnd_path = stale.join("Ehnd").to_string_lossy().into_owned();
     config.save_to_file(&path).unwrap();
 
     let loaded = Config::load_or_default_from(&path);
@@ -343,8 +346,8 @@ fn stale_bundled_eztrans_paths_follow_the_config_location() {
         bundled.join("JisJK.flat.bin").to_string_lossy()
     );
     assert_eq!(
-        loaded.translation.eztrans_dat_path,
-        bundled.join("Dat").to_string_lossy()
+        loaded.translation.eztrans_ehnd_path,
+        bundled.join("Ehnd").to_string_lossy()
     );
     let persisted = Config::load_from_file(&path).unwrap();
     assert_eq!(
@@ -352,8 +355,8 @@ fn stale_bundled_eztrans_paths_follow_the_config_location() {
         loaded.translation.eztrans_dictionary_path
     );
     assert_eq!(
-        persisted.translation.eztrans_dat_path,
-        loaded.translation.eztrans_dat_path
+        persisted.translation.eztrans_ehnd_path,
+        loaded.translation.eztrans_ehnd_path
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -363,7 +366,7 @@ fn missing_custom_eztrans_paths_are_not_rewritten() {
     let root = unique_test_dir("keep-custom-eztrans");
     let path = root.join("config.toml");
     let bundled = root.join("eztrans_dll");
-    std::fs::create_dir_all(bundled.join("Dat")).unwrap();
+    std::fs::create_dir_all(bundled.join("Ehnd")).unwrap();
     std::fs::write(bundled.join("JisJK.flat.bin"), b"test").unwrap();
 
     let mut config = Config::default();
@@ -372,7 +375,7 @@ fn missing_custom_eztrans_paths_are_not_rewritten() {
         .join("engine.dll")
         .to_string_lossy()
         .into_owned();
-    config.translation.eztrans_dat_path = root
+    config.translation.eztrans_ehnd_path = root
         .join("custom")
         .join("data")
         .to_string_lossy()
@@ -386,8 +389,8 @@ fn missing_custom_eztrans_paths_are_not_rewritten() {
         config.translation.eztrans_dictionary_path
     );
     assert_eq!(
-        loaded.translation.eztrans_dat_path,
-        config.translation.eztrans_dat_path
+        loaded.translation.eztrans_ehnd_path,
+        config.translation.eztrans_ehnd_path
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -397,12 +400,12 @@ fn relative_bundled_eztrans_paths_are_preserved_when_loading() {
     let root = unique_test_dir("keep-relative-eztrans");
     let path = root.join("config.toml");
     let bundled = root.join("eztrans_dll");
-    std::fs::create_dir_all(bundled.join("Dat")).unwrap();
+    std::fs::create_dir_all(bundled.join("Ehnd")).unwrap();
     std::fs::write(bundled.join("JisJK.flat.bin"), b"test").unwrap();
 
     let mut config = Config::default();
     config.translation.eztrans_dictionary_path = r"eztrans_dll\JisJK.flat.bin".into();
-    config.translation.eztrans_dat_path = r"eztrans_dll\Dat".into();
+    config.translation.eztrans_ehnd_path = r"eztrans_dll\Ehnd".into();
     config.save_to_file(&path).unwrap();
 
     let loaded = Config::load_or_default_from(&path);
@@ -411,13 +414,13 @@ fn relative_bundled_eztrans_paths_are_preserved_when_loading() {
         loaded.translation.eztrans_dictionary_path,
         r"eztrans_dll\JisJK.flat.bin"
     );
-    assert_eq!(loaded.translation.eztrans_dat_path, r"eztrans_dll\Dat");
+    assert_eq!(loaded.translation.eztrans_ehnd_path, r"eztrans_dll\Ehnd");
     let persisted = Config::load_from_file(&path).unwrap();
     assert_eq!(
         persisted.translation.eztrans_dictionary_path,
         r"eztrans_dll\JisJK.flat.bin"
     );
-    assert_eq!(persisted.translation.eztrans_dat_path, r"eztrans_dll\Dat");
+    assert_eq!(persisted.translation.eztrans_ehnd_path, r"eztrans_dll\Ehnd");
     std::fs::remove_dir_all(root).unwrap();
 }
 

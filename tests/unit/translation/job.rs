@@ -26,7 +26,7 @@ fn from_config_cached_reuses_the_job_for_unchanged_config() {
         ..TranslationConfig::default()
     };
     config.eztrans_dictionary_path = "engine.dll".into();
-    config.eztrans_dat_path = "dat".into();
+    config.eztrans_ehnd_path = "ehnd".into();
 
     let first = PreparedJob::from_config_cached(&config).unwrap();
     let second = PreparedJob::from_config_cached(&config).unwrap();
@@ -47,7 +47,7 @@ fn from_config_cached_rebuilds_when_the_dictionary_changes() {
         ..TranslationConfig::default()
     };
     config.eztrans_dictionary_path = "engine.dll".into();
-    config.eztrans_dat_path = "dat".into();
+    config.eztrans_ehnd_path = "ehnd".into();
     config.eztrans_postprocess_dictionary = vec![EzTransPostprocessEntry {
         source: "A".into(),
         target: "B".into(),
@@ -166,7 +166,7 @@ fn prepared_engine_exposes_capabilities_without_credentials() {
 
     let eztrans = PreparedJob::eztrans(
         "engine.dll".into(),
-        "dat".into(),
+        "ehnd".into(),
         99,
         Language::Jpn,
         Language::Kor,
@@ -191,7 +191,7 @@ fn file_job_carries_normalized_eztrans_process_configuration() {
     let process = spec.engine().eztrans_process().unwrap();
     assert_eq!(process.process_count, 16);
     assert_eq!(process.dictionary_path, config.eztrans_dictionary_path);
-    assert_eq!(process.dat_path, config.eztrans_dat_path);
+    assert_eq!(process.ehnd_path, config.eztrans_ehnd_path);
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn eztrans_job_carries_and_applies_its_own_postprocess_dictionary() {
 fn relative_eztrans_paths_resolve_from_the_executable_data_directory() {
     let config = TranslationConfig {
         eztrans_dictionary_path: r"eztrans_dll\JisJK.flat.bin".into(),
-        eztrans_dat_path: r"eztrans_dll\Dat".into(),
+        eztrans_ehnd_path: r"eztrans_dll\Ehnd".into(),
         ..TranslationConfig::default()
     };
 
@@ -230,16 +230,16 @@ fn relative_eztrans_paths_resolve_from_the_executable_data_directory() {
             .to_string_lossy()
     );
     assert_eq!(
-        process.dat_path,
+        process.ehnd_path,
         crate::runtime::data_dir()
-            .join(r"eztrans_dll\Dat")
+            .join(r"eztrans_dll\Ehnd")
             .to_string_lossy()
     );
     assert_eq!(
         config.eztrans_dictionary_path,
         r"eztrans_dll\JisJK.flat.bin"
     );
-    assert_eq!(config.eztrans_dat_path, r"eztrans_dll\Dat");
+    assert_eq!(config.eztrans_ehnd_path, r"eztrans_dll\Ehnd");
 }
 
 #[test]
