@@ -35,12 +35,13 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/translate.rc");
     println!("cargo:rerun-if-changed=resources/backlog.rc");
 
-    copy_eztrans_dll();
+    copy_eztrans_assets();
 }
 
-/// 프로젝트 루트의 `eztrans_dll/` 폴더를 실행 파일과 같은 위치(target/<triple>/<profile>/)로
+/// 프로젝트 루트의 `eztrans_dll/` 폴더에서 순수 Rust 엔진에 필요한 자산을
+/// 실행 파일과 같은 위치(target/<triple>/<profile>/)로
 /// 미러링한다. 변경된(혹은 새로 생긴) 파일만 복사한다.
-fn copy_eztrans_dll() {
+fn copy_eztrans_assets() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let src = manifest_dir.join("eztrans_dll");
 
@@ -82,14 +83,19 @@ fn mirror_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     let mut source_names = HashSet::new();
     for entry in fs::read_dir(src)? {
         let entry = entry?;
-        source_names.insert(entry.file_name());
         let file_type = entry.file_type()?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
         if file_type.is_dir() {
+            source_names.insert(entry.file_name());
             mirror_dir(&src_path, &dst_path)?;
-        } else if file_type.is_file() {
+        } else if file_type.is_file()
+            && !src_path.extension().is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("dll") || extension.eq_ignore_ascii_case("dlx")
+            })
+        {
+            source_names.insert(entry.file_name());
             copy_if_newer(&src_path, &dst_path)?;
         }
     }

@@ -1,6 +1,6 @@
 //! `d2d_composition` 시각 검증 예제.
 //!
-//! `cargo run --example d2d_composition_smoke --target i686-pc-windows-msvc`
+//! `cargo run --example d2d_composition_smoke --target x86_64-pc-windows-msvc`
 //!
 //! 움직이는 반투명 도형과 정렬별 text로 합성, alpha, resize, glyph overhang을
 //! 확인한다. ESC 또는 닫기 시 COM 해제도 검증한다.

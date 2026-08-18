@@ -690,13 +690,13 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
 
     let mut config = Config::default();
     config.translation.engine = "eztrans".into();
-    config.translation.eztrans_dll_path = "C:\\없는경로\\NotJ2KEngine.dll".into();
+    config.translation.eztrans_dictionary_path = "C:\\없는경로\\NotJisJK.flat.bin".into();
     config.translation.eztrans_dat_path = "C:\\없는경로\\NotDat".into();
 
     let hwnd = SettingsDialog::show(unsafe { GetDesktopWindow() }, config, None).unwrap();
     let _dialog = DialogGuard(hwnd);
 
-    let dll_warning = control(hwnd, ctrl_id::EZTRANS_DLL_WARNING_LABEL);
+    let dll_warning = control(hwnd, ctrl_id::EZTRANS_DICTIONARY_WARNING_LABEL);
     let dat_warning = control(hwnd, ctrl_id::EZTRANS_DAT_WARNING_LABEL);
 
     // 잘못된 경로이므로 경고 문구가 실제로 채워져야 한다. 문구가 비면 라벨이
@@ -707,8 +707,9 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
         instance.refresh_eztrans_path_warnings();
     });
     assert!(
-        crate::dialogs::helpers::get_window_text(dll_warning).contains("EzTrans DLL이 아닙니다"),
-        "잘못된 DLL 경로인데 경고 문구가 비어 있습니다"
+        crate::dialogs::helpers::get_window_text(dll_warning)
+            .contains("EzTrans 평면 사전이 아닙니다"),
+        "잘못된 평면 사전 경로인데 경고 문구가 비어 있습니다"
     );
     assert!(
         crate::dialogs::helpers::get_window_text(dat_warning).contains("사전 폴더가 아닙니다"),
@@ -723,7 +724,7 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
     });
     assert!(
         !unsafe { IsWindowVisible(dll_warning).as_bool() },
-        "EzTrans DLL 경고 라벨이 외관 탭 위에 남아 있습니다"
+        "EzTrans 사전 경고 라벨이 외관 탭 위에 남아 있습니다"
     );
     assert!(
         !unsafe { IsWindowVisible(dat_warning).as_bool() },
@@ -736,14 +737,14 @@ fn win32_eztrans_warning_labels_follow_tab_visibility() {
         instance.switch_tab(super::TAB_TRANSLATION);
         {
             let mut draft = instance.draft.borrow_mut();
-            draft.translation.eztrans_dll_path = String::new();
+            draft.translation.eztrans_dictionary_path = String::new();
             draft.translation.eztrans_dat_path = String::new();
         }
         instance.refresh_eztrans_path_warnings();
     });
     assert!(
         crate::dialogs::helpers::get_window_text(dll_warning).is_empty(),
-        "경로가 비었는데도 DLL 경고가 남아 있습니다"
+        "경로가 비었는데도 사전 경고가 남아 있습니다"
     );
 }
 
@@ -795,11 +796,11 @@ fn win32_scrolling_moves_every_child_exactly_once() {
     // 번역 탭에는 공용 컨트롤과 엔진 컨트롤이 섞여 있다. 중복 등록/누락이
     // 있었다면 이 둘의 이동량이 서로 달라진다.
     let probes = [
-        ctrl_id::TRANS_ENGINE,              // 공용(tab_controls에만)
-        ctrl_id::TRANSLATION_GROUP,         // 공용 그룹박스
-        ctrl_id::EZTRANS_DLL_EDIT,          // 엔진 컨트롤(양쪽에 등록)
-        ctrl_id::EZTRANS_DLL_WARNING_LABEL, // 과거에 누락되었던 컨트롤
-        ctrl_id::APPLY,                     // 탭에 속하지 않는 하단 버튼
+        ctrl_id::TRANS_ENGINE,                     // 공용(tab_controls에만)
+        ctrl_id::TRANSLATION_GROUP,                // 공용 그룹박스
+        ctrl_id::EZTRANS_DICTIONARY_EDIT,          // 엔진 컨트롤(양쪽에 등록)
+        ctrl_id::EZTRANS_DICTIONARY_WARNING_LABEL, // 과거에 누락되었던 컨트롤
+        ctrl_id::APPLY,                            // 탭에 속하지 않는 하단 버튼
     ];
 
     super::with_settings_instance(|instance| {

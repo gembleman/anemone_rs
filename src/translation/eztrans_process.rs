@@ -1,6 +1,6 @@
 //! 파일 번역용 EzTrans helper 프로세스 풀.
 //!
-//! EzTrans DLL은 프로세스 전역 상태를 사용하므로 같은 프로세스 안에서 인스턴스를
+//! EzTrans 세션은 번역 컨텍스트를 재사용하므로 같은 프로세스 안에서 인스턴스를
 //! 병렬 호출하지 않는다. 대신 같은 실행 파일을 숨김 worker 모드로 실행해 주소 공간을
 //! 격리하고, JSON Lines 프로토콜로 배치 번역을 요청한다.
 
@@ -12,14 +12,13 @@ use std::thread::JoinHandle;
 
 use serde::{Deserialize, Serialize};
 
-use super::eztrans_actor::RegisteredDllDirectory;
 use super::{EzTransTranslator, Language};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EzTransProcessConfig {
-    pub dll_path: String,
+    pub dictionary_path: String,
     pub dat_path: String,
     pub process_count: usize,
 }
@@ -34,7 +33,7 @@ struct WorkerResponse {
     result: Result<String, String>,
 }
 
-/// 파일 워커가 의존하는 최소 배치 번역 인터페이스. 단위 테스트에서는 DLL 대신
+/// 파일 워커가 의존하는 최소 배치 번역 인터페이스. 단위 테스트에서는 실제 세션 대신
 /// 메모리 mock을 주입한다.
 pub trait EzTransBatchTranslator: Send + Sync {
     fn process_count(&self) -> usize;
@@ -118,7 +117,7 @@ impl EzTransProcessPool {
     }
 
     fn matches(&self, config: &EzTransProcessConfig) -> bool {
-        self.config.dll_path == config.dll_path
+        self.config.dictionary_path == config.dictionary_path
             && self.config.dat_path == config.dat_path
             && self.config.process_count
                 == crate::config::limits::eztrans_process_count_usize(config.process_count)
@@ -335,8 +334,8 @@ impl WorkerClient {
         let mut command = Command::new(&executable);
         command
             .arg("eztrans-worker")
-            .arg("--dll")
-            .arg(&config.dll_path)
+            .arg("--dictionary")
+            .arg(&config.dictionary_path)
             .arg("--dat")
             .arg(&config.dat_path)
             .stdin(Stdio::piped())
@@ -456,19 +455,12 @@ impl EzTransProcessPoolRegistry {
 }
 
 /// 숨김 CLI worker 진입점. stdout은 부모와의 프로토콜 전용이다.
-pub(crate) fn run_eztrans_worker(dll_path: &str, dat_path: &str) -> Result<(), String> {
+pub(crate) fn run_eztrans_worker(dictionary_path: &str, dat_path: &str) -> Result<(), String> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut reader = stdin.lock();
     let mut writer = BufWriter::new(stdout.lock());
-    let _dll_directory = match RegisteredDllDirectory::register(dll_path) {
-        Ok(directory) => directory,
-        Err(error) => {
-            write_worker_response(&mut writer, Err(error.clone()))?;
-            return Err(error);
-        }
-    };
-    let translator = match EzTransTranslator::new(dll_path, dat_path) {
+    let mut translator = match EzTransTranslator::new(dictionary_path, dat_path) {
         Ok(translator) => {
             write_worker_response(&mut writer, Ok("ready".into()))?;
             translator

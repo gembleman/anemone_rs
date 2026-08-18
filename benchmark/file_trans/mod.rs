@@ -1,5 +1,5 @@
-use super::{FileTransJobData, FileTransTask, FileTranslationSupervisor, ProgressEvent, WriteType};
 use super::mem::MemSnapshot;
+use super::{FileTransJobData, FileTransTask, FileTranslationSupervisor, ProgressEvent, WriteType};
 use crate::translation::{Language, PreparedJob};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,7 +54,7 @@ fn receive_through_terminal(task: &FileTransTask) -> Vec<ProgressEvent> {
     }
 }
 
-/// EzTrans DLL 벤치 테스트는 병렬 실행 시 공유 DLL 상태가 서로 충돌해 랜덤
+/// EzTrans 벤치 테스트는 병렬 실행 시 공유 세션 상태가 서로 충돌해 랜덤
 /// 실패한다(변경 전 상태에서 재현 확인). 실제 사용 경로인 전체 파이프라인
 /// 테스트 2건이 lock을 공유해 순차로 돌게 한다.
 static EZTRANS_BENCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -67,14 +67,14 @@ fn translates_japanese_translation_sample_with_eztrans() {
     let input = project_root
         .join("benchmark")
         .join("japanese_translation_sample.txt");
-    let dll_path = project_root.join("eztrans_dll").join("J2KEngine.dll");
+    let dictionary_path = project_root.join("eztrans_dll").join("JisJK.flat.bin");
     let dat_path = project_root.join("eztrans_dll").join("Dat");
     let directory = BenchDirectory::new();
     let output = directory.0.join("japanese_translation_sample_ko.txt");
     let expected_lines = std::fs::read_to_string(&input).unwrap().lines().count() as i32;
     let mut sample_job = job(vec![input], vec![output.clone()]);
     sample_job.translation = PreparedJob::eztrans(
-        dll_path.to_string_lossy().into_owned(),
+        dictionary_path.to_string_lossy().into_owned(),
         dat_path.to_string_lossy().into_owned(),
         4,
         Language::Jpn,
@@ -115,7 +115,7 @@ fn translates_japanese_translation_sample_with_eztrans() {
 }
 
 #[test]
-#[ignore = "performance benchmark that uses the bundled EzTrans DLL"]
+#[ignore = "performance benchmark that uses the bundled EzTrans dictionary"]
 fn measures_repeated_and_unique_sample_translation_performance() {
     let _guard = EZTRANS_BENCH_LOCK.lock().unwrap();
     assert!(
@@ -123,7 +123,7 @@ fn measures_repeated_and_unique_sample_translation_performance() {
         "performance measurements must run with cargo test --release"
     );
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let dll_path = project_root.join("eztrans_dll").join("J2KEngine.dll");
+    let dictionary_path = project_root.join("eztrans_dll").join("JisJK.flat.bin");
     let dat_path = project_root.join("eztrans_dll").join("Dat");
     let directory = BenchDirectory::new();
 
@@ -143,7 +143,7 @@ fn measures_repeated_and_unique_sample_translation_performance() {
         let output = directory.0.join(format!("{label}_ko.txt"));
         let mut sample_job = job(vec![input], vec![output.clone()]);
         sample_job.translation = PreparedJob::eztrans(
-            dll_path.to_string_lossy().into_owned(),
+            dictionary_path.to_string_lossy().into_owned(),
             dat_path.to_string_lossy().into_owned(),
             4,
             Language::Jpn,
@@ -157,10 +157,9 @@ fn measures_repeated_and_unique_sample_translation_performance() {
         let task = supervisor.start(sample_job).unwrap();
         let events = receive_through_terminal(&task);
         let elapsed = started.elapsed();
-        MemSnapshot::now().delta(mem_before).report_per(
-            &format!("eztrans-{label}"),
-            expected_lines,
-        );
+        MemSnapshot::now()
+            .delta(mem_before)
+            .report_per(&format!("eztrans-{label}"), expected_lines);
 
         assert!(matches!(
             events.last(),

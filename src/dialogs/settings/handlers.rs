@@ -297,13 +297,14 @@ impl SettingsDialog {
             CLIPBOARD_CACHE_CLEAR => self.clear_translation_cache(),
             HOTKEYS_RESET => self.reset_hotkeys_to_default(),
 
-            // EzTrans DLL 찾아보기
-            EZTRANS_DLL_BROWSE => match self.browse_dll_file("J2KEngine.dll 선택") {
+            // EzTrans 평면 사전 찾아보기
+            EZTRANS_DICTIONARY_BROWSE => match self.browse_dictionary_file("JisJK.flat.bin 선택")
+            {
                 Ok(Some(path)) => {
                     let _ = self.apply_translation_change(
-                        TranslationSettingChange::EzTransDllPath(path.clone()),
+                        TranslationSettingChange::EzTransDictionaryPath(path.clone()),
                     );
-                    self.set_control_text(EZTRANS_DLL_EDIT, &path);
+                    self.set_control_text(EZTRANS_DICTIONARY_EDIT, &path);
                     // 경고 라벨만 갱신하고 선택한 경로는 그대로 유지한다.
                     self.refresh_eztrans_path_warnings();
                 }
@@ -770,11 +771,11 @@ impl SettingsDialog {
             .map(|path| path.map(|p| p.to_string_lossy().into_owned()))
     }
 
-    /// DLL 파일 브라우저 열기
-    fn browse_dll_file(&self, title: &str) -> Result<Option<String>> {
+    /// 평면 사전 파일 브라우저 열기
+    fn browse_dictionary_file(&self, title: &str) -> Result<Option<String>> {
         let filters = [crate::dialogs::file_dialog::FileFilter {
-            name: "DLL 파일",
-            spec: "*.dll",
+            name: "EzTrans 평면 사전",
+            spec: "*.bin",
         }];
         crate::dialogs::file_dialog::open_file(self.hwnd, title, &filters)
             .map(|path| path.map(|p| p.to_string_lossy().into_owned()))
@@ -783,22 +784,23 @@ impl SettingsDialog {
     /// 선택된 EzTrans 경로를 찾을 수 없으면 각 입력란 아래 라벨에 경고를 표시하고,
     /// 찾을 수 있으면 라벨을 비운다. 선택한 경로는 그대로 두며 저장도 막지 않는다.
     pub(super) fn refresh_eztrans_path_warnings(&self) {
-        let (dll_path, dat_path) = {
+        let (dictionary_path, dat_path) = {
             let config = self.draft.borrow();
             (
-                config.translation.eztrans_dll_path.clone(),
+                config.translation.eztrans_dictionary_path.clone(),
                 config.translation.eztrans_dat_path.clone(),
             )
         };
 
-        let dll_invalid = TranslationSettingsEditor::eztrans_dll_invalid(&dll_path);
-        if dll_invalid {
-            tracing::warn!("EzTrans DLL로 쓸 수 없는 파일입니다: {dll_path}");
+        let dictionary_invalid =
+            TranslationSettingsEditor::eztrans_dictionary_invalid(&dictionary_path);
+        if dictionary_invalid {
+            tracing::warn!("EzTrans 평면 사전으로 쓸 수 없는 파일입니다: {dictionary_path}");
         }
         self.set_control_text(
-            ctrl_id::EZTRANS_DLL_WARNING_LABEL,
-            if dll_invalid {
-                "⚠ EzTrans DLL이 아닙니다. J2KEngine.dll을 선택하세요."
+            ctrl_id::EZTRANS_DICTIONARY_WARNING_LABEL,
+            if dictionary_invalid {
+                "⚠ EzTrans 평면 사전이 아닙니다. JisJK.flat.bin을 선택하세요."
             } else {
                 ""
             },

@@ -258,7 +258,7 @@ fn eztrans_window_deduplicates_and_reuses_bounded_cache() {
 fn eztrans_window_applies_postprocess_dictionary_before_caching() {
     let translator = MockBatchTranslator::new(1);
     let mut config = crate::config::TranslationConfig::default();
-    config.eztrans_dll_path = "test.dll".into();
+    config.eztrans_dictionary_path = "test.dll".into();
     config.eztrans_dat_path = "test-dat".into();
     config.eztrans_postprocess_dictionary = vec![crate::config::EzTransPostprocessEntry {
         source: "번역:".into(),

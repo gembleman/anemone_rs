@@ -1,5 +1,5 @@
 param(
-    [string]$ExePath = (Join-Path $PSScriptRoot '..\target\i686-pc-windows-msvc\release\anemone_rs.exe')
+    [string]$ExePath = (Join-Path $PSScriptRoot '..\target\x86_64-pc-windows-msvc\release\anemone_rs.exe')
 )
 
 $ErrorActionPreference = 'Stop'

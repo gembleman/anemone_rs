@@ -1,5 +1,4 @@
 use super::{EzTransTranslator, Language, TranslationError, TranslationResult};
-use std::path::Path;
 use std::sync::{Mutex, OnceLock, mpsc};
 
 /// EHND/DAT 초기화는 프로세스 경계를 넘어 공유 파일을 만진다. GUI in-process
@@ -13,13 +12,11 @@ pub(super) fn eztrans_initialization_gate() -> &'static Mutex<()> {
     EZTRANS_INITIALIZATION_GATE.get_or_init(|| Mutex::new(()))
 }
 
-/// 무거운 32-bit EzTrans DLL 인스턴스를 하나만 유지하는 전역 관리자.
+/// 무거운 EzTrans 세션 인스턴스를 하나만 유지하는 전역 관리자.
 struct EzTransState {
     engine: Option<EzTransTranslator>,
-    /// 현재 DLL/data 경로. 같으면 재사용하고 다르면 다시 로드한다.
+    /// 현재 사전/data 경로. 같으면 재사용하고 다르면 다시 로드한다.
     loaded_paths: Option<(String, String)>,
-    /// EzTrans 인접 DLL 탐색을 위해 등록한 검색 경로.
-    registered_dll_dir: Option<RegisteredDllDirectory>,
 }
 
 impl EzTransState {
@@ -27,93 +24,35 @@ impl EzTransState {
         Self {
             engine: None,
             loaded_paths: None,
-            registered_dll_dir: None,
         }
     }
 
     /// EzTrans를 초기화하거나 경로가 바뀌면 다시 로드한다.
-    fn init(&mut self, dll_path: &str, dat_path: &str) -> Result<(), String> {
-        if let Some((loaded_dll, loaded_dat)) = &self.loaded_paths {
-            if loaded_dll == dll_path && loaded_dat == dat_path && self.engine.is_some() {
+    fn init(&mut self, dictionary_path: &str, dat_path: &str) -> Result<(), String> {
+        if let Some((loaded_dictionary, loaded_dat)) = &self.loaded_paths {
+            if loaded_dictionary == dictionary_path
+                && loaded_dat == dat_path
+                && self.engine.is_some()
+            {
                 return Ok(());
             }
             self.engine = None;
             self.loaded_paths = None;
-            self.registered_dll_dir = None;
         }
         // 풀 초기화와 DAT 공유 파일 경합을 막기 위해 전역 게이트 아래에서만 로드한다.
         let _gate = eztrans_initialization_gate()
             .lock()
             .map_err(|_| "EzTrans 초기화 잠금이 손상되었습니다".to_string())?;
-        let directory = RegisteredDllDirectory::register(dll_path)?;
-        let engine = EzTransTranslator::new(dll_path, dat_path)?;
-        self.registered_dll_dir = Some(directory);
+        let engine = EzTransTranslator::new(dictionary_path, dat_path)?;
         self.engine = Some(engine);
-        self.loaded_paths = Some((dll_path.to_string(), dat_path.to_string()));
+        self.loaded_paths = Some((dictionary_path.to_string(), dat_path.to_string()));
         Ok(())
     }
 }
 
-pub(super) struct RegisteredDllDirectory {
-    path: String,
-    cookie: usize,
-}
-
-impl RegisteredDllDirectory {
-    pub(super) fn register(dll_path: &str) -> Result<Self, String> {
-        let dir = eztrans_dll_search_dir(dll_path)?;
-        let wide: Vec<u16> = dir.encode_utf16().chain(std::iter::once(0)).collect();
-        // SAFETY: `wide` is a null-terminated UTF-16 string valid for this call.
-        // Windows copies the directory path into the process DLL directory list.
-        unsafe {
-            let cookie = windows::Win32::System::LibraryLoader::AddDllDirectory(
-                windows::core::PCWSTR(wide.as_ptr()),
-            );
-            if cookie.is_null() {
-                let err = windows::Win32::Foundation::GetLastError();
-                return Err(format!("EzTrans DLL 폴더 등록 실패: Win32 {}", err.0));
-            }
-            Ok(Self {
-                path: dir,
-                cookie: cookie as usize,
-            })
-        }
-    }
-}
-
-impl Drop for RegisteredDllDirectory {
-    fn drop(&mut self) {
-        unsafe {
-            if let Err(error) = windows::Win32::System::LibraryLoader::RemoveDllDirectory(
-                self.cookie as *const std::ffi::c_void,
-            ) {
-                tracing::warn!("EzTrans DLL 폴더 등록 해제 실패 ({}): {error}", self.path);
-            }
-        }
-    }
-}
-
-fn eztrans_dll_search_dir(dll_path: &str) -> Result<String, String> {
-    let path = Path::new(dll_path);
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .ok_or_else(|| "EzTrans DLL 폴더를 확인할 수 없습니다.".to_string())?;
-    let dir = if parent.is_absolute() {
-        parent.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|e| format!("현재 폴더 확인 실패: {e}"))?
-            .join(parent)
-    };
-    dir.to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| "EzTrans DLL 폴더 경로가 UTF-8 이 아닙니다.".to_string())
-}
-
 enum EzTransCommand {
     Init {
-        dll_path: String,
+        dictionary_path: String,
         dat_path: String,
         response: mpsc::Sender<Result<(), String>>,
     },
@@ -139,11 +78,11 @@ impl EzTransActor {
                 while let Ok(command) = receiver.recv() {
                     match command {
                         EzTransCommand::Init {
-                            dll_path,
+                            dictionary_path,
                             dat_path,
                             response,
                         } => {
-                            let _ = response.send(state.init(&dll_path, &dat_path));
+                            let _ = response.send(state.init(&dictionary_path, &dat_path));
                         }
                         EzTransCommand::Translate {
                             text,
@@ -153,7 +92,7 @@ impl EzTransActor {
                         } => {
                             let result = state
                                 .engine
-                                .as_ref()
+                                .as_mut()
                                 .ok_or(TranslationError::EngineNotInitialized("EzTrans"))
                                 .and_then(|engine| engine.translate(&text, source, target));
                             let _ = response.send(result);
@@ -165,11 +104,11 @@ impl EzTransActor {
         Self { sender }
     }
 
-    fn init(&self, dll_path: &str, dat_path: &str) -> Result<(), String> {
+    fn init(&self, dictionary_path: &str, dat_path: &str) -> Result<(), String> {
         let (response, receiver) = mpsc::channel();
         self.sender
             .send(EzTransCommand::Init {
-                dll_path: dll_path.to_string(),
+                dictionary_path: dictionary_path.to_string(),
                 dat_path: dat_path.to_string(),
                 response,
             })
@@ -201,8 +140,8 @@ fn eztrans_actor() -> &'static EzTransActor {
     EZTRANS_ACTOR.get_or_init(EzTransActor::spawn)
 }
 
-pub fn prepare_eztrans(dll_path: &str, dat_path: &str) -> Result<(), String> {
-    eztrans_actor().init(dll_path, dat_path)
+pub fn prepare_eztrans(dictionary_path: &str, dat_path: &str) -> Result<(), String> {
+    eztrans_actor().init(dictionary_path, dat_path)
 }
 
 /// 전역 EzTrans 인스턴스로 번역하며 미초기화 시 `EngineNotInitialized`를 반환한다.

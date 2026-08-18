@@ -25,7 +25,7 @@ fn from_config_cached_reuses_the_job_for_unchanged_config() {
         }],
         ..TranslationConfig::default()
     };
-    config.eztrans_dll_path = "engine.dll".into();
+    config.eztrans_dictionary_path = "engine.dll".into();
     config.eztrans_dat_path = "dat".into();
 
     let first = PreparedJob::from_config_cached(&config).unwrap();
@@ -46,7 +46,7 @@ fn from_config_cached_rebuilds_when_the_dictionary_changes() {
         engine: "eztrans".into(),
         ..TranslationConfig::default()
     };
-    config.eztrans_dll_path = "engine.dll".into();
+    config.eztrans_dictionary_path = "engine.dll".into();
     config.eztrans_dat_path = "dat".into();
     config.eztrans_postprocess_dictionary = vec![EzTransPostprocessEntry {
         source: "A".into(),
@@ -97,7 +97,7 @@ fn validates_eztrans_paths_and_language_pair() {
         engine: "eztrans".into(),
         ..TranslationConfig::default()
     };
-    config.eztrans_dll_path.clear();
+    config.eztrans_dictionary_path.clear();
     assert_eq!(
         PreparedJob::from_config(&config).err(),
         Some(TranslationConfigError::MissingEzTransPath)
@@ -190,7 +190,7 @@ fn file_job_carries_normalized_eztrans_process_configuration() {
     assert_eq!(spec.engine().engine(), TranslationEngine::EzTrans);
     let process = spec.engine().eztrans_process().unwrap();
     assert_eq!(process.process_count, 16);
-    assert_eq!(process.dll_path, config.eztrans_dll_path);
+    assert_eq!(process.dictionary_path, config.eztrans_dictionary_path);
     assert_eq!(process.dat_path, config.eztrans_dat_path);
 }
 
@@ -215,7 +215,7 @@ fn eztrans_job_carries_and_applies_its_own_postprocess_dictionary() {
 #[test]
 fn relative_eztrans_paths_resolve_from_the_executable_data_directory() {
     let config = TranslationConfig {
-        eztrans_dll_path: r"eztrans_dll\J2KEngine.dll".into(),
+        eztrans_dictionary_path: r"eztrans_dll\JisJK.flat.bin".into(),
         eztrans_dat_path: r"eztrans_dll\Dat".into(),
         ..TranslationConfig::default()
     };
@@ -224,9 +224,9 @@ fn relative_eztrans_paths_resolve_from_the_executable_data_directory() {
     let process = job.engine().eztrans_process().unwrap();
 
     assert_eq!(
-        process.dll_path,
+        process.dictionary_path,
         crate::runtime::data_dir()
-            .join(r"eztrans_dll\J2KEngine.dll")
+            .join(r"eztrans_dll\JisJK.flat.bin")
             .to_string_lossy()
     );
     assert_eq!(
@@ -235,7 +235,10 @@ fn relative_eztrans_paths_resolve_from_the_executable_data_directory() {
             .join(r"eztrans_dll\Dat")
             .to_string_lossy()
     );
-    assert_eq!(config.eztrans_dll_path, r"eztrans_dll\J2KEngine.dll");
+    assert_eq!(
+        config.eztrans_dictionary_path,
+        r"eztrans_dll\JisJK.flat.bin"
+    );
     assert_eq!(config.eztrans_dat_path, r"eztrans_dll\Dat");
 }
 

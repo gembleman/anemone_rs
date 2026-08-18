@@ -29,14 +29,8 @@ use super::helpers::{
 
 const DWLP_USER_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(DWL_USER as i32);
 
-#[cfg(target_pointer_width = "64")]
 unsafe fn set_dialog_user(hwnd: HWND, value: isize) {
     unsafe { SetWindowLongPtrW(hwnd, DWLP_USER_INDEX, value) };
-}
-
-#[cfg(target_pointer_width = "32")]
-unsafe fn set_dialog_user(hwnd: HWND, value: isize) {
-    unsafe { SetWindowLongPtrW(hwnd, DWLP_USER_INDEX, value as i32) };
 }
 
 thread_local! {

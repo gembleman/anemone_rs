@@ -30,11 +30,11 @@ pub const GITHUB_REPO: &str = "anemone_rs";
 ///
 /// 최초 사용자용 full zip(exe + `eztrans_dll/`)은 사람이 직접 게시하며 앱은
 /// 그것을 절대 내려받지 않는다.
-pub const UPDATE_ASSET_NAME: &str = "anemone_rs-i686-pc-windows-msvc.exe";
+pub const UPDATE_ASSET_NAME: &str = "anemone_rs-x86_64-pc-windows-msvc.exe";
 
 /// 무결성 검증용 체크섬 asset. `<sha256 hex>  <파일명>` 한 줄이다.
 /// `scripts/verify-release.ps1`이 쓰는 형식과 같다.
-pub const CHECKSUM_ASSET_NAME: &str = "anemone_rs-i686-pc-windows-msvc.exe.sha256";
+pub const CHECKSUM_ASSET_NAME: &str = "anemone_rs-x86_64-pc-windows-msvc.exe.sha256";
 
 /// GitHub API는 User-Agent가 없으면 403을 반환한다.
 /// `src/translation/deepl.rs`가 쓰는 형식과 같다.

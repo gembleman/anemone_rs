@@ -31,9 +31,9 @@ pub struct TranslationConfig {
         deserialize_with = "deserialize_language"
     )]
     pub target_lang: String,
-    /// EzTrans DLL 경로
-    #[serde(default)]
-    pub eztrans_dll_path: String,
+    /// EzTrans 평면 사전 경로. 이전 설정 키 이름은 serde 별칭으로 호환한다.
+    #[serde(default, alias = "eztrans_dll_path")]
+    pub eztrans_dictionary_path: String,
     /// EzTrans Dat 경로
     #[serde(default)]
     pub eztrans_dat_path: String,
@@ -319,7 +319,7 @@ impl Default for TranslationConfig {
             engine: "eztrans".to_string(),
             source_lang: "ja".to_string(),
             target_lang: "ko".to_string(),
-            eztrans_dll_path: default_eztrans_subpath("J2KEngine.dll"),
+            eztrans_dictionary_path: default_eztrans_subpath("JisJK.flat.bin"),
             eztrans_dat_path: default_eztrans_subpath("Dat"),
             eztrans_process_count: default_eztrans_process_count(),
             eztrans_postprocess_dictionary: Vec::new(),

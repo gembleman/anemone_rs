@@ -64,11 +64,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: i686-pc-windows-msvc
+          targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
 
       # --target은 넘기지 않는다. .cargo/config.toml이 build.target을
-      # i686-pc-windows-msvc로 고정하고 verify-release.ps1도 그 경로를 본다.
+      # x86_64-pc-windows-msvc로 고정하고 verify-release.ps1도 그 경로를 본다.
       - run: cargo build --release --locked
 
       # PE subsystem이 GUI(2)인지 확인한다. 콘솔 창이 뜨는 exe를 배포하면
@@ -80,7 +80,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          $built = 'target/i686-pc-windows-msvc/release/anemone_rs.exe'
+          $built = 'target/x86_64-pc-windows-msvc/release/anemone_rs.exe'
           $asset = Join-Path dist '${{ steps.names.outputs.asset }}'
           Copy-Item -LiteralPath $built -Destination $asset
 

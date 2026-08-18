@@ -40,7 +40,7 @@ enum Command {
     #[command(hide = true)]
     EztransWorker {
         #[arg(long)]
-        dll: String,
+        dictionary: String,
         #[arg(long)]
         dat: String,
     },
@@ -104,7 +104,9 @@ pub fn run() -> CliOutcome {
         Command::FileTrans(args) => file_trans::run(args),
         Command::ListEngines => list::engines(),
         Command::ListLangs(args) => list::languages(args),
-        Command::EztransWorker { dll, dat } => crate::translation::run_eztrans_worker(&dll, &dat),
+        Command::EztransWorker { dictionary, dat } => {
+            crate::translation::run_eztrans_worker(&dictionary, &dat)
+        }
     };
 
     match result {

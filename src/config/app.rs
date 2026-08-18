@@ -344,20 +344,23 @@ impl Config {
 
 /// 다른 설치 폴더나 worktree에서 가져온 설정이 더 이상 존재하지 않는 번들 경로를
 /// 가리키면 현재 실행 파일 옆에 배치된 번들로 연결한다. 명시적인 사용자 경로는
-/// `eztrans_dll/J2KEngine.dll` + `eztrans_dll/Dat` 형태일 때만 보정한다.
+/// `eztrans_dll/JisJK.flat.bin` + `eztrans_dll/Dat` 형태일 때만 보정한다.
 fn relocate_missing_bundled_eztrans_paths(
     config: &mut Config,
     config_path: &std::path::Path,
 ) -> bool {
-    let dll_path = std::path::Path::new(&config.translation.eztrans_dll_path);
+    let dictionary_path = std::path::Path::new(&config.translation.eztrans_dictionary_path);
     let dat_path = std::path::Path::new(&config.translation.eztrans_dat_path);
-    if !dll_path.is_absolute() || !dat_path.is_absolute() {
+    if !dictionary_path.is_absolute() || !dat_path.is_absolute() {
         return false;
     }
-    if dll_path.is_file() && dat_path.is_dir() {
+    if dictionary_path.is_file() && dat_path.is_dir() {
         return false;
     }
-    if !is_bundled_eztrans_path(dll_path, "J2KEngine.dll")
+    if !(is_bundled_eztrans_path(dictionary_path, "JisJK.flat.bin")
+        || dictionary_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("dll")))
         || !is_bundled_eztrans_path(dat_path, "Dat")
     {
         return false;
@@ -367,13 +370,13 @@ fn relocate_missing_bundled_eztrans_paths(
         return false;
     };
     let bundled_dir = config_dir.join("eztrans_dll");
-    let bundled_dll = bundled_dir.join("J2KEngine.dll");
+    let bundled_dictionary = bundled_dir.join("JisJK.flat.bin");
     let bundled_dat = bundled_dir.join("Dat");
-    if !bundled_dll.is_file() || !bundled_dat.is_dir() {
+    if !bundled_dictionary.is_file() || !bundled_dat.is_dir() {
         return false;
     }
 
-    config.translation.eztrans_dll_path = bundled_dll.to_string_lossy().into_owned();
+    config.translation.eztrans_dictionary_path = bundled_dictionary.to_string_lossy().into_owned();
     config.translation.eztrans_dat_path = bundled_dat.to_string_lossy().into_owned();
     true
 }

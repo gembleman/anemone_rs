@@ -33,9 +33,8 @@ pub fn set_topmost(hwnd: HWND, topmost: bool) {
 
 /// 클릭 통과 설정
 pub fn set_click_through(hwnd: HWND, click_through: bool) {
-    // SAFETY: hwnd is a valid window handle. Get/SetWindowLongW 는 32-bit 빌드
-    // (i686-pc-windows-msvc) 의 GWL_EXSTYLE 처리에 충분 — 확장 스타일은 32-bit
-    // 비트필드. unsigned 로 다뤄 부호 확장 사고를 차단한다.
+    // SAFETY: hwnd is a valid window handle. The extended style is a fixed-size
+    // bitfield; use an unsigned intermediate to avoid sign extension.
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         let mask = WS_EX_TRANSPARENT.0;

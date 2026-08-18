@@ -89,14 +89,14 @@ pub const TRANSLATION_GROUP: u16 = 2200;
 pub const TRANS_ENGINE: u16 = 1260;
 pub const TRANS_SOURCE_LANG: u16 = 1261;
 pub const TRANS_TARGET_LANG: u16 = 1262;
-pub const EZTRANS_DLL_EDIT: u16 = 1264;
-pub const EZTRANS_DLL_BROWSE: u16 = 1265;
+pub const EZTRANS_DICTIONARY_EDIT: u16 = 1264;
+pub const EZTRANS_DICTIONARY_BROWSE: u16 = 1265;
 pub const EZTRANS_DAT_EDIT: u16 = 1266;
 pub const EZTRANS_DAT_BROWSE: u16 = 1267;
 pub const EZTRANS_DICTIONARY_EDIT_BTN: u16 = 1268;
 pub const EZTRANS_DICTIONARY_COUNT_LABEL: u16 = 2206;
-/// DLL을 찾을 수 없을 때만 문구가 채워지는 경고 라벨.
-pub const EZTRANS_DLL_WARNING_LABEL: u16 = 2207;
+/// 평면 사전을 찾을 수 없을 때만 문구가 채워지는 경고 라벨.
+pub const EZTRANS_DICTIONARY_WARNING_LABEL: u16 = 2207;
 /// Dat 폴더를 찾을 수 없을 때만 문구가 채워지는 경고 라벨.
 pub const EZTRANS_DAT_WARNING_LABEL: u16 = 2208;
 // DeepL 멀티 키 (1272-1279 예약)
@@ -173,7 +173,7 @@ pub const EZTRANS_STATIC_IDS: &[u16] = &[
     2204,
     2205,
     EZTRANS_DICTIONARY_COUNT_LABEL,
-    EZTRANS_DLL_WARNING_LABEL,
+    EZTRANS_DICTIONARY_WARNING_LABEL,
     EZTRANS_DAT_WARNING_LABEL,
 ];
 pub const DEEPL_STATIC_IDS: &[u16] = &[2213, 2214, 2215, 2216];

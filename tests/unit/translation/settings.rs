@@ -389,32 +389,34 @@ fn eztrans_fixture_dir(case: &str) -> std::path::PathBuf {
 
 #[test]
 fn an_unset_eztrans_path_is_not_reported_as_invalid() {
-    assert!(!TranslationSettingsEditor::eztrans_dll_invalid(""));
-    assert!(!TranslationSettingsEditor::eztrans_dll_invalid("   "));
+    assert!(!TranslationSettingsEditor::eztrans_dictionary_invalid(""));
+    assert!(!TranslationSettingsEditor::eztrans_dictionary_invalid(
+        "   "
+    ));
     assert!(!TranslationSettingsEditor::eztrans_dat_invalid(""));
     assert!(!TranslationSettingsEditor::eztrans_dat_invalid("   "));
 }
 
 #[test]
-fn the_bundled_engine_dll_name_is_accepted_regardless_of_casing() {
-    let directory = eztrans_fixture_dir("dll_ok");
-    let dll = directory.join("j2kengine.DLL");
-    std::fs::write(&dll, b"stub").unwrap();
+fn the_flat_dictionary_name_is_accepted_regardless_of_casing() {
+    let directory = eztrans_fixture_dir("dictionary_ok");
+    let dictionary = directory.join("JISJK.FLAT.BIN");
+    std::fs::write(&dictionary, b"stub").unwrap();
 
-    assert!(!TranslationSettingsEditor::eztrans_dll_invalid(
-        &dll.to_string_lossy()
+    assert!(!TranslationSettingsEditor::eztrans_dictionary_invalid(
+        &dictionary.to_string_lossy()
     ));
 
     let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]
-fn a_dll_that_is_not_the_engine_is_reported_as_invalid() {
-    let directory = eztrans_fixture_dir("dll_wrong_name");
-    let unrelated = directory.join("SomeOther.dll");
+fn a_flat_file_with_an_unexpected_name_is_reported_as_invalid() {
+    let directory = eztrans_fixture_dir("dictionary_wrong_name");
+    let unrelated = directory.join("SomeOther.bin");
     std::fs::write(&unrelated, b"stub").unwrap();
 
-    assert!(TranslationSettingsEditor::eztrans_dll_invalid(
+    assert!(TranslationSettingsEditor::eztrans_dictionary_invalid(
         &unrelated.to_string_lossy()
     ));
 
@@ -422,10 +424,10 @@ fn a_dll_that_is_not_the_engine_is_reported_as_invalid() {
 }
 
 #[test]
-fn a_directory_is_not_accepted_as_the_eztrans_dll() {
-    let directory = eztrans_fixture_dir("dll_is_dir");
+fn a_directory_is_not_accepted_as_the_dictionary() {
+    let directory = eztrans_fixture_dir("dictionary_is_dir");
 
-    assert!(TranslationSettingsEditor::eztrans_dll_invalid(
+    assert!(TranslationSettingsEditor::eztrans_dictionary_invalid(
         &directory.to_string_lossy()
     ));
 

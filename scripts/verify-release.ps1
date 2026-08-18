@@ -20,7 +20,7 @@ if (Test-Path -LiteralPath $manifest) {
     Write-Host 'eztrans_dll/checksums.sha256 없음 - 체크섬 검증 건너뜀.'
 }
 
-$exe = Join-Path $PSScriptRoot '..\target\i686-pc-windows-msvc\release\anemone_rs.exe'
+$exe = Join-Path $PSScriptRoot '..\target\x86_64-pc-windows-msvc\release\anemone_rs.exe'
 $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $exe))
 $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
 $signature = [Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4)

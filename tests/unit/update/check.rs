@@ -146,7 +146,7 @@ fn a_release_without_the_checksum_is_unsupported() {
 #[test]
 fn partial_name_matches_are_not_accepted() {
     // 이름이 접두사만 같은 asset은 고르지 않는다.
-    let body = single_release_json("v0.2.0", &["anemone_rs-i686-pc-windows-msvc.exe.bak"]);
+    let body = single_release_json("v0.2.0", &["anemone_rs-x86_64-pc-windows-msvc.exe.bak"]);
     assert!(matches!(
         parse_releases(&body, &v("0.1.0")).unwrap(),
         UpdateCheck::Unsupported { .. }

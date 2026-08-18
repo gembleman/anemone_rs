@@ -15,7 +15,7 @@ pub enum TranslationSettingChange {
     RemoveDeepLKey(usize),
     PapagoClientId(String),
     PapagoClientSecret(String),
-    EzTransDllPath(String),
+    EzTransDictionaryPath(String),
     EzTransDatPath(String),
     LlmModel(String),
     LlmApiKey(String),
@@ -64,7 +64,7 @@ impl TranslationSettingsEditor {
         let runtime_sync_required = matches!(
             change,
             TranslationSettingChange::Engine(_)
-                | TranslationSettingChange::EzTransDllPath(_)
+                | TranslationSettingChange::EzTransDictionaryPath(_)
                 | TranslationSettingChange::EzTransDatPath(_)
         );
         let changed = match change {
@@ -196,8 +196,8 @@ impl TranslationSettingsEditor {
             TranslationSettingChange::PapagoClientSecret(value) => {
                 set_if_changed(&mut config.papago_client_secret, value)
             }
-            TranslationSettingChange::EzTransDllPath(value) => {
-                set_if_changed(&mut config.eztrans_dll_path, value)
+            TranslationSettingChange::EzTransDictionaryPath(value) => {
+                set_if_changed(&mut config.eztrans_dictionary_path, value)
             }
             TranslationSettingChange::EzTransDatPath(value) => {
                 set_if_changed(&mut config.eztrans_dat_path, value)
@@ -246,23 +246,26 @@ impl TranslationSettingsEditor {
         })
     }
 
-    /// 설정된 EzTrans DLL 경로가 쓸 수 있는 엔진 DLL인지 확인한다.
+    /// 설정된 EzTrans 사전 경로가 쓸 수 있는 평면 사전인지 확인한다.
     ///
     /// 경로는 "찾아보기"로만 지정하므로 파일이 없는 경우는 사실상 나오지 않는다.
-    /// 실제로 걸러야 하는 것은 엉뚱한 DLL을 고른 경우이므로 파일 이름이
-    /// `J2KEngine.dll`인지까지 본다. 비어 있는 경로는 "아직 설정하지 않음"이다.
-    pub fn eztrans_dll_invalid(configured: &str) -> bool {
+    /// 새 설정은 `JisJK.flat.bin`을 가리킨다. 예전 설정의 DLL 경로도
+    /// 같은 폴더에서 평면 사전을 찾는 호환 경로로 허용한다.
+    pub fn eztrans_dictionary_invalid(configured: &str) -> bool {
         path_invalid(configured, |path| {
             path.is_file()
-                && path
-                    .file_name()
-                    .is_some_and(|name| name.eq_ignore_ascii_case("J2KEngine.dll"))
+                && path.file_name().is_some_and(|name| {
+                    name.eq_ignore_ascii_case("JisJK.flat.bin")
+                        || path
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
+                })
         })
     }
 
     /// 설정된 EzTrans Dat 경로가 쓸 수 있는 사전 폴더인지 확인한다.
     ///
-    /// DLL과 같은 이유로, 폴더가 없는 경우보다 엉뚱한 폴더를 고른 경우가 문제다.
+    /// 사전 경로와 같은 이유로, 폴더가 없는 경우보다 엉뚱한 폴더를 고른 경우가 문제다.
     /// 일→한 번역에 필요한 사전 `JisJK.da`가 실제로 들어 있는지까지 본다.
     pub fn eztrans_dat_invalid(configured: &str) -> bool {
         path_invalid(configured, |path| {
@@ -273,7 +276,7 @@ impl TranslationSettingsEditor {
     /// 선택된 EzTrans 설정이 완전할 때만 런타임 초기화를 시도한다.
     pub fn sync_runtime(config: &TranslationConfig) -> Result<(), String> {
         if config.get_engine().map_err(|error| error.to_string())? != TranslationEngine::EzTrans
-            || config.eztrans_dll_path.trim().is_empty()
+            || config.eztrans_dictionary_path.trim().is_empty()
             || config.eztrans_dat_path.trim().is_empty()
         {
             return Ok(());

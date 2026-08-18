@@ -107,7 +107,7 @@ BEGIN
     LTEXT           "타겟:", 2203, 177, 32, 23, 10
     COMBOBOX        1262, 200, 31, 46, 107, CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     // 경로는 "찾아보기"로만 지정한다. 편집란은 선택 결과를 보여 주기만 한다.
-    LTEXT           "EzTrans DLL:", 2204, 17, 51, 46, 10
+    LTEXT           "EzTrans Dictionary:", 2204, 17, 51, 70, 10
     EDITTEXT        1264, 63, 50, 160, 12, ES_AUTOHSCROLL | ES_READONLY | WS_TABSTOP
     PUSHBUTTON      "찾아보기", 1265, 226, 50, 40, 12
     // 경로를 찾을 수 없을 때만 표시되는 경고. 평소에는 빈 문자열로 비워 둔다.
