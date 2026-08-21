@@ -35,13 +35,17 @@ pub struct TranslationConfig {
     #[serde(default, alias = "eztrans_dll_path")]
     pub eztrans_dictionary_path: String,
     /// EzTrans Ehnd 필터/사용자 사전 경로.
-    /// 이전 `eztrans_dat_path`는 역직렬화 시 형제 `Ehnd` 경로로 변환한다.
-    #[serde(
-        default,
-        alias = "eztrans_dat_path",
-        deserialize_with = "deserialize_eztrans_ehnd_path"
-    )]
+    /// 구 키(`eztrans_dat_path`) 값은 `migrate_legacy_ehnd_path`에서만 형제
+    /// `Ehnd` 경로로 변환한다. 새 키로 명시한 값은 폴더 이름과 무관하게
+    /// 절대 재작성하지 않는다.
+    #[serde(default)]
     pub eztrans_ehnd_path: String,
+    /// 구 키 `eztrans_dat_path`의 원본 값. 역직렬화 시에만 채워지고
+    /// 마이그레이션이 소비한 뒤 저장에는 기록되지 않는다.
+    /// crate 가시성인 이유는 테스트의 구조체 분해(`..Default()`)가
+    /// 비공개 필드를 읽지 못하기 때문이다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) eztrans_dat_path: Option<String>,
     /// 파일 번역에서 동시에 유지할 EzTrans helper 프로세스 수
     #[serde(default = "default_eztrans_process_count")]
     pub eztrans_process_count: u32,
@@ -97,24 +101,22 @@ fn default_eztrans_process_count() -> u32 {
     2
 }
 
-fn deserialize_eztrans_ehnd_path<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    let path = std::path::Path::new(&value);
+/// 구 `Dat` 폴더 경로를 형제 `Ehnd` 폴더 경로로 변환한다.
+/// 구 키 마이그레이션 전용이다 — 사용자가 새 키에 쓴 값은 그대로 존중한다.
+fn dat_to_sibling_ehnd(dat_path: &str) -> String {
+    let path = std::path::Path::new(dat_path);
     if path
         .file_name()
         .is_some_and(|name| name.eq_ignore_ascii_case("Dat"))
     {
-        return Ok(path
+        return path
             .parent()
             .map(|parent| parent.join("Ehnd"))
             .unwrap_or_else(|| PathBuf::from("Ehnd"))
             .to_string_lossy()
-            .into_owned());
+            .into_owned();
     }
-    Ok(value)
+    dat_path.to_string()
 }
 
 impl TranslationConfig {
@@ -237,6 +239,22 @@ impl TranslationConfig {
         }
     }
 
+    /// 구 키 `eztrans_dat_path`(Dat 폴더)를 형제 Ehnd 경로로 바꿔 새 키로 옮긴다.
+    ///
+    /// 새 키(`eztrans_ehnd_path`)가 이미 채워져 있으면 사용자가 명시한 값이므로
+    /// 그 값을 우선하고 구 값은 버린다. 소비된 구 키는 저장 시 기록되지 않는다
+    /// (`skip_serializing_if`). 구 키는 어떤 schema_version 설정에도 남아 있을 수
+    /// 있으므로 조건 없이 매 로드마다 실행한다 (필드가 None이면 no-op).
+    pub(crate) fn migrate_legacy_ehnd_path(&mut self) {
+        let Some(dat_path) = self.eztrans_dat_path.take() else {
+            return;
+        };
+        if !self.eztrans_ehnd_path.trim().is_empty() {
+            return;
+        }
+        self.eztrans_ehnd_path = dat_to_sibling_ehnd(&dat_path);
+    }
+
     /// 소스 언어 설정
     pub fn set_source_language(&mut self, lang: crate::translation::Language) {
         self.source_lang = crate::translation::lang_utils::to_code(lang).to_string();
@@ -346,6 +364,7 @@ impl Default for TranslationConfig {
             target_lang: "ko".to_string(),
             eztrans_dictionary_path: default_eztrans_subpath("JisJK.flat.bin"),
             eztrans_ehnd_path: default_eztrans_subpath("Ehnd"),
+            eztrans_dat_path: None,
             eztrans_process_count: default_eztrans_process_count(),
             eztrans_postprocess_dictionary: Vec::new(),
             deepl_api_key: String::new(),

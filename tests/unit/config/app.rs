@@ -95,6 +95,37 @@ eztrans_dat_path = "Dat"
 }
 
 #[test]
+fn explicit_eztrans_ehnd_key_is_never_rewritten_even_if_named_dat() {
+    // 새 키로 쓴 값은 폴더 이름과 무관하게 사용자 값이다. 구 키 치환 로직이
+    // 역직렬화기에 살아 있던 시절에는 매 로드/저장마다 몰래 재작성됐다.
+    let loaded = Config::from_toml_str(
+        r#"
+[translation]
+engine = "eztrans"
+eztrans_ehnd_path = 'C:\custom\tools\Dat'
+"#,
+    )
+    .expect("explicit ehnd key should load as-is");
+
+    assert_eq!(loaded.translation.eztrans_ehnd_path, r"C:\custom\tools\Dat");
+}
+
+#[test]
+fn explicit_eztrans_ehnd_key_wins_over_the_legacy_dat_key() {
+    let loaded = Config::from_toml_str(
+        r#"
+[translation]
+engine = "eztrans"
+eztrans_ehnd_path = 'C:\custom\Ehnd'
+eztrans_dat_path = 'C:\old\Dat'
+"#,
+    )
+    .expect("both keys should be readable");
+
+    assert_eq!(loaded.translation.eztrans_ehnd_path, r"C:\custom\Ehnd");
+}
+
+#[test]
 fn future_schema_version_is_rejected() {
     let error = Config::from_toml_str("schema_version = 999\n").unwrap_err();
     assert!(matches!(

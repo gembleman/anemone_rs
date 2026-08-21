@@ -183,6 +183,10 @@ impl Config {
             self.schema_version = 1;
         }
 
+        // 구 키는 어떤 schema_version 설정에도 남아 있을 수 있다 — 조건 없이
+        // 매 로드마다 변환을 시도한다 (구 키가 없으면 no-op).
+        self.translation.migrate_legacy_ehnd_path();
+
         Ok(())
     }
 
