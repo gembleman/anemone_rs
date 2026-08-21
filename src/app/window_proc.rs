@@ -142,6 +142,12 @@ impl App {
                         }
                     } else {
                         self.sync_client_size(hwnd);
+                        // 이동 전용 드래그 중 모니터를 건너간 경우(WM_DPICHANGED만 도착,
+                        // pending_resize 없음) 여기가 새 DPI를 반영하는 유일한 시점이다.
+                        // paint는 DPI가 바뀐 경우에만 캐시를 재구축하므로 평소에는 저렴하다.
+                        if let Err(e) = self.paint() {
+                            tracing::warn!("paint failed after size-move exit: {e}");
+                        }
                     }
                     Some(LRESULT(0))
                 }
@@ -158,6 +164,14 @@ impl App {
                 WM_DPICHANGED => {
                     // 권장 RECT 적용 후 WM_SIZE가 swap chain resize와 paint를 잇는다.
                     Self::apply_dpi_rect(hwnd, lparam);
+                    if self.model.runtime.resizing {
+                        // 인터랙티브 리사이즈 중이면 즉시 그리지 않는다 — 구식
+                        // client_size에 새 DPI를 조합한 프레임이 나가고, 리사이즈에서
+                        // 미룬 무거운 재구축이 드래그 도중 다시 돌아온다. apply_dpi_rect의
+                        // SetWindowPos가 유발한 WM_SIZE는 pending_resize로 기록되고,
+                        // 크기가 같아 기록이 없더라도 WM_EXITSIZEMOVE의 paint가 마무리한다.
+                        return Some(LRESULT(0));
+                    }
                     if !self.sync_client_size(hwnd)
                         && let Err(e) = self.paint()
                     {
