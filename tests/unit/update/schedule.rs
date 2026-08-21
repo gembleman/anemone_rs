@@ -124,6 +124,7 @@ fn unsupported_release_updates_last_check() {
     assert!(should_update_last_check(&Ok(UpdateCheck::Unsupported {
         version: version("9.9.9"),
         reason: "asset 없음".to_string(),
+        release_page_url: String::new(),
     })));
 }
 

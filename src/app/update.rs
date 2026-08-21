@@ -271,9 +271,14 @@ impl App {
                     ));
                 }
             }
-            Ok(UpdateCheck::Unsupported { version, reason }) => {
+            Ok(UpdateCheck::Unsupported {
+                version,
+                reason,
+                release_page_url,
+            }) => {
                 tracing::warn!(
-                    "새 버전 {version}이(가) 있지만 자동 업데이트를 지원하지 않습니다: {reason}"
+                    "새 버전 {version}이(가) 있지만 자동 업데이트를 지원하지 않습니다: \
+                     {reason} (수동 내려받기: {release_page_url})"
                 );
                 self.pending_update = None;
                 if trigger == CheckTrigger::Manual {

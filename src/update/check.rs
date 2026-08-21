@@ -20,7 +20,13 @@ pub enum UpdateCheck {
     ///
     /// asset 이름이 어긋났거나 체크섬이 빠진 경우다. **절대 `UpToDate`로
     /// 뭉개지 않는다** — 조용히 넘기면 배포 실수를 오래 발견하지 못한다.
-    Unsupported { version: Version, reason: String },
+    /// `release_page_url`로 사용자를 수동 내려받기로 유도한다 (asset 전환
+    /// 과도기처럼 릴리스에 자동 업데이트 파일이 아직 없을 때의 유일한 경로).
+    Unsupported {
+        version: Version,
+        reason: String,
+        release_page_url: String,
+    },
 }
 
 /// 내려받을 수 있는 새 버전.
@@ -134,6 +140,7 @@ fn evaluate_release(
         Ok(UpdateCheck::Unsupported {
             version: version.clone(),
             reason: reason.to_string(),
+            release_page_url: release.html_url.clone(),
         })
     };
 

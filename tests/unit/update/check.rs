@@ -134,6 +134,25 @@ fn a_release_with_only_the_full_zip_is_unsupported_not_up_to_date() {
     );
 }
 
+/// asset 전환 과도기 등으로 자동 적용이 막힌 경우에도 수동 내려받기 경로를
+/// 잃지 않아야 한다.
+#[test]
+fn an_unsupported_result_carries_the_release_page_url() {
+    let body = single_release_json("v0.2.0", &[UPDATE_ASSET_NAME]);
+
+    match parse_releases(&body, &v("0.1.0")).unwrap() {
+        UpdateCheck::Unsupported {
+            release_page_url, ..
+        } => {
+            assert_eq!(
+                release_page_url,
+                "https://github.com/gembleman/anemone_rs/releases/tag/v0.2.0"
+            );
+        }
+        other => panic!("Unsupported여야 한다: {other:?}"),
+    }
+}
+
 #[test]
 fn a_release_without_the_checksum_is_unsupported() {
     let body = single_release_json("v0.2.0", &[UPDATE_ASSET_NAME]);
