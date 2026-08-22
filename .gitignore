@@ -1,5 +1,6 @@
 /target
 /eztrans_dll/
+/tools/inject32/target
 /.claude
 *.env
 nul

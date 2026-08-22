@@ -121,6 +121,12 @@ pub(super) enum AppCommand {
     FileTrans,
     TextSizeUp,
     TextSizeDown,
+    /// 게임 후킹: 대상 프로세스 선택 창.
+    HookSelectTarget,
+    /// 게임 후킹: 후보 후크 탐색 창.
+    HookFind,
+    /// 현재 세션을 끊는다.
+    HookStop,
     Exit,
 }
 
@@ -136,6 +142,18 @@ pub(super) struct AppState {
     pub overlay_notice: Option<OverlayNotice>,
     pub pending_translation: Option<PendingTranslation>,
     pub clipboard_debounce: ClipboardDebounce,
+    /// 현재 후킹 중인 게임. `None`이면 세션 없음.
+    pub hook_session: Option<HookSessionInfo>,
+    /// 도착한 후킹 텍스트의 병합 창.
+    pub hook_merger: crate::hook::text_bridge::TextMerger,
+}
+
+/// 활성 후킹 세션의 표시 정보.
+#[derive(Debug, Clone)]
+pub(super) struct HookSessionInfo {
+    pub pid: u32,
+    pub process_name: String,
+    pub arch_label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +217,8 @@ pub(super) enum Effect {
     Close,
     RequestUpdateCheck,
     RequestUpdateApply,
+    /// 현재 후킹 세션을 끊는다.
+    HookStop,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,6 +227,8 @@ pub(super) enum DialogKind {
     Translate,
     Backlog,
     FileTranslation,
+    HookSelect,
+    HookFind,
 }
 
 impl AppModel {
@@ -296,6 +318,9 @@ impl AppModel {
             AppCommand::Translate => vec![Effect::OpenDialog(DialogKind::Translate)],
             AppCommand::Backlog => vec![Effect::OpenDialog(DialogKind::Backlog)],
             AppCommand::FileTrans => vec![Effect::OpenDialog(DialogKind::FileTranslation)],
+            AppCommand::HookSelectTarget => vec![Effect::OpenDialog(DialogKind::HookSelect)],
+            AppCommand::HookFind => vec![Effect::OpenDialog(DialogKind::HookFind)],
+            AppCommand::HookStop => vec![Effect::HookStop],
             AppCommand::TextSizeUp => {
                 let new_size = (self.config.translation_style.size + 1).min(100);
                 self.set_all_text_sizes(new_size);

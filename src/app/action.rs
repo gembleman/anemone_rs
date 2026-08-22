@@ -121,6 +121,8 @@ impl App {
                     DialogKind::Translate => self.open_translate_dialog(),
                     DialogKind::Backlog => self.open_backlog_dialog(),
                     DialogKind::FileTranslation => self.open_file_trans_dialog(),
+                    DialogKind::HookSelect => self.open_hook_select_dialog(),
+                    DialogKind::HookFind => self.open_hook_find_dialog(),
                 },
                 Effect::ClearTranslationCache => self.services.translation_cache.clear(),
                 Effect::SettingsDialogClosed => self.handle_settings_dialog_closed(),
@@ -140,6 +142,7 @@ impl App {
                 }
                 Effect::RequestUpdateCheck => self.start_manual_update_check(),
                 Effect::RequestUpdateApply => self.start_update_apply(),
+                Effect::HookStop => self.stop_hook_session(),
             }
         }
     }

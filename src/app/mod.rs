@@ -24,6 +24,7 @@ mod bench_app;
 pub(crate) mod action;
 pub(crate) mod backlog;
 mod commands;
+pub(crate) mod hook_text;
 mod lifecycle;
 pub(crate) mod messages;
 mod rendering;
@@ -44,6 +45,12 @@ pub(super) const CLIPBOARD_DEBOUNCE_TIMER: usize = 0xD2D1;
 pub(super) const CLIPBOARD_READ_RETRY_TIMER: usize = 0xD2D2;
 pub(super) const MAGNETIC_NOTICE_TIMER: usize = 0xD2D3;
 pub(super) const MAGNETIC_NOTICE_DURATION_MS: u32 = 2_000;
+/// 후킹 텍스트 병합 창 타이머.
+pub(super) const HOOK_MERGE_TIMER: usize = 0xD2D4;
+
+fn config_hook_merge_ms(config: &crate::config::Config) -> u64 {
+    u64::from(config.hook.merge_window_ms).max(1)
+}
 
 pub struct App {
     hwnd: HWND,

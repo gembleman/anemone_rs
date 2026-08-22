@@ -25,12 +25,16 @@ features = [
     "Win32_System_Ole",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Accessibility",
+    "Win32_Globalization",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Power",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Com",
     "Win32_System_Threading",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_System_ProcessStatus",
     "Win32_Storage_FileSystem",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
@@ -54,6 +58,10 @@ windows-numerics = "0.3"
 # `windows::core::implement`의 COM 코드 생성물이 `::windows_core`를 참조한다.
 windows-core = "0.62"
 eztrans_core = { path = "../eztrans_scratch/eztrans64_rs/crates/eztrans_core" }
+# 게임 텍스트 후킹 코어(LunaHook의 Rust 포팅). anemone은 rlib로만 링크해
+# protocol/host 타입을 공유하고, 주입용 cdylib DLL은 scripts/build_hooks.ps1이
+# 별도 cargo 호출로 빌드한다.
+lunahook_rs = { path = "../eztrans_scratch/lunahook_rs" }
 time = { version = "0.3", default-features = false, features = [
     "local-offset",
 ] }

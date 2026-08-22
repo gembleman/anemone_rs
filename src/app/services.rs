@@ -8,6 +8,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 use crate::file_trans::FileTranslationSupervisor;
+use crate::hook::HookWorker;
 use crate::translation::worker::{
     CompletionNotifier, TargetId, TranslationDispatch, TranslationRequest, TranslationRequestError,
     TranslationResponse,
@@ -17,7 +18,9 @@ use crate::update::worker::{
     CheckTrigger, UpdateOutcome, UpdateRequest, UpdateRequestError, UpdateWorker,
 };
 
-use super::messages::{WM_TRANSLATION_COMPLETE, WM_UPDATE_PROGRESS, WM_UPDATE_RESULT};
+use super::messages::{
+    WM_APP_HOOK_STATE, WM_TRANSLATION_COMPLETE, WM_UPDATE_PROGRESS, WM_UPDATE_RESULT,
+};
 use super::translation_cache::TranslationCacheStore;
 
 /// GUI bootstrap에서 생성해 App과 dialog에 주입하는 장수명 서비스 집합.
@@ -26,6 +29,7 @@ pub(crate) struct AppServices {
     pub file_translation: Rc<FileTranslationSupervisor>,
     pub translation_cache: Rc<TranslationCacheStore>,
     pub update: Rc<UpdateWorker>,
+    pub hook: Rc<HookWorker>,
 }
 
 impl AppServices {
@@ -41,11 +45,13 @@ impl AppServices {
             WM_UPDATE_RESULT,
             WM_UPDATE_PROGRESS,
         ));
+        let hook = Rc::new(HookWorker::spawn(hwnd, WM_APP_HOOK_STATE));
         Self {
             translation_ui,
             file_translation,
             translation_cache,
             update,
+            hook,
         }
     }
 
@@ -59,6 +65,7 @@ impl AppServices {
             );
         }
         self.update.shutdown();
+        self.hook.shutdown();
     }
 }
 

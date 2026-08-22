@@ -1,5 +1,9 @@
 [toolchain]
 channel = "1.97.0"
 profile = "minimal"
-targets = ["x86_64-pc-windows-msvc"]
+targets = [
+    "x86_64-pc-windows-msvc",
+    # x86 게임용 인젝터 헬퍼(tools/inject32)와 lunahook32.dll 크로스빌드용
+    "i686-pc-windows-msvc",
+]
 components = ["rustfmt", "clippy"]

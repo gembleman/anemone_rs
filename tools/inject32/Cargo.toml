@@ -1,0 +1,25 @@
+[package]
+name = "anemone_inject32"
+version = "0.1.0"
+edition = "2021"
+
+# x64 anemone.exe가 x86 게임에 lunahook_rs32.dll을 주입할 때 스폰하는 최소 헬퍼.
+# WOW64 경계를 넘는 CreateRemoteThread는 불가능하므로, 32비트 프로세스인 이
+# 헬퍼가 대신 인젝션을 수행한다. anemone 본체와 독립 빌드된다(scripts/build_hooks.ps1).
+#
+# 사용법: anemone_inject32.exe <pid> <dll_path>
+# 성공 시 exit code 0, 실패 시 stderr에 한 줄 원인 + 0이 아닌 exit code.
+
+[dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+strip = true
+panic = "abort"

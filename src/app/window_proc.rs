@@ -8,20 +8,20 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{
         DefWindowProcW, GetClientRect, HTCAPTION, HTTRANSPARENT, KillTimer, MINMAXINFO,
         PostQuitMessage, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_CLIPBOARDUPDATE, WM_CLOSE,
-        WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE,
-        WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_HOTKEY, WM_NCHITTEST, WM_NCRBUTTONUP, WM_PAINT,
-        WM_RBUTTONUP, WM_SIZE, WM_TIMER,
+        WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
+        WM_GETMINMAXINFO, WM_HOTKEY, WM_NCHITTEST, WM_NCRBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SIZE,
+        WM_TIMER,
     },
 };
 
 use super::messages::{
-    WM_APP_ACTION, WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH, WM_APP_SET_MAGNETIC,
-    WM_DEFERRED_PAINT, WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON,
-    WM_UPDATE_PROGRESS, WM_UPDATE_RESULT,
+    WM_APP_ACTION, WM_APP_HOOK_STATE, WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH,
+    WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT, WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE,
+    WM_TRAY_ICON, WM_UPDATE_PROGRESS, WM_UPDATE_RESULT,
 };
 use super::{
     APP, App, CLIPBOARD_DEBOUNCE_TIMER, CLIPBOARD_READ_RETRY_TIMER, COMPOSITION_RETRY_TIMER,
-    MAGNETIC_NOTICE_TIMER,
+    HOOK_MERGE_TIMER, MAGNETIC_NOTICE_TIMER,
 };
 use crate::window;
 
@@ -69,6 +69,7 @@ fn reentry_policy(msg: u32, taskbar_created_msg: u32) -> ReentryPolicy {
                 | WM_APP_ACTION
                 | WM_APP_MAGNETIC_TARGET_SELECTED
                 | WM_APP_SET_MAGNETIC
+                | WM_APP_HOOK_STATE
                 | WM_DEFERRED_RESIZE
                 | WM_DEFERRED_PAINT
                 | WM_TRANSLATION_COMPLETE
@@ -243,6 +244,11 @@ impl App {
                     Some(LRESULT(0))
                 }
 
+                WM_TIMER if wparam.0 == HOOK_MERGE_TIMER => {
+                    self.handle_hook_merge_timer();
+                    Some(LRESULT(0))
+                }
+
                 WM_CLIPBOARDUPDATE => {
                     self.handle_clipboard_change();
                     Some(LRESULT(0))
@@ -295,6 +301,11 @@ impl App {
 
                 _ if msg == WM_UPDATE_PROGRESS => {
                     self.handle_update_progress();
+                    Some(LRESULT(0))
+                }
+
+                _ if msg == WM_APP_HOOK_STATE => {
+                    self.handle_hook_state();
                     Some(LRESULT(0))
                 }
 

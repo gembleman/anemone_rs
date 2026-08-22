@@ -1,0 +1,23 @@
+#include <windows.h>
+
+#define IDD_HOOK_FIND 108
+
+IDD_HOOK_FIND DIALOGEX 0, 0, 260, 192
+STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_DLGMODALFRAME
+CAPTION "후크 찾기"
+FONT 9, "맑은 고딕", 400, 0, 0x81
+BEGIN
+    GROUPBOX        "텍스트 검색", -1, 6, 4, 248, 52
+    LTEXT           "게임 화면에 보이는 문장을 그대로 입력하세요:", -1, 12, 16, 236, 10
+    EDITTEXT        6101, 12, 28, 172, 13, ES_AUTOHSCROLL | WS_BORDER
+    PUSHBUTTON      "검색", 6110, 190, 27, 58, 15
+
+    GROUPBOX        "범용 탐색", -1, 6, 60, 248, 30
+    PUSHBUTTON      "자동 후크 탐색 시작", 6112, 12, 70, 120, 15
+
+    LTEXT           "발견된 후보:", -1, 12, 96, 80, 10
+    LISTBOX         6102, 6, 106, 248, 58, WS_VSCROLL | WS_BORDER | LBS_NOINTEGRALHEIGHT
+    DEFPUSHBUTTON   "이 후크 설치", 6111, 100, 170, 74, 15
+    PUSHBUTTON      "닫기", IDCANCEL, 180, 170, 74, 15
+END

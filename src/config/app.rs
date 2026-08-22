@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ColorType, HotkeyConfig, TextAlign, TextStyle, TextType, TranslationConfig};
+use super::{
+    ColorType, HookConfig, HotkeyConfig, TextAlign, TextStyle, TextType, TranslationConfig,
+};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
@@ -70,6 +72,10 @@ pub struct Config {
     #[serde(default)]
     pub hotkeys: HotkeyConfig,
 
+    /// 게임 텍스트 후킹 설정.
+    #[serde(default)]
+    pub hook: HookConfig,
+
     // 업데이트
     /// GitHub 릴리스를 자동으로 확인할지 여부.
     #[serde(default = "default_update_check_enabled")]
@@ -128,6 +134,9 @@ impl Default for Config {
 
             // 단축키
             hotkeys: HotkeyConfig::default(),
+
+            // 후킹
+            hook: HookConfig::default(),
 
             // 업데이트
             update_check_enabled: true,

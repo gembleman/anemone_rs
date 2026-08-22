@@ -21,6 +21,9 @@ pub mod id {
     pub const BACKLOG: u16 = 109;
     pub const TRANSLATE: u16 = 111;
     pub const FILE_TRANS: u16 = 112;
+    pub const HOOK_SELECT: u16 = 113;
+    pub const HOOK_FIND: u16 = 114;
+    pub const HOOK_STOP: u16 = 115;
     pub const EXIT: u16 = 110;
 
     // 텍스트 크기 조절
@@ -41,7 +44,7 @@ impl ContextMenu {
         }
     }
 
-    pub fn build(&self, config: &Config) -> Result<()> {
+    pub fn build(&self, config: &Config, hook_active: bool) -> Result<()> {
         /// 체크 상태에 따른 메뉴 플래그
         #[inline]
         fn checked_flag(checked: bool) -> MENU_ITEM_FLAGS {
@@ -49,6 +52,16 @@ impl ContextMenu {
                 MF_STRING | MF_CHECKED
             } else {
                 MF_STRING
+            }
+        }
+
+        /// 활성/비활성 상태에 따른 메뉴 플래그
+        #[inline]
+        fn enabled_flag(enabled: bool) -> MENU_ITEM_FLAGS {
+            if enabled {
+                MF_STRING
+            } else {
+                MF_GRAYED | MF_STRING
             }
         }
 
@@ -110,6 +123,24 @@ impl ContextMenu {
                 MF_STRING,
                 id::FILE_TRANS as usize,
                 w!("파일 번역"),
+            )?;
+            AppendMenuW(
+                self.hmenu,
+                MF_STRING,
+                id::HOOK_SELECT as usize,
+                w!("게임 후킹 대상 선택…"),
+            )?;
+            AppendMenuW(
+                self.hmenu,
+                enabled_flag(hook_active),
+                id::HOOK_FIND as usize,
+                w!("후크 찾기…"),
+            )?;
+            AppendMenuW(
+                self.hmenu,
+                enabled_flag(hook_active),
+                id::HOOK_STOP as usize,
+                w!("후킹 중지"),
             )?;
             AppendMenuW(self.hmenu, MF_STRING, id::BACKLOG as usize, w!("백로그"))?;
             AppendMenuW(self.hmenu, MF_STRING, id::SETTINGS as usize, w!("설정"))?;

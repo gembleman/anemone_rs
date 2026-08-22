@@ -11,6 +11,8 @@ pub mod file_trans;
 pub mod file_trans_progress;
 pub mod font;
 pub mod glossary;
+pub(crate) mod hook_find;
+pub(crate) mod hook_select;
 pub mod settings;
 pub mod translate;
 

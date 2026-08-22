@@ -151,7 +151,7 @@ impl App {
     }
 
     /// 비동기 번역 요청
-    fn request_translation_async(&mut self, text: &str) {
+    pub(super) fn request_translation_async(&mut self, text: &str) {
         use crate::translation::PreparedJob;
 
         let cache_enabled = self.model.config.clipboard_cache_enabled;
@@ -193,10 +193,10 @@ impl App {
         let original: Arc<str> = Arc::from(text);
 
         // 디스패치에 번역 요청 (워커는 프로세스 전역)
-        let request = self
-            .services
-            .translation_ui
-            .request(self.hwnd, Arc::clone(&original), (*job).clone());
+        let request =
+            self.services
+                .translation_ui
+                .request(self.hwnd, Arc::clone(&original), (*job).clone());
 
         match request {
             Ok(req_id) => {

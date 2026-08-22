@@ -15,3 +15,5 @@ pub(crate) const WM_UPDATE_RESULT: u32 = WM_APP + 40;
 /// 다운로드 진행도가 갱신됐을 때 게시하는 알림. 결과와 분리해, 진행도만 다시
 /// 그릴 때 결과 큐를 건드리지 않게 한다.
 pub(crate) const WM_UPDATE_PROGRESS: u32 = WM_APP + 41;
+/// 후킹 워커의 이벤트 슬롯에 결과가 쌓였을 때 게시하는 알림.
+pub(crate) const WM_APP_HOOK_STATE: u32 = WM_APP + 7;

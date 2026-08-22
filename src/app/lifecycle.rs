@@ -172,6 +172,8 @@ impl App {
             let config = Config::load_or_default();
             let services = AppServices::new(hwnd);
             let action_queue = Rc::new(RefCell::new(VecDeque::new()));
+            // config는 AppModel로 이동하므로 필요한 값은 미리 꺼낸다.
+            let hook_merge_ms = super::config_hook_merge_ms(&config);
 
             let app = Rc::new(RefCell::new(App {
                 hwnd,
@@ -190,6 +192,8 @@ impl App {
                         overlay_notice: None,
                         pending_translation: None,
                         clipboard_debounce: state::ClipboardDebounce::default(),
+                        hook_session: None,
+                        hook_merger: crate::hook::text_bridge::TextMerger::new(hook_merge_ms),
                     },
                 },
                 action_queue: action_queue.clone(),

@@ -196,8 +196,9 @@ fn drawable_size_rejects_zero_and_keeps_small_valid_clients() {
 }
 
 fn app_model() -> AppModel {
+    let config = Config::default();
     AppModel {
-        config: Config::default(),
+        config,
         backlog: BacklogStore::new(),
         runtime: AppState {
             client_size: ClientSize::new(400, 200),
@@ -208,6 +209,8 @@ fn app_model() -> AppModel {
             overlay_notice: None,
             pending_translation: None,
             clipboard_debounce: ClipboardDebounce::default(),
+            hook_session: None,
+            hook_merger: crate::hook::text_bridge::TextMerger::default(),
         },
     }
 }

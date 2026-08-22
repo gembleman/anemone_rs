@@ -31,6 +31,9 @@ pub(super) fn command_from_menu_id(id: u16) -> Option<state::AppCommand> {
         menu::id::FILE_TRANS => Some(state::AppCommand::FileTrans),
         menu::id::TEXT_SIZE_UP => Some(state::AppCommand::TextSizeUp),
         menu::id::TEXT_SIZE_DOWN => Some(state::AppCommand::TextSizeDown),
+        menu::id::HOOK_SELECT => Some(state::AppCommand::HookSelectTarget),
+        menu::id::HOOK_FIND => Some(state::AppCommand::HookFind),
+        menu::id::HOOK_STOP => Some(state::AppCommand::HookStop),
         menu::id::EXIT => Some(state::AppCommand::Exit),
         _ => None,
     }
@@ -53,7 +56,8 @@ impl App {
             return Ok(());
         }
         let result = (|| {
-            self.menu.build(&self.model.config)?;
+            let hook_active = self.model.runtime.hook_session.is_some();
+            self.menu.build(&self.model.config, hook_active)?;
             if let Some(command) = self.menu.show(self.hwnd, x, y)? {
                 self.handle_menu_command(command)?;
             }
@@ -72,6 +76,45 @@ impl App {
         let effects = self.model.update(state::AppAction::Command(command));
         self.run_effects(effects);
         Ok(())
+    }
+
+    /// 후킹 대상 선택 창. 클립보드 감시와 충돌하지 않으므로 pause가 필요 없다.
+    pub(super) fn open_hook_select_dialog(&mut self) {
+        let main_hwnd = self.hwnd;
+        let hook = self.services.hook.clone();
+        Self::open_dialog_generic("hook_select", || {
+            crate::dialogs::hook_select::HookSelectDialog::show(main_hwnd, hook)
+        });
+    }
+
+    /// 후크 찾기(탐색/후보 설치) 창.
+    pub(super) fn open_hook_find_dialog(&mut self) {
+        if self.model.runtime.hook_session.is_none() {
+            tracing::warn!("후킹 세션이 없어 후크 찾기를 열 수 없습니다");
+            return;
+        }
+        let main_hwnd = self.hwnd;
+        let hook = self.services.hook.clone();
+        Self::open_dialog_generic("hook_find", || {
+            crate::dialogs::hook_find::HookFindDialog::show(main_hwnd, hook)
+        });
+    }
+
+    /// 현재 후킹 세션을 끊고 메뉴 상태를 갱신한다.
+    pub(super) fn stop_hook_session(&mut self) {
+        let Some(session) = self.model.runtime.hook_session.take() else {
+            return;
+        };
+        tracing::info!(
+            pid = session.pid,
+            name = %session.process_name,
+            arch = %session.arch_label,
+            "후킹 중지 요청"
+        );
+        let _ = self.services.hook.request(crate::hook::HookRequest::Detach);
+        // Detach 완료는 워커의 Detached 이벤트로 확인되지만, UI 반응성을 위해
+        // 즉시 병합 대기열도 비운다.
+        self.clear_hook_pending();
     }
 
     /// 각 dialog의 instance registry가 기존 창 focus와 새 창 생성을 책임진다.

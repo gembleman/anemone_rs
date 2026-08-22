@@ -25,6 +25,12 @@ fn main() {
     let backlog_rc =
         fs::read_to_string("resources/backlog.rc").expect("Failed to read backlog dialog resource");
     res.append_rc_content(&backlog_rc);
+    let hook_select_rc = fs::read_to_string("resources/hook_select.rc")
+        .expect("Failed to read hook select dialog resource");
+    res.append_rc_content(&hook_select_rc);
+    let hook_find_rc = fs::read_to_string("resources/hook_find.rc")
+        .expect("Failed to read hook find dialog resource");
+    res.append_rc_content(&hook_find_rc);
     res.compile().expect("Failed to compile Windows resources");
 
     println!("cargo:rerun-if-changed=assets/Anemone.ico");
@@ -34,6 +40,8 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/file_trans.rc");
     println!("cargo:rerun-if-changed=resources/translate.rc");
     println!("cargo:rerun-if-changed=resources/backlog.rc");
+    println!("cargo:rerun-if-changed=resources/hook_select.rc");
+    println!("cargo:rerun-if-changed=resources/hook_find.rc");
 
     copy_eztrans_assets();
 }
