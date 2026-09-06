@@ -6,8 +6,11 @@ use std::rc::Rc;
 
 use windows_core::{Error, HRESULT};
 use windows_sys::Win32::{
-    Foundation::{GetLastError, HMODULE, HWND, RECT},
-    Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromRect, UpdateWindow},
+    Foundation::{GetLastError, HMODULE, HWND, POINT, RECT},
+    Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+        MonitorFromPoint, MonitorFromRect, UpdateWindow,
+    },
     System::LibraryLoader::GetModuleHandleW,
     UI::WindowsAndMessaging::{
         CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow, DispatchMessageW, GetClientRect,
@@ -35,8 +38,6 @@ use crate::tray::{self, TrayIcon};
 const APP_ICON_ID: u32 = 1;
 const INITIAL_WINDOW_WIDTH: i32 = 400;
 const INITIAL_WINDOW_HEIGHT: i32 = 200;
-const INITIAL_WINDOW_X: i32 = 100;
-const INITIAL_WINDOW_Y: i32 = 100;
 
 #[cfg(feature = "benchmark")]
 use super::bench;
@@ -175,10 +176,14 @@ impl App {
                 .filter(|&(width, height)| width > 0 && height > 0);
 
             // Redirection surface 없이 DComp premultiplied-alpha visual을 노출한다.
-            let (create_x, create_y) =
-                saved_position.unwrap_or((INITIAL_WINDOW_X, INITIAL_WINDOW_Y));
             let (create_width, create_height) =
                 saved_size.unwrap_or((INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT));
+            let default_monitor = primary_monitor_rect();
+            let (create_x, create_y) = saved_position.unwrap_or_else(|| {
+                default_monitor
+                    .map(|rect| centered_position(rect, create_width, create_height))
+                    .unwrap_or((0, 0))
+            });
             let hwnd = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 CLASS_NAME,
@@ -217,10 +222,11 @@ impl App {
             // 뗐거나 해상도를 바꾼 경우) 기본 위치로 되돌린다.
             let (initial_x, initial_y) = saved_position
                 .filter(|&(x, y)| rect_intersects_monitor(x, y, initial_width, initial_height))
-                .unwrap_or((
-                    crate::dpi::scale(INITIAL_WINDOW_X, initial_dpi),
-                    crate::dpi::scale(INITIAL_WINDOW_Y, initial_dpi),
-                ));
+                .unwrap_or_else(|| {
+                    default_monitor
+                        .map(|rect| centered_position(rect, initial_width, initial_height))
+                        .unwrap_or((0, 0))
+                });
             if SetWindowPos(
                 hwnd,
                 null_mut(),
@@ -471,6 +477,43 @@ fn rect_intersects_monitor(x: i32, y: i32, width: i32, height: i32) -> bool {
     };
     // SAFETY: 스택에 있는 유효한 RECT 하나만 넘기며, 반환 handle은 조회만 한다.
     !unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONULL) }.is_null()
+}
+
+/// 주 모니터의 전체 영역을 물리 pixel 좌표로 반환한다.
+fn primary_monitor_rect() -> Option<RECT> {
+    // SAFETY: (0, 0)을 기준으로 주 모니터 handle을 얻고, 유효한 MONITORINFO에 쓴다.
+    unsafe {
+        let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        (GetMonitorInfoW(monitor, &mut info) != 0).then_some(info.rcMonitor)
+    }
+}
+
+/// 창의 중심을 모니터 전체 영역의 중심에 맞춘 좌표를 계산한다.
+fn centered_position(monitor: RECT, width: i32, height: i32) -> (i32, i32) {
+    (
+        monitor.left + (monitor.right - monitor.left - width) / 2,
+        monitor.top + (monitor.bottom - monitor.top - height) / 2,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn centered_position_handles_monitor_origin() {
+        let monitor = RECT {
+            left: -1920,
+            top: -100,
+            right: 0,
+            bottom: 980,
+        };
+        assert_eq!(centered_position(monitor, 400, 200), (-1160, 340));
+    }
 }
 
 fn last_win_error() -> Error {

@@ -48,8 +48,8 @@ impl Default for TextStyle {
             font_face: "맑은 고딕".to_string(),
             font_style: 0,
             size: 22,
-            outline1_size: 2,
-            outline2_size: 4,
+            outline1_size: 1,
+            outline2_size: 0,
             shadow_enabled: true,
             color_primary: 0xFFFFFFFF,  // 흰색
             color_outline1: 0xFF000000, // 검정

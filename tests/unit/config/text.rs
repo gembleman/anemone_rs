@@ -5,6 +5,8 @@ fn default_text_style_uses_readable_white_on_dark_outline() {
     let style = TextStyle::default();
     assert_eq!(style.font_face, "맑은 고딕");
     assert_eq!(style.size, 22);
+    assert_eq!(style.outline1_size, 1);
+    assert_eq!(style.outline2_size, 0);
     assert!(style.shadow_enabled);
     assert_eq!(style.color_primary, 0xFFFF_FFFF);
 }

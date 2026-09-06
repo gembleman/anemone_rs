@@ -2,6 +2,13 @@
 use super::*;
 
 #[test]
+fn default_shadow_offsets_are_zero() {
+    let config = Config::default();
+    assert_eq!(config.shadow_offset_x, 0);
+    assert_eq!(config.shadow_offset_y, 0);
+}
+
+#[test]
 fn out_of_range_toml_is_normalized_at_deserialize_boundary() {
     let mut raw = Config {
         border_width: i32::MAX,

@@ -151,8 +151,8 @@ impl Default for Config {
             name_margin: 5,
 
             // 그림자 오프셋
-            shadow_offset_x: 2,
-            shadow_offset_y: 2,
+            shadow_offset_x: 0,
+            shadow_offset_y: 0,
 
             // 이름 처리
             separate_name: true,
