@@ -370,8 +370,8 @@ pub fn build_system_prompt_with_glossary(
     };
     let mut s = expand_language_placeholders(
         template,
-        lang_utils::to_korean_name(source),
-        lang_utils::to_korean_name(target),
+        lang_utils::to_english_name(source),
+        lang_utils::to_english_name(target),
     );
 
     let mut active = glossary
@@ -381,7 +381,7 @@ pub fn build_system_prompt_with_glossary(
 
     if active.peek().is_some() {
         use std::fmt::Write;
-        s.push_str("\n\n[고정 번역 사전 — 반드시 이대로 옮길 것]");
+        s.push_str("\n\n[Glossary — always translate these exactly as listed]");
         for e in active {
             let _ = write!(s, "\n- {} → {}", e.source, e.target);
         }
@@ -420,7 +420,7 @@ fn expand_language_placeholders(template: &str, source: &str, target: &str) -> S
 }
 
 /// 기본 시스템 프롬프트 — 사용자가 비워두면 이 값을 사용한다
-pub const DEFAULT_SYSTEM_PROMPT: &str = "당신은 게임/소설 텍스트 번역기입니다. {source}를 {target}로 번역하세요.\n- 캐릭터 이름과 고유명사는 자연스럽게 음차하거나 유지하세요.\n- 한국 사용자에게 자연스러운 어투를 사용하세요.\n- 의역을 허용합니다.\n- 번역 결과 텍스트만 출력하세요. 설명·접두어·따옴표 없이.";
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a translator for game and novel text. Translate {source} into {target}.\n- Transliterate or keep character names and proper nouns, whichever reads more naturally.\n- Write in a tone that sounds natural to native {target} readers.\n- Liberal translation is allowed.\n- Output only the translated text. No explanations, prefixes, or quotation marks.";
 
 #[cfg(test)]
 #[path = "../../../tests/unit/translation/llm/mod.rs"]

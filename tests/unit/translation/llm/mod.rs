@@ -4,8 +4,8 @@ use super::*;
 fn blank_system_prompt_falls_back_to_default() {
     for blank in ["", "   \r\n\t"] {
         let prompt = build_system_prompt_with_glossary(blank, Language::Jpn, Language::Kor, &[]);
-        assert!(prompt.contains("일본어를 한국어로 번역"), "{prompt}");
-        assert!(prompt.contains("번역 결과 텍스트만 출력"), "{prompt}");
+        assert!(prompt.contains("Translate Japanese into Korean"), "{prompt}");
+        assert!(prompt.contains("Output only the translated text"), "{prompt}");
     }
 }
 
@@ -17,7 +17,7 @@ fn custom_system_prompt_is_preserved_and_expanded() {
         Language::Kor,
         &[],
     );
-    assert_eq!(prompt, "영어 => 한국어");
+    assert_eq!(prompt, "English => Korean");
 }
 
 #[test]
@@ -37,7 +37,7 @@ fn prompt_expands_repeated_placeholders_and_skips_blank_glossary_entries() {
             },
         ],
     );
-    assert!(prompt.starts_with("영어/한국어/영어"));
+    assert!(prompt.starts_with("English/Korean/English"));
     assert!(prompt.contains("Alice → 앨리스"));
     assert!(!prompt.contains("ignored"));
 }

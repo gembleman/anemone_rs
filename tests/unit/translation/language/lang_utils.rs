@@ -53,6 +53,17 @@ fn to_korean_name_returns_a_distinct_label_for_every_language() {
 }
 
 #[test]
+fn to_english_name_returns_a_distinct_label_for_every_language() {
+    let names: Vec<&str> = ALL_LANGUAGES.iter().map(|&l| to_english_name(l)).collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), names.len());
+    assert_eq!(to_english_name(Language::Jpn), "Japanese");
+    assert_eq!(to_english_name(Language::ZhoHant), "Traditional Chinese");
+}
+
+#[test]
 fn from_code_round_trips_every_to_code_output() {
     for &lang in &ALL_LANGUAGES {
         let code = to_code(lang);

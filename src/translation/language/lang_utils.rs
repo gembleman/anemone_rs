@@ -83,6 +83,33 @@ pub fn to_korean_name(lang: Language) -> &'static str {
     }
 }
 
+/// Language를 영어 이름으로 변환. LLM 프롬프트처럼 영어 문맥에 넣을 때 쓴다.
+pub fn to_english_name(lang: Language) -> &'static str {
+    match lang {
+        Language::Jpn => "Japanese",
+        Language::Kor => "Korean",
+        Language::Eng => "English",
+        Language::ZhoHans => "Simplified Chinese",
+        Language::ZhoHant => "Traditional Chinese",
+        Language::Spa => "Spanish",
+        Language::Fra => "French",
+        Language::Deu => "German",
+        Language::Ita => "Italian",
+        Language::Por => "Portuguese",
+        Language::Rus => "Russian",
+        Language::Ara => "Arabic",
+        Language::Hin => "Hindi",
+        Language::Tha => "Thai",
+        Language::Vie => "Vietnamese",
+        Language::Ind => "Indonesian",
+        Language::Msa => "Malay",
+        Language::Nld => "Dutch",
+        Language::Pol => "Polish",
+        Language::Tur => "Turkish",
+        Language::Ukr => "Ukrainian",
+    }
+}
+
 /// 텍스트가 `lang`의 문자 체계로 쓰였다고 볼 만한지 판정한다.
 ///
 /// 해당 문자 체계의 글자가 **하나라도** 있으면 참이다. 문자 체계를 공유하는
