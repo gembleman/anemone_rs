@@ -108,7 +108,9 @@ ring = "0.17"
 httpdate = "1.0"
 quick_cache = { version = "0.7", default-features = false }
 rusqlite = { version = "0.40", features = ["bundled"] }
-aho-corasick = { version = "1.1.5", default-features = false, features = ["std"] }
+aho-corasick = { version = "1.1.5", default-features = false, features = [
+    "std",
+] }
 
 [build-dependencies]
 winresource = "0.1"
