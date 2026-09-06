@@ -6,37 +6,37 @@ const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f2001
 
 #[test]
 fn known_vectors_match_the_reference_digests() {
-    assert_eq!(digest(b"").unwrap().to_string(), EMPTY);
-    assert_eq!(digest(b"abc").unwrap().to_string(), ABC);
+    assert_eq!(digest(b"").to_string(), EMPTY);
+    assert_eq!(digest(b"abc").to_string(), ABC);
 }
 
 #[test]
 fn streaming_in_chunks_matches_a_single_pass() {
     let data: Vec<u8> = (0..4096u32).map(|value| (value % 251) as u8).collect();
 
-    let one_shot = digest(&data).unwrap();
+    let one_shot = digest(&data);
 
-    let mut hasher = Hasher::new().unwrap();
+    let mut hasher = Hasher::new();
     for chunk in data.chunks(97) {
-        hasher.update(chunk).unwrap();
+        hasher.update(chunk);
     }
-    assert_eq!(hasher.finish().unwrap(), one_shot);
+    assert_eq!(hasher.finish(), one_shot);
 }
 
 #[test]
 fn empty_updates_do_not_change_the_digest() {
-    let mut hasher = Hasher::new().unwrap();
-    hasher.update(b"").unwrap();
-    hasher.update(b"abc").unwrap();
-    hasher.update(b"").unwrap();
-    assert_eq!(hasher.finish().unwrap().to_string(), ABC);
+    let mut hasher = Hasher::new();
+    hasher.update(b"");
+    hasher.update(b"abc");
+    hasher.update(b"");
+    assert_eq!(hasher.finish().to_string(), ABC);
 }
 
 #[test]
 fn hex_parsing_round_trips() {
     let parsed = Digest::from_hex(ABC).unwrap();
     assert_eq!(parsed.to_string(), ABC);
-    assert_eq!(parsed, digest(b"abc").unwrap());
+    assert_eq!(parsed, digest(b"abc"));
 }
 
 #[test]
@@ -66,5 +66,5 @@ fn malformed_hex_is_rejected() {
 
 #[test]
 fn different_inputs_produce_different_digests() {
-    assert_ne!(digest(b"anemone").unwrap(), digest(b"anemone ").unwrap());
+    assert_ne!(digest(b"anemone"), digest(b"anemone "));
 }

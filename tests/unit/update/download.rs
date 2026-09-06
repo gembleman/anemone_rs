@@ -20,7 +20,7 @@ fn the_release_manifest_format_is_parsed() {
     let text = format!("{ABC}  {UPDATE_ASSET_NAME}\n");
     assert_eq!(
         parse_checksum(&text, UPDATE_ASSET_NAME).unwrap(),
-        sha256::digest(b"abc").unwrap()
+        sha256::digest(b"abc")
     );
 }
 
@@ -28,7 +28,7 @@ fn the_release_manifest_format_is_parsed() {
 fn a_bare_hash_without_a_filename_is_accepted() {
     assert_eq!(
         parse_checksum(&format!("{ABC}\n"), UPDATE_ASSET_NAME).unwrap(),
-        sha256::digest(b"abc").unwrap()
+        sha256::digest(b"abc")
     );
 }
 
@@ -39,7 +39,7 @@ fn the_matching_filename_is_selected_from_a_multi_entry_manifest() {
 
     assert_eq!(
         parse_checksum(&text, UPDATE_ASSET_NAME).unwrap(),
-        sha256::digest(b"abc").unwrap()
+        sha256::digest(b"abc")
     );
 }
 
@@ -192,7 +192,7 @@ async fn stream_to_file_hashes_and_writes_the_full_body() {
     .await
     .expect("스트리밍이 성공해야 한다");
 
-    assert_eq!(digest, sha256::digest(body).unwrap());
+    assert_eq!(digest, sha256::digest(body));
     assert_eq!(std::fs::read(&temp.0).unwrap(), body);
     // 0%를 먼저 알린 뒤, 적어도 한 번은 최종 진행률을 알린다.
     assert_eq!(progress_calls.first().unwrap().received, 0);
@@ -233,7 +233,7 @@ fn finalize_staged_keeps_the_file_when_hashes_match() {
     let temp = TempFile::new("match");
     let body = b"matched contents";
     let staged = staged_at(&temp, body);
-    let digest = sha256::digest(body).unwrap();
+    let digest = sha256::digest(body);
 
     let staged = finalize_staged(staged, digest, digest).expect("일치하면 성공해야 한다");
     assert!(staged.path().exists());
@@ -245,8 +245,8 @@ fn finalize_staged_keeps_the_file_when_hashes_match() {
 fn finalize_staged_deletes_the_file_and_reports_a_mismatch() {
     let temp = TempFile::new("mismatch");
     let staged = staged_at(&temp, b"corrupted contents");
-    let expected = sha256::digest(b"original contents").unwrap();
-    let actual = sha256::digest(b"corrupted contents").unwrap();
+    let expected = sha256::digest(b"original contents");
+    let actual = sha256::digest(b"corrupted contents");
     assert_ne!(expected, actual);
 
     let path = temp.0.clone();

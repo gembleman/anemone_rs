@@ -121,8 +121,7 @@ pub(super) const fn should_watch_clipboard(
 /// `hook_session`은 다른 이유들과 성격이 다르다 — 후킹 중에는 게임 텍스트가
 /// 이미 번역 파이프라인을 채우므로, 사용자가 복사한 텍스트까지 같은 경로로
 /// 들어오면 후킹 문장을 덮어쓰고(진행 중이던 요청은 supersede된다) 유료 엔진
-/// 호출도 낭비된다. 특히 MyS Translater는 요청에 후킹 세션의 프로세스 신원을
-/// 실으므로, 게임에서 나오지 않은 텍스트가 그 게임 이름으로 태깅된다.
+/// 호출도 낭비된다.
 pub(super) const fn clipboard_capture_is_paused(
     translation_dialog: bool,
     file_translation_dialog: bool,

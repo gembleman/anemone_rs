@@ -73,7 +73,7 @@ impl SettingsDialog {
         }
         // 엔진 변경 시 해당 그룹만 활성화하고 언어 콤보 항목 재구성
         self.apply_engine_state(engine);
-        if engine == TranslationEngine::MysTranslater && !crate::hook::session_active() {
+        if engine.requires_hook_session() && !crate::hook::session_active() {
             self.show_mys_translater_hook_notice();
         }
     }
@@ -162,8 +162,6 @@ impl SettingsDialog {
             .apply_translation_change(TranslationSettingChange::DeepLStrategyRoundRobin(sel == 1));
     }
 
-    /// 번역 서버 엔진은 게임 텍스트 후킹을 전제로 한다. 후킹 세션이 없으면
-    /// 게임을 후킹하도록 안내한다.
     fn show_mys_translater_hook_notice(&self) {
         // SAFETY: self.hwnd는 살아 있는 설정 대화상자다.
         unsafe {

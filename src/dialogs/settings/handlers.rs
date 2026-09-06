@@ -355,7 +355,6 @@ impl SettingsDialog {
             LLM_API_KEY_VISIBLE => {
                 self.toggle_secret_visibility(LLM_API_KEY_VISIBLE, LLM_API_KEY_EDIT)
             }
-            // 번역 서버 무료 토큰 받기
             MYS_TRANSLATER_FREE_TOKEN_BTN => self.handle_mys_free_token_button(),
             MYS_TRANSLATER_PURCHASE_BTN => self.handle_mys_purchase_button(),
             MYS_TRANSLATER_USAGE_REFRESH_BTN => self.refresh_mys_usage(),

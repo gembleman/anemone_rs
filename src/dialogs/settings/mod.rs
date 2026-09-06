@@ -66,14 +66,7 @@ pub struct SettingsDialog {
     /// 직전 수동 확인이 새 버전을 찾았는지. `true`이면 "업데이트 확인" 버튼을
     /// 다시 누르면 확인이 아니라 다운로드·적용을 요청한다.
     update_available: Cell<bool>,
-    /// "무료 토큰 받기" 전용 워커. 버튼을 처음 누를 때 만들고, 설정창이 닫힐 때
-    /// `mys_signup::SignupWorker::shutdown`으로 정리한다(앱 전역 `UpdateWorker`와
-    /// 달리 이 창의 수명만큼만 산다).
     mys_signup_worker: RefCell<Option<mys_signup::SignupWorker>>,
-    /// 무료 토큰 요청이 진행 중인지. 버튼 활성화는 이 값과 엔진 선택 둘의
-    /// 함수다 — `update_engine_controls`가 엔진만 보고 버튼을 무조건 켜면
-    /// 요청 도중 엔진을 바꿨다 되돌리는 것만으로 중복 요청이 나갈 수 있다.
-    /// 중복 발급은 서버의 IP당 하루 상한(기본 3개)을 이용자도 모르게 깎는다.
     mys_signup_in_progress: Cell<bool>,
 }
 

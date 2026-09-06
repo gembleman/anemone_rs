@@ -6,8 +6,6 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-// 번역 서버 dispatch 테스트는 요청 계약을 그대로 드러내므로 비공개
-// 구현과 함께만 존재한다(`build.rs`의 `mys_private` 참고).
 #[cfg(mys_private)]
 #[path = "translate_mys.rs"]
 mod mys;

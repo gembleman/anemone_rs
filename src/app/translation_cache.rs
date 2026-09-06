@@ -168,7 +168,7 @@ impl TranslationCacheStore {
             [],
         )
         .map_err(CacheError::Query)?;
-        // 번역 서버 사용량도 같은 DB 파일을 공유한다. 캐시를 한 번도 쓰지 않은 상태에서
+        // 사용량 표도 같은 DB 파일을 공유한다. 캐시를 한 번도 쓰지 않은 상태에서
         // 설정창을 먼저 열어도 스키마가 준비되어 있도록 앱 시작 연결에서 생성한다.
         crate::translation::mys_usage::initialize_schema(&conn).map_err(CacheError::Query)?;
         Ok(conn)

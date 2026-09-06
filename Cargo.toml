@@ -53,7 +53,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_Security",
     "Win32_Security_Authorization",
-    "Win32_Security_Cryptography",
     "Win32_UI_Accessibility",
     "Win32_UI_Controls",
     "Win32_UI_Controls_Dialogs",
@@ -103,6 +102,9 @@ rustls = { version = "0.23", default-features = false, features = [
 # 공개키 핀 검사기가 감싸는 바탕 검증기. reqwest가 기본 경로에서 쓰는 것과
 # 같은 크레이트라 새로 딸려 오는 의존성은 없다.
 rustls-platform-verifier = "0.7"
+# SHA-256(업데이트 asset 검증)과 AES-256-GCM(자격 증명 봉인). rustls가
+# provider로 이미 링크하는 크레이트라 새로 컴파일되는 의존성은 없다.
+ring = "0.17"
 httpdate = "1.0"
 quick_cache = { version = "0.7", default-features = false }
 rusqlite = { version = "0.40", features = ["bundled"] }

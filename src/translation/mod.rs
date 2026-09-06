@@ -28,6 +28,7 @@ pub use postprocess::{
 };
 mod service;
 pub(crate) mod settings;
+#[cfg_attr(not(mys_private), path = "tls_pin_stub.rs")]
 mod tls_pin;
 pub(crate) mod worker;
 

@@ -22,6 +22,7 @@ dependencies = [
  "lunahook_rs",
  "quick_cache",
  "reqwest",
+ "ring",
  "rusqlite",
  "rustls",
  "rustls-platform-verifier",

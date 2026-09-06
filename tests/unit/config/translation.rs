@@ -391,10 +391,6 @@ fn source_lang_index_reports_an_unsupported_pair_by_name() {
     assert!(error.contains("ko"), "{error}");
 }
 
-// ---- 번역 서버 URL 해시 ----
-
-/// 기준 해시는 실행 파일에만 둔다 — 설정 파일에 쓰지 않고, 구 설정에 남아
-/// 있는 줄은 읽지도 않는다(저장하면 사라진다).
 #[test]
 fn mys_translater_url_hash_never_appears_in_the_config_file() {
     let old_config = toml::from_str::<TranslationConfig>(

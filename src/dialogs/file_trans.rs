@@ -44,6 +44,8 @@ mod ctrl_id {
     pub const ENGINE_LABEL: u16 = 4040;
 }
 
+const UNSUPPORTED_ENGINE_NOTICE: &str = "현재 번역 엔진은 파일 번역을 지원하지 않습니다.\r\n\"번역\" 또는 \"설정\" 다이얼로그에서 다른 엔진을 선택해 주세요.";
+
 /// 파일 번역 대화상자
 pub struct FileTransDialog {
     hwnd: HWND,
@@ -224,9 +226,15 @@ impl FileTransDialog {
                 Ok(engine) => engine,
                 Err(error) => {
                     let _ = set_window_text(self.engine_label, &format!("번역 설정 오류: {error}"));
+                    self.set_translate_enabled(false);
                     return;
                 }
             };
+            if !engine.supports_file_translation() {
+                let _ = set_window_text(self.engine_label, UNSUPPORTED_ENGINE_NOTICE);
+                self.set_translate_enabled(false);
+                return;
+            }
             let engine_name: String = match engine {
                 TranslationEngine::EzTrans => "EzTrans64".into(),
                 TranslationEngine::Google => "Google".into(),
@@ -236,7 +244,7 @@ impl FileTransDialog {
                     Ok(provider) => format!("LLM: {}", provider.display_name()),
                     Err(error) => format!("LLM 설정 오류: {error}"),
                 },
-                TranslationEngine::MysTranslater => "MyS Translater".into(),
+                TranslationEngine::MysTranslater => unreachable!(),
                 TranslationEngine::Custom => match config.translation.active_custom_api() {
                     Ok(api) => format!("Custom API: {}", api.name),
                     Err(error) => format!("Custom API 설정 오류: {error}"),
@@ -262,6 +270,16 @@ impl FileTransDialog {
             "현재 번역 엔진: {engine_name} ({source} → {target})\r\n엔진/언어는 \"번역\" 또는 \"설정\" 다이얼로그에서 변경할 수 있습니다.",
         );
         let _ = set_window_text(self.engine_label, &text);
+        self.set_translate_enabled(true);
+    }
+
+    fn set_translate_enabled(&self, enabled: bool) {
+        let button = unsafe { GetDlgItem(self.hwnd, ctrl_id::BTN_TRANSLATE as i32) };
+        if !button.is_null() {
+            unsafe {
+                let _ = EnableWindow(button, i32::from(enabled));
+            }
+        }
     }
 
     /// 입력 파일 선택 (다중 선택)
@@ -394,6 +412,23 @@ impl FileTransDialog {
         // 다이얼로그가 떠 있는 동안 다른 창에서 설정이 바뀌었을 수 있으므로
         // 번역 시작 직전에 안내 라벨을 한 번 갱신해 최신 상태를 보여준다.
         self.update_engine_label();
+
+        if !self
+            .config
+            .translation
+            .get_engine()
+            .is_ok_and(TranslationEngine::supports_file_translation)
+        {
+            unsafe {
+                let _ = MessageBoxW(
+                    self.hwnd,
+                    crate::win32::to_wide(UNSUPPORTED_ENGINE_NOTICE).as_ptr(),
+                    crate::win32::to_wide("번역 엔진 오류").as_ptr(),
+                    MB_ICONERROR,
+                );
+            }
+            return;
+        }
 
         if self.input_files.is_empty() {
             // SAFETY: self.hwnd is a valid dialog window handle used as the message box owner.

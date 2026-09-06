@@ -24,7 +24,7 @@ pub(super) struct Args {
     output: PathBuf,
     /// 사용할 번역 엔진
     #[arg(long, value_enum)]
-    engine: Option<super::Engine>,
+    engine: Option<FileEngine>,
     /// 소스 언어 코드 (예: ja)
     #[arg(long = "from")]
     source: Option<String>,
@@ -57,7 +57,13 @@ pub(super) fn run_with_config(args: Args, config: Config) -> Result<(), String> 
         no_trans_linefeed,
     } = args;
 
-    let engine = resolve_engine(engine, &config)?;
+    let engine = resolve_engine(engine.map(Into::into), &config)?;
+    if !engine.supports_file_translation() {
+        return Err(
+            "선택된 번역 엔진은 후킹된 게임에서만 쓸 수 있어 파일 번역에 사용할 수 없습니다."
+                .to_string(),
+        );
+    }
     let (source_lang, target_lang) = resolve_languages(&source, &target, &config)?;
 
     let translation =
@@ -97,6 +103,35 @@ pub(super) fn run_with_config(args: Args, config: Config) -> Result<(), String> 
         total
     );
     Ok(())
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum FileEngine {
+    #[value(name = "eztrans")]
+    EzTrans,
+    #[value(name = "google")]
+    Google,
+    #[value(name = "deepl")]
+    DeepL,
+    #[value(name = "papago")]
+    Papago,
+    #[value(name = "llm")]
+    Llm,
+    #[value(name = "custom")]
+    Custom,
+}
+
+impl From<FileEngine> for super::Engine {
+    fn from(value: FileEngine) -> Self {
+        match value {
+            FileEngine::EzTrans => Self::EzTrans,
+            FileEngine::Google => Self::Google,
+            FileEngine::DeepL => Self::DeepL,
+            FileEngine::Papago => Self::Papago,
+            FileEngine::Llm => Self::Llm,
+            FileEngine::Custom => Self::Custom,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]

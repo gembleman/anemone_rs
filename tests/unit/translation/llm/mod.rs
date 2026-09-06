@@ -4,8 +4,14 @@ use super::*;
 fn blank_system_prompt_falls_back_to_default() {
     for blank in ["", "   \r\n\t"] {
         let prompt = build_system_prompt_with_glossary(blank, Language::Jpn, Language::Kor, &[]);
-        assert!(prompt.contains("Translate Japanese into Korean"), "{prompt}");
-        assert!(prompt.contains("Output only the translated text"), "{prompt}");
+        assert!(
+            prompt.contains("Translate Japanese into Korean"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Output only the translated text"),
+            "{prompt}"
+        );
     }
 }
 

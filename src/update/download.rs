@@ -166,7 +166,7 @@ async fn stream_to_file(
     max_bytes: u64,
     on_progress: &mut impl FnMut(DownloadProgress),
 ) -> Result<Digest, UpdateError> {
-    let mut hasher = Hasher::new()?;
+    let mut hasher = Hasher::new();
     let mut written: u64 = 0;
 
     // 0%를 먼저 알려 총량을 UI가 알 수 있게 한다. 첫 청크까지 시간이 걸려도
@@ -182,7 +182,7 @@ async fn stream_to_file(
         if written > max_bytes {
             return Err(UpdateError::TooLarge { limit: max_bytes });
         }
-        hasher.update(&chunk)?;
+        hasher.update(&chunk);
         file.write_all(&chunk)?;
         on_progress(DownloadProgress {
             received: written,
@@ -194,7 +194,7 @@ async fn stream_to_file(
     file.sync_all()?;
     drop(file);
 
-    Ok(hasher.finish()?)
+    Ok(hasher.finish())
 }
 
 /// `.sha256` asset을 받아 기대 다이제스트를 얻는다.

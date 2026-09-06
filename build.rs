@@ -48,12 +48,13 @@ fn main() {
 fn detect_mys_private() {
     println!("cargo::rustc-check-cfg=cfg(mys_private)");
 
-    const PRIVATE_SOURCES: [&str; 5] = [
+    const PRIVATE_SOURCES: [&str; 7] = [
         "src/translation/mys_translater.rs",
         "src/translation/mys_usage.rs",
         "src/translation/mys_signup.rs",
+        "src/translation/tls_pin.rs",
         "src/dialogs/settings/mys_signup.rs",
-        // 설정 파일 암호화 키의 원재료. 공개되면 암호화가 무의미해진다.
+        "src/config/secret.rs",
         "src/config/secret_key.rs",
     ];
 

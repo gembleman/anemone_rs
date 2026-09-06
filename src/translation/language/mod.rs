@@ -58,7 +58,6 @@ pub enum TranslationEngine {
     Papago = 3,
     /// LLM 기반 번역 (제공자/모델은 LlmConfig에서 지정)
     Llm = 4,
-    /// 자체 호스팅 translate_server 클라이언트
     MysTranslater = 5,
     /// 사용자 정의 JSON REST API
     Custom = 6,
@@ -115,7 +114,7 @@ impl TranslationEngine {
     /// 해당 엔진이 지원하는 소스 언어 목록
     pub fn supported_source_languages(&self) -> &'static [Language] {
         match self {
-            // EzTrans와 마찬가지로 번역 서버 엔진도 일본어 소스만 지원한다.
+            // 이 두 엔진은 일본어 소스만 지원한다.
             Self::EzTrans | Self::MysTranslater => &[Language::Jpn],
             Self::Google => super::GOOGLE_SUPPORTED_LANGUAGES,
             Self::DeepL => super::DEEPL_SUPPORTED_LANGUAGES,
@@ -127,7 +126,7 @@ impl TranslationEngine {
     /// 해당 엔진이 지원하는 타겟 언어 목록
     pub fn supported_target_languages(&self) -> &'static [Language] {
         match self {
-            // 번역 서버 엔진은 일본어→한국어 방향만 허용된다.
+            // 이 두 엔진은 일본어→한국어 방향만 허용된다.
             Self::EzTrans | Self::MysTranslater => &[Language::Kor],
             Self::Google => super::GOOGLE_SUPPORTED_LANGUAGES,
             Self::DeepL => super::DEEPL_SUPPORTED_LANGUAGES,
@@ -149,6 +148,14 @@ impl TranslationEngine {
             Self::Papago => papago_supports_pair(source, target),
             _ => true,
         }
+    }
+
+    pub const fn requires_hook_session(self) -> bool {
+        matches!(self, Self::MysTranslater)
+    }
+
+    pub const fn supports_file_translation(self) -> bool {
+        !self.requires_hook_session()
     }
 
     /// 단일 요청의 보수적인 문자 수 상한. 긴 파일은 호출자가 이 경계로 나눠야 한다.

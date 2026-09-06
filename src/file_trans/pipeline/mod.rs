@@ -104,11 +104,27 @@ pub(super) fn run_with_services(
     report(FileTranslationProgress::Finished(result));
 }
 
+fn validate_engine(job_data: &FileTranslationRequest) -> Result<(), FileTranslationError> {
+    if job_data
+        .translation
+        .engine()
+        .engine()
+        .supports_file_translation()
+    {
+        return Ok(());
+    }
+    Err(FileTranslationError::InvalidRequest(
+        "선택된 번역 엔진은 후킹된 게임에서만 쓸 수 있어 파일 번역에 사용할 수 없습니다."
+            .to_string(),
+    ))
+}
+
 fn run_inner(
     job_data: &FileTranslationRequest,
     services: &FilePipelineServices,
     report: &impl Fn(FileTranslationProgress),
 ) -> Result<FileTranslationSummary, FileTranslationError> {
+    validate_engine(job_data)?;
     validate_job_paths(&job_data.input_files, &job_data.output_files)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()

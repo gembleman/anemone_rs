@@ -127,19 +127,11 @@ pub const LLM_GLOSSARY_COUNT_LABEL: u16 = 1298;
 // 커스텀 API 선택 (1310-1319 예약)
 pub const CUSTOM_API_SELECT: u16 = 1310;
 
-// 번역 서버 (translate_server) 설정 (1320-1329 예약)
-// 1320은 서버 URL 입력란이었다. 서버 URL은 config.toml에서만 관리한다.
-// 1321(토큰 입력란)과 1323(마스킹 해제 체크박스)은 제거됐다. 토큰은 앱이
-// 받아서 암호화해 보관하며 화면에는 값을 내보내지 않는다.
-/// 서버에서 무료 API 토큰을 받아 설정에 채우는 버튼.
+// 1320-1329 예약
 pub const MYS_TRANSLATER_FREE_TOKEN_BTN: u16 = 1322;
-/// 토큰 보유 여부만 알리는 라벨. 값 자체는 절대 넣지 않는다.
 pub const MYS_TRANSLATER_TOKEN_STATUS_LABEL: u16 = 1327;
-/// 현재 API 토큰 계정의 이 기기 KST 월간 사용량.
 pub const MYS_TRANSLATER_USAGE_LABEL: u16 = 1324;
-/// SQLite에 저장된 현재 계정의 월간 사용량을 다시 읽는 버튼.
 pub const MYS_TRANSLATER_USAGE_REFRESH_BTN: u16 = 1325;
-/// 설정된 서버의 공개 유료 이용권 구매 페이지를 여는 버튼.
 pub const MYS_TRANSLATER_PURCHASE_BTN: u16 = 1326;
 
 // 단축키 설정

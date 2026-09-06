@@ -10,16 +10,21 @@ nul
 /src/translation/mys_translater.rs
 /src/translation/mys_usage.rs
 /src/translation/mys_signup.rs
+/src/translation/tls_pin.rs
 /src/dialogs/settings/mys_signup.rs
+/src/config/secret.rs
 /src/config/secret_key.rs
 /tests/unit/translation/mys_translater.rs
 /tests/unit/translation/mys_signup.rs
+/tests/unit/translation/tls_pin.rs
 /tests/unit/translation/worker/translate_mys.rs
 /tests/unit/translation/job_mys.rs
 /tests/unit/cli/mod_mys.rs
 /tests/unit/dialogs/settings/engine_panel_mys.rs
 /tests/unit/dialogs/settings/layout_mys.rs
 /tests/unit/dialogs/settings/smoke_misc_mys.rs
+/tests/unit/config/secret.rs
+/tests/unit/config/app/persistence_mys.rs
 
 # bench / 임시 산출물
 bench_paint.log

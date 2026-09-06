@@ -1,19 +1,11 @@
-//! Windows CNG(bcrypt)를 사용하는 SHA-256.
+//! `ring`을 사용하는 SHA-256.
 //!
-//! 업데이트 asset 무결성 검증에만 쓴다. 해시 crate를 새로 추가하는 대신 이미
-//! 의존하고 있는 `windows` crate의 CNG를 쓴다
-//! (`docs/EXTERNAL_CRATE_AUDIT.md`의 의존성 최소화 기준).
-//!
-//! `Cargo.toml`의 release profile이 `panic = "abort"`라 unwind 정리가 없으므로,
-//! 두 핸들 모두 `Drop`으로 해제를 보장한다.
+//! 업데이트 asset 무결성 검증에 쓴다. `ring`은 `rustls`가 이미 끌어오는
+//! 의존성이라 이 모듈을 위해 새로 컴파일되는 크레이트는 없다.
 
 use std::fmt;
 
-use windows_sys::Win32::Security::Cryptography::{
-    BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE, BCRYPT_SHA256_ALGORITHM, BCryptCloseAlgorithmProvider,
-    BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash, BCryptHashData,
-    BCryptOpenAlgorithmProvider,
-};
+use ring::digest::{Context, SHA256};
 
 pub const DIGEST_LEN: usize = 32;
 
@@ -37,6 +29,8 @@ impl Digest {
     }
 
     /// 원시 다이제스트. 16진 표기를 거치지 않고 키 유도에 쓸 때 필요하다.
+    /// 빌드 구성에 따라 호출부가 없을 수 있다.
+    #[allow(dead_code)]
     pub fn as_bytes(&self) -> &[u8; DIGEST_LEN] {
         &self.0
     }
@@ -59,124 +53,45 @@ impl fmt::Debug for Digest {
 }
 
 /// 스트리밍 해시 계산기. 다운로드하면서 청크 단위로 먹인다.
-pub struct Hasher {
-    // 선언 순서가 drop 순서다. hash를 먼저 파괴한 뒤 provider를 닫아야 한다.
-    hash: HashHandle,
-    _algorithm: AlgorithmHandle,
-}
+pub struct Hasher(Context);
 
 impl Hasher {
-    pub fn new() -> Result<Self, HashError> {
-        // SAFETY: 출력 핸들 포인터가 유효하고, 실패 시 핸들은 null로 남는다.
-        let algorithm = unsafe {
-            let mut handle = BCRYPT_ALG_HANDLE::default();
-            let status = BCryptOpenAlgorithmProvider(
-                &mut handle,
-                BCRYPT_SHA256_ALGORITHM,
-                std::ptr::null(),
-                0,
-            );
-            if status != 0 {
-                return Err(HashError::Cng(format!(
-                    "BCryptOpenAlgorithmProvider: 0x{status:08X}"
-                )));
-            }
-            AlgorithmHandle(handle)
-        };
-
-        // SAFETY: algorithm은 위에서 성공적으로 열렸다. hash object 버퍼로 None을
-        // 넘기면 CNG가 직접 할당한다(Win8+). 타깃이 Win10이라 문제없다.
-        let hash = unsafe {
-            let mut handle = BCRYPT_HASH_HANDLE::default();
-            let status = BCryptCreateHash(
-                algorithm.0,
-                &mut handle,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null(),
-                0,
-                0,
-            );
-            if status != 0 {
-                return Err(HashError::Cng(format!("BCryptCreateHash: 0x{status:08X}")));
-            }
-            HashHandle(handle)
-        };
-
-        Ok(Self {
-            hash,
-            _algorithm: algorithm,
-        })
+    pub fn new() -> Self {
+        Self(Context::new(&SHA256))
     }
 
-    pub fn update(&mut self, data: &[u8]) -> Result<(), HashError> {
-        if data.is_empty() {
-            return Ok(());
-        }
-        // BCryptHashData 길이는 u32이므로 큰 슬라이스도 잘리지 않게 나눠 넣는다.
-        for chunk in data.chunks(u32::MAX as usize) {
-            // SAFETY: hash 핸들이 유효하고 chunk 길이는 u32 범위 안이며 포인터와
-            // 길이가 같은 슬라이스에서 나온다.
-            unsafe {
-                let status = BCryptHashData(self.hash.0, chunk.as_ptr(), chunk.len() as u32, 0);
-                if status != 0 {
-                    return Err(HashError::Cng(format!("BCryptHashData: 0x{status:08X}")));
-                }
-            }
-        }
-        Ok(())
+    pub fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
     }
 
     /// 다이제스트를 확정한다. 호출 후 이 hasher는 재사용할 수 없다.
-    pub fn finish(self) -> Result<Digest, HashError> {
-        let mut digest = [0u8; DIGEST_LEN];
-        // SAFETY: 출력 버퍼가 SHA-256 다이제스트 길이와 정확히 같다.
-        unsafe {
-            let status = BCryptFinishHash(self.hash.0, digest.as_mut_ptr(), digest.len() as u32, 0);
-            if status != 0 {
-                return Err(HashError::Cng(format!("BCryptFinishHash: 0x{status:08X}")));
-            }
-        }
-        Ok(Digest(digest))
+    pub fn finish(self) -> Digest {
+        let mut bytes = [0u8; DIGEST_LEN];
+        // SHA-256 다이제스트는 항상 DIGEST_LEN이므로 길이가 어긋날 수 없다.
+        bytes.copy_from_slice(self.0.finish().as_ref());
+        Digest(bytes)
+    }
+}
+
+impl Default for Hasher {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 /// 한 번에 전체 버퍼를 해시한다.
 ///
-/// 다운로드 검증(`download.rs`)은 스트리밍 `Hasher`를 쓰지만, 짧은 버퍼를
-/// 한 번에 해시하는 곳에서는 이 one-shot 헬퍼를 쓴다.
-pub fn digest(data: &[u8]) -> Result<Digest, HashError> {
-    let mut hasher = Hasher::new()?;
-    hasher.update(data)?;
+/// 다운로드 검증(`download.rs`)은 스트리밍 `Hasher`를 쓰므로, 빌드 구성에
+/// 따라서는 이 one-shot 헬퍼의 호출부가 없을 수 있다.
+#[allow(dead_code)]
+pub fn digest(data: &[u8]) -> Digest {
+    let mut hasher = Hasher::new();
+    hasher.update(data);
     hasher.finish()
-}
-
-struct AlgorithmHandle(BCRYPT_ALG_HANDLE);
-
-impl Drop for AlgorithmHandle {
-    fn drop(&mut self) {
-        // SAFETY: 생성에 성공한 핸들만 여기 도달하며 한 번만 닫는다.
-        unsafe {
-            let _ = BCryptCloseAlgorithmProvider(self.0, 0);
-        }
-    }
-}
-
-struct HashHandle(BCRYPT_HASH_HANDLE);
-
-impl Drop for HashHandle {
-    fn drop(&mut self) {
-        // SAFETY: 생성에 성공한 핸들만 여기 도달하며 한 번만 파괴한다.
-        unsafe {
-            let _ = BCryptDestroyHash(self.0);
-        }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum HashError {
-    #[error("해시 계산에 실패했습니다: {0}")]
-    Cng(String),
     #[error("SHA-256 값 형식이 올바르지 않습니다")]
     InvalidHex,
 }

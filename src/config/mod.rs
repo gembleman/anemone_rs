@@ -4,9 +4,9 @@ mod hook;
 pub mod hotkey;
 pub(crate) mod limits;
 mod llm;
+#[cfg_attr(not(mys_private), path = "secret_stub.rs")]
 pub(crate) mod secret;
-/// AES 키 원재료. 비공개 파일이 없으면 공개 stub이 쓰인다(`build.rs`).
-#[cfg_attr(not(mys_private), path = "secret_key_stub.rs")]
+#[cfg(mys_private)]
 mod secret_key;
 mod text;
 mod translation;

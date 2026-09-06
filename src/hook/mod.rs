@@ -79,7 +79,7 @@ pub struct ProcessIdentity {
 }
 
 /// 활성 세션의 프로세스 신원 스냅샷. UI 스레드가 Attached/Detached 이벤트로
-/// 갱신하고, 번역 워커(번역 서버 요청 직렬화)가 잠깐 잠그고 읽는다.
+/// 갱신하고, 번역 워커가 잠깐 잠그고 읽는다.
 static SESSION_IDENTITY: Mutex<Option<ProcessIdentity>> = Mutex::new(None);
 
 /// 세션 프로세스 신원 스냅샷을 갱신한다. (`None`으로 지우면 세션 종료)
@@ -90,7 +90,8 @@ pub(crate) fn set_session_identity(identity: Option<ProcessIdentity>) {
 }
 
 /// 현재 후킹된 게임 프로세스 신원. 세션이 없으면 `None`.
-#[cfg_attr(not(mys_private), allow(dead_code))]
+/// 빌드 구성에 따라 읽는 쪽이 없을 수 있다.
+#[allow(dead_code)]
 pub fn session_identity() -> Option<ProcessIdentity> {
     SESSION_IDENTITY
         .lock()
@@ -100,25 +101,28 @@ pub fn session_identity() -> Option<ProcessIdentity> {
 
 /// pid의 실행 파일을 읽어 SHA-256 다이제스트를 계산한다.
 ///
+/// 저장된 후크 프로필을 찾는 열쇠다 — 실행 파일 이름이 바뀌어도 같은
+/// 게임이면 프로필이 따라온다(`HookConfig::saved_profile`).
+///
 /// attach 흐름(hook 워커 스레드)에서 한 번만 호출한다. 수백 MB 실행 파일도
-/// CNG 해시로 1초 안에 처리되며, 실패해도 치명적이지 않다 — 해시 없이
-/// 이름만이라도 서버로 보내는 편이 낫다.
+/// 1초 안에 처리되며, 실패해도 치명적이지 않다 — 해시가 없으면 이름으로
+/// 대조한다.
 fn compute_exe_digest(pid: u32) -> Option<String> {
     use std::io::Read;
 
     let path = process_list::process_image_full_path(pid)?;
     let file = std::fs::File::open(&path).ok()?;
-    let mut hasher = crate::update::sha256::Hasher::new().ok()?;
+    let mut hasher = crate::update::sha256::Hasher::new();
     let mut reader = std::io::BufReader::with_capacity(256 * 1024, file);
     let mut chunk = vec![0u8; 256 * 1024];
     loop {
         match reader.read(&mut chunk) {
             Ok(0) => break,
-            Ok(read) => hasher.update(&chunk[..read]).ok()?,
+            Ok(read) => hasher.update(&chunk[..read]),
             Err(_) => return None,
         }
     }
-    Some(hasher.finish().ok()?.to_string())
+    Some(hasher.finish().to_string())
 }
 
 /// 대상 프로세스의 비트니스.

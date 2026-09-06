@@ -15,8 +15,6 @@ pub enum TranslationSettingChange {
     RemoveDeepLKey(usize),
     PapagoClientId(String),
     PapagoClientSecret(String),
-    // 번역 서버 URL은 설정 창에서 바꿀 수 없다 — config.toml의
-    // `mys_translater_url`이 유일한 경로다.
     MysTranslaterApiKey(String),
     EzTransDictionaryPath(String),
     EzTransEhndPath(String),

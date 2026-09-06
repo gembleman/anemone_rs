@@ -1,5 +1,5 @@
 //! 번역 탭에서 선택된 엔진의 전용 패널만 보이도록 하는 컨트롤 그룹과,
-//! 번역 서버 사용량 라벨 서식.
+//! 사용량 라벨 서식.
 
 use windows_sys::Win32::{UI::Input::KeyboardAndMouse::EnableWindow, UI::WindowsAndMessaging::*};
 
@@ -60,11 +60,6 @@ impl SettingsDialog {
     }
 
     /// 번역 탭에서는 선택된 엔진의 전용 컨트롤만 표시한다.
-    ///
-    /// "무료 토큰 받기" 버튼의 활성화는 엔진 선택 하나만의 함수가 아니다 —
-    /// 요청이 진행 중이면(`mys_signup_in_progress`) 엔진을 벗어났다 돌아와도
-    /// 계속 비활성 상태를 유지해야 두 번째 클릭이 물리적으로 불가능하다.
-    /// 그러지 않으면 중복 요청이 서버의 IP당 하루 발급 상한을 갉아먹는다.
     pub(super) fn update_engine_controls(&self, engine: TranslationEngine) {
         let active = Self::engine_group(engine).map(|group| group as usize);
         let translation_tab_visible = self.current_tab == TAB_TRANSLATION;
@@ -88,8 +83,6 @@ impl SettingsDialog {
         }
     }
 
-    /// 토큰 보유 여부만 알린다. 값은 물론 마스킹한 일부도 내보내지 않는다 —
-    /// 이용자가 토큰 원문을 다룰 경로 자체를 두지 않는 것이 이 화면의 계약이다.
     pub(super) fn refresh_mys_token_status(&self) {
         let configured = !self
             .draft

@@ -16,8 +16,7 @@ pub struct EzTransPostprocessEntry {
 /// 번역 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TranslationConfig {
-    /// 번역 엔진: "eztrans", "google", "deepl", "papago", "llm",
-    /// "mys_translater", "custom"
+    /// 번역 엔진: "eztrans", "google", "deepl", "papago", "llm", "custom"
     #[serde(default = "default_engine", deserialize_with = "deserialize_engine")]
     pub engine: String,
     /// 소스 언어 (ISO 639-1 코드): "ja", "ko", "en", "zh", etc.
@@ -68,15 +67,8 @@ pub struct TranslationConfig {
     /// Ncloud Papago Application Client Secret
     #[serde(default)]
     pub papago_client_secret: String,
-    /// 번역 서버 주소
     #[serde(default = "default_mys_translater_url")]
     pub mys_translater_url: String,
-    /// 번역 서버 고객 Bearer 토큰.
-    ///
-    /// 메모리에서는 평문이지만 `config.toml`에는 암호화해 적는다 — 설정
-    /// 파일만 열어서는 토큰 값을 알 수 없어야 한다(`config::secret`).
-    /// 접두가 없는 값은 암호화 도입 이전의 평문으로 보고 그대로 읽어들이며,
-    /// 다음 저장 때 암호문으로 바뀐다.
     #[serde(
         default,
         deserialize_with = "deserialize_secret",
@@ -113,8 +105,6 @@ fn default_deepl_strategy() -> String {
     "failover".to_string()
 }
 
-/// 공식 번역 서버 주소. 주소 자체는 비공개 모듈에만 둔다 — 엔진이 없는
-/// 빌드에서는 빈 값이라 사용자가 직접 채워야 한다.
 fn default_mys_translater_url() -> String {
     crate::translation::mys_translater::default_base_url().to_string()
 }
@@ -355,7 +345,7 @@ where
         return Ok(value);
     }
     Ok(super::secret::open(&value).unwrap_or_else(|error| {
-        tracing::warn!("저장된 번역 서버 토큰을 복호화할 수 없습니다: {error}");
+        tracing::warn!("저장된 토큰을 복호화할 수 없습니다: {error}");
         String::new()
     }))
 }

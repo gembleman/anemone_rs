@@ -92,3 +92,26 @@ fn each_script_group_accepts_its_own_language_and_rejects_the_others() {
         }
     }
 }
+
+#[test]
+fn only_the_hook_bound_engine_is_excluded_from_file_translation() {
+    use super::TranslationEngine;
+
+    for engine in TranslationEngine::ALL {
+        assert_eq!(
+            engine.supports_file_translation(),
+            !engine.requires_hook_session(),
+            "{engine:?}"
+        );
+    }
+
+    assert!(TranslationEngine::MysTranslater.requires_hook_session());
+    assert!(!TranslationEngine::MysTranslater.supports_file_translation());
+
+    for engine in TranslationEngine::ALL {
+        if engine == TranslationEngine::MysTranslater {
+            continue;
+        }
+        assert!(engine.supports_file_translation(), "{engine:?}");
+    }
+}

@@ -122,3 +122,44 @@ fn run_with_config_rejects_an_invalid_engine_before_any_io() {
     let result = run_with_config(args(input_path, output_path, WriteType::Only), config);
     assert!(result.is_err());
 }
+
+#[test]
+fn the_hook_bound_engine_is_not_a_file_trans_engine_option() {
+    use clap::ValueEnum;
+
+    let names: Vec<String> = super::FileEngine::value_variants()
+        .iter()
+        .filter_map(|variant| {
+            variant
+                .to_possible_value()
+                .map(|value| value.get_name().to_string())
+        })
+        .collect();
+
+    assert!(!names.contains(&"mys_translater".to_string()), "{names:?}");
+    for engine in crate::translation::TranslationEngine::ALL {
+        assert_eq!(
+            names.contains(&engine.to_str().to_string()),
+            engine.supports_file_translation(),
+            "{engine:?}"
+        );
+    }
+}
+
+#[test]
+fn run_with_config_rejects_a_configured_hook_bound_engine_before_any_io() {
+    let dir = TestDirectory::new();
+    let input_path = dir.0.join("input.txt");
+    let output_path = dir.0.join("output.txt");
+    std::fs::write(&input_path, "こんにちは\n").unwrap();
+
+    let mut config = Config::default();
+    config.translation.engine = "mys_translater".to_string();
+
+    let result = run_with_config(
+        args(input_path, output_path.clone(), WriteType::Only),
+        config,
+    );
+    assert!(result.is_err());
+    assert!(!output_path.exists());
+}
