@@ -18,4 +18,6 @@ pub(crate) use hook::{MAX_MERGE_WINDOW_MS, MIN_MERGE_WINDOW_MS};
 pub use hotkey::{HotkeyConfig, HotkeySlot, HotkeySpec};
 pub use llm::{LlmConfig, LlmGlossaryEntry};
 pub use text::{ColorType, TextAlign, TextStyle, TextType};
-pub use translation::{EzTransPostprocessEntry, TranslationConfig};
+pub use translation::{
+    EzTransPostprocessEntry, TranslationConfig, TranslationRoute, TranslationRouteConfig,
+};

@@ -8,8 +8,9 @@ use windows_sys::Win32::{
 
 use std::sync::Arc;
 
-use super::{AUTO_TRANSLATE_TIMER, CUSTOM_ENGINE_INDEX, TranslateDialog, engine_from_combo_index};
+use super::{AUTO_TRANSLATE_TIMER, TranslateDialog};
 use crate::dialogs::helpers::{get_window_text, set_window_text};
+use crate::dialogs::translation_route::{CUSTOM_INDEX, engine_from_index};
 use crate::translation::{PreparedJob, TranslationEngine};
 
 impl TranslateDialog {
@@ -30,7 +31,7 @@ impl TranslateDialog {
             let _ = KillTimer(self.hwnd, AUTO_TRANSLATE_TIMER);
         }
         let engine_idx = unsafe { SendMessageW(self.engine_combo, CB_GETCURSEL, 0, 0) as u8 };
-        let Some(engine) = engine_from_combo_index(engine_idx as usize) else {
+        let Some(engine) = engine_from_index(engine_idx as usize) else {
             return;
         };
         let delay_ms = if engine == TranslationEngine::Llm {
@@ -60,7 +61,7 @@ impl TranslateDialog {
             let source_idx = SendMessageW(self.source_lang_combo, CB_GETCURSEL, 0, 0) as usize;
             let target_idx = SendMessageW(self.target_lang_combo, CB_GETCURSEL, 0, 0) as usize;
 
-            let Some(engine) = engine_from_combo_index(engine_idx) else {
+            let Some(engine) = engine_from_index(engine_idx) else {
                 tracing::error!("잘못된 번역 엔진 콤보 선택: {engine_idx}");
                 return;
             };
@@ -77,7 +78,7 @@ impl TranslateDialog {
 
             let config = &mut self.config;
             if engine == TranslationEngine::Custom {
-                let custom_index = engine_idx - CUSTOM_ENGINE_INDEX;
+                let custom_index = engine_idx - CUSTOM_INDEX;
                 let custom_name = if config.translation.custom_apis.is_empty() {
                     (custom_index == 0).then(|| config.translation.custom.name.clone())
                 } else {
@@ -99,6 +100,11 @@ impl TranslateDialog {
             config.translation.set_engine(engine);
             config.translation.set_source_language(source_lang);
             config.translation.set_target_language(target_lang);
+            let route = config
+                .translation
+                .store_active_route(crate::config::TranslationRoute::Manual);
+            self.actions
+                .set_translation_route(crate::config::TranslationRoute::Manual, route);
         }
     }
 

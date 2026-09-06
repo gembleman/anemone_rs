@@ -46,7 +46,10 @@ pub(super) fn run(args: Args) -> Result<(), String> {
 /// `run`에서 설정 로드를 분리해, 테스트가 실제 사용자 설정 파일을 건드리지
 /// 않고 파일 번역 실행 경로(엔진/언어 결정, 실제 파일 I/O와 번역 호출)를
 /// 검증할 수 있게 한다.
-pub(super) fn run_with_config(args: Args, config: Config) -> Result<(), String> {
+pub(super) fn run_with_config(args: Args, mut config: Config) -> Result<(), String> {
+    config
+        .translation
+        .activate_route(crate::config::TranslationRoute::File);
     let Args {
         input,
         output,

@@ -9,11 +9,11 @@ use windows_sys::Win32::{
     UI::WindowsAndMessaging::*,
 };
 
-use super::{
-    AUTO_TRANSLATE_TIMER, CUSTOM_ENGINE_INDEX, Result, TranslateDialog, ctrl_id,
-    engine_from_combo_index, subclass_id,
-};
+use super::{AUTO_TRANSLATE_TIMER, Result, TranslateDialog, ctrl_id, subclass_id};
 use crate::dialogs::helpers::set_window_text;
+use crate::dialogs::translation_route::{
+    CUSTOM_INDEX, ENGINES, engine_from_index, index_from_engine,
+};
 use crate::translation::manual::ManualOutputFormat;
 use crate::translation::{LlmProvider, TranslationEngine};
 
@@ -109,7 +109,7 @@ impl TranslateDialog {
 
     /// 엔진 콤보에 내장 엔진과 Custom API 항목을 채운다.
     fn populate_engine_combo(&self) {
-        for engine in &TranslationEngine::ALL[..CUSTOM_ENGINE_INDEX] {
+        for engine in &ENGINES[..CUSTOM_INDEX] {
             self.add_combobox_item(self.engine_combo, engine.display_name());
         }
         let config = &self.config;
@@ -134,18 +134,24 @@ impl TranslateDialog {
     /// config에서 현재 엔진/언어/LLM 설정을 읽어 UI에 반영할 초기값을 만든다.
     fn resolve_initial_settings(&self) -> Result<InitialSettings> {
         let config = &self.config;
-        let engine = config
+        let configured_engine = config
             .translation
             .get_engine()
             .map_err(|error| Error::new(HRESULT(E_INVALIDARG), error.to_string()))?;
+        let engine = if configured_engine.requires_hook_session() {
+            ENGINES[0]
+        } else {
+            configured_engine
+        };
         let engine_index = if engine == TranslationEngine::Custom {
-            CUSTOM_ENGINE_INDEX
+            CUSTOM_INDEX
                 + config
                     .translation
                     .active_custom_api_index()
                     .map_err(|error| Error::new(HRESULT(E_INVALIDARG), error.to_string()))?
         } else {
-            engine as usize
+            index_from_engine(engine)
+                .ok_or_else(|| Error::new(HRESULT(E_INVALIDARG), "지원하지 않는 번역 엔진"))?
         };
         let provider_index = config
             .translation
@@ -161,15 +167,17 @@ impl TranslateDialog {
             .translation
             .get_target_language()
             .map_err(|error| Error::new(HRESULT(E_INVALIDARG), error.to_string()))?;
+        let source_index = engine
+            .supported_source_languages()
+            .iter()
+            .position(|&language| language == source)
+            .unwrap_or(0);
+        let source = engine.supported_source_languages()[source_index];
         let target_index = engine
             .supported_targets_for(source)
             .iter()
             .position(|&language| language == target)
             .unwrap_or(0);
-        let source_index = config
-            .translation
-            .source_lang_index(engine)
-            .map_err(|error| Error::new(HRESULT(E_INVALIDARG), error))?;
 
         Ok(InitialSettings {
             engine,
@@ -277,7 +285,7 @@ impl TranslateDialog {
         if cmd == ctrl_id::COMBO_ENGINE {
             // SAFETY: engine_combo is a valid handle.
             let engine_idx = unsafe { SendMessageW(self.engine_combo, CB_GETCURSEL, 0, 0) as u8 };
-            let Some(engine) = engine_from_combo_index(engine_idx as usize) else {
+            let Some(engine) = engine_from_index(engine_idx as usize) else {
                 return;
             };
             self.populate_language_combos(engine);
@@ -286,7 +294,7 @@ impl TranslateDialog {
             let engine_idx = unsafe { SendMessageW(self.engine_combo, CB_GETCURSEL, 0, 0) as u8 };
             let source_idx =
                 unsafe { SendMessageW(self.source_lang_combo, CB_GETCURSEL, 0, 0) as usize };
-            let Some(engine) = engine_from_combo_index(engine_idx as usize) else {
+            let Some(engine) = engine_from_index(engine_idx as usize) else {
                 return;
             };
             if let Some(&source) = engine.supported_source_languages().get(source_idx) {

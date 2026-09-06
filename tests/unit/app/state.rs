@@ -92,6 +92,72 @@ fn translate_dialog_close_is_forwarded_as_a_platform_effect() {
 }
 
 #[test]
+fn translation_windows_save_only_their_own_routes() {
+    use crate::config::{TranslationRoute, TranslationRouteConfig};
+
+    let mut model = app_model();
+    let overlay_engine = model.config.translation.engine.clone();
+    let manual = TranslationRouteConfig {
+        engine: "google".into(),
+        source_lang: "en".into(),
+        target_lang: "ko".into(),
+        custom_api: String::new(),
+    };
+    let file = TranslationRouteConfig {
+        engine: "deepl".into(),
+        source_lang: "ja".into(),
+        target_lang: "en".into(),
+        custom_api: String::new(),
+    };
+
+    assert_eq!(
+        model.update(AppAction::SetTranslationRoute {
+            route: TranslationRoute::Manual,
+            config: manual.clone(),
+        }),
+        vec![Effect::SaveConfig]
+    );
+    assert_eq!(model.config.translation.manual, Some(manual));
+    assert_eq!(model.config.translation.file, None);
+    assert_eq!(model.config.translation.engine, overlay_engine);
+
+    model.update(AppAction::SetTranslationRoute {
+        route: TranslationRoute::File,
+        config: file.clone(),
+    });
+    assert_eq!(model.config.translation.file, Some(file.clone()));
+    assert_eq!(
+        model.update(AppAction::SetTranslationRoute {
+            route: TranslationRoute::File,
+            config: file,
+        }),
+        Vec::<Effect>::new()
+    );
+}
+
+#[test]
+fn settings_draft_does_not_overwrite_route_changes_made_by_other_windows() {
+    use crate::config::{TranslationRoute, TranslationRouteConfig};
+
+    let mut model = app_model();
+    let draft = SettingsDraft::new(model.config.clone());
+    let manual = TranslationRouteConfig {
+        engine: "google".into(),
+        source_lang: "en".into(),
+        target_lang: "ko".into(),
+        custom_api: String::new(),
+    };
+    model.update(AppAction::SetTranslationRoute {
+        route: TranslationRoute::Manual,
+        config: manual.clone(),
+    });
+
+    model.update(AppAction::CommitSettings(draft));
+
+    assert_eq!(model.config.translation.manual, Some(manual));
+}
+
+#[test]
 fn menu_ids_map_to_distinct_commands() {
     let ids = [
         menu::id::WINDOW_SHOW,

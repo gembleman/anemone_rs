@@ -233,6 +233,10 @@ pub(super) enum AppAction {
     CommitSettings(SettingsDraft),
     ClearBacklog,
     ClearTranslationCache,
+    SetTranslationRoute {
+        route: crate::config::TranslationRoute,
+        config: crate::config::TranslationRouteConfig,
+    },
     SaveHookProfile {
         hook_name: String,
         hook_code: Option<String>,
@@ -330,11 +334,15 @@ impl AppModel {
                 // 순서와 무관하게 만든다.
                 let hotkeys = self.config.hotkeys.clone();
                 let hook = self.config.hook.clone();
+                let manual = self.config.translation.manual.clone();
+                let file = self.config.translation.file.clone();
                 let placement = WindowPlacement::capture(&self.config);
                 self.config = draft.into_config();
                 self.config.last_update_check = last_update_check;
                 self.config.hotkeys = hotkeys;
                 self.config.hook = hook;
+                self.config.translation.manual = manual;
+                self.config.translation.file = file;
                 placement.restore(&mut self.config);
                 vec![Effect::SyncWindowState, Effect::Repaint]
             }
@@ -347,6 +355,8 @@ impl AppModel {
                 // draft가 아니라 현재 self.config 값을 유지한다.
                 let last_update_check = self.config.last_update_check;
                 let hook = self.config.hook.clone();
+                let manual = self.config.translation.manual.clone();
+                let file = self.config.translation.file.clone();
                 // 창 위치와 크기도 설정 UI가 편집하지 않는 값이다. 설정 창이 열려
                 // 있는 동안 오버레이를 끌거나 크기를 바꿨다면 draft의 낡은 값이
                 // 그것을 지운다.
@@ -354,6 +364,8 @@ impl AppModel {
                 self.config = draft.into_config();
                 self.config.last_update_check = last_update_check;
                 self.config.hook = hook;
+                self.config.translation.manual = manual;
+                self.config.translation.file = file;
                 placement.restore(&mut self.config);
                 let mut effects =
                     vec![Effect::SyncWindowState, Effect::Repaint, Effect::SaveConfig];
@@ -367,6 +379,12 @@ impl AppModel {
                 Vec::new()
             }
             AppAction::ClearTranslationCache => vec![Effect::ClearTranslationCache],
+            AppAction::SetTranslationRoute { route, config } => {
+                if !self.config.translation.set_route_config(route, config) {
+                    return Vec::new();
+                }
+                vec![Effect::SaveConfig]
+            }
             AppAction::SaveHookProfile {
                 hook_name,
                 hook_code,

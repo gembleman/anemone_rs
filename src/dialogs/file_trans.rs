@@ -18,6 +18,7 @@ use super::file_dialog::{FileFilter, open_files_multi, save_file};
 use super::file_trans_progress::FileTransProgressDialog;
 use super::helpers::set_window_text;
 use super::host::{DialogHost, DialogResult, HostedDialog};
+use super::translation_route::{CUSTOM_INDEX, ENGINES, engine_from_index, index_from_engine};
 use crate::app::action::AppActionSender;
 use crate::config::Config;
 use crate::file_trans::{
@@ -42,9 +43,12 @@ mod ctrl_id {
     pub const BTN_TRANSLATE: u16 = 4030;
     pub const BTN_CLOSE: u16 = 4031;
     pub const ENGINE_LABEL: u16 = 4040;
+    pub const ENGINE_COMBO: u16 = 4041;
+    pub const SOURCE_LANG_COMBO: u16 = 4042;
+    pub const TARGET_LANG_COMBO: u16 = 4043;
 }
 
-const UNSUPPORTED_ENGINE_NOTICE: &str = "현재 번역 엔진은 파일 번역을 지원하지 않습니다.\r\n\"번역\" 또는 \"설정\" 다이얼로그에서 다른 엔진을 선택해 주세요.";
+const UNSUPPORTED_ENGINE_NOTICE: &str = "선택한 번역 엔진은 파일 번역을 지원하지 않습니다.";
 
 /// 파일 번역 대화상자
 pub struct FileTransDialog {
@@ -57,6 +61,9 @@ pub struct FileTransDialog {
     save_browser_btn: HWND,
     preview_edit: HWND,
     engine_label: HWND,
+    engine_combo: HWND,
+    source_lang_combo: HWND,
+    target_lang_combo: HWND,
     input_files: Vec<PathBuf>,
     output_files: Vec<PathBuf>,
     write_type: WriteType,
@@ -117,11 +124,14 @@ impl HostedDialog for FileTransDialog {
 impl FileTransDialog {
     fn new(
         hwnd: HWND,
-        config: Config,
+        mut config: Config,
         supervisor: Rc<FileTranslationSupervisor>,
         actions: AppActionSender,
         session: u64,
     ) -> Self {
+        config
+            .translation
+            .activate_route(crate::config::TranslationRoute::File);
         Self {
             hwnd,
             config,
@@ -132,6 +142,9 @@ impl FileTransDialog {
             save_browser_btn: HWND::default(),
             preview_edit: HWND::default(),
             engine_label: HWND::default(),
+            engine_combo: HWND::default(),
+            source_lang_combo: HWND::default(),
+            target_lang_combo: HWND::default(),
             input_files: Vec::new(),
             output_files: Vec::new(),
             write_type: WriteType::TranslationOnly,
@@ -182,6 +195,9 @@ impl FileTransDialog {
         self.save_browser_btn = get_control(ctrl_id::SAVE_BROWSER as i32)?;
         self.preview_edit = get_control(ctrl_id::PREVIEW_EDIT as i32)?;
         self.engine_label = get_control(ctrl_id::ENGINE_LABEL as i32)?;
+        self.engine_combo = get_control(ctrl_id::ENGINE_COMBO as i32)?;
+        self.source_lang_combo = get_control(ctrl_id::SOURCE_LANG_COMBO as i32)?;
+        self.target_lang_combo = get_control(ctrl_id::TARGET_LANG_COMBO as i32)?;
         for id in [
             ctrl_id::LOAD_BROWSER,
             ctrl_id::OUTPUT_1,
@@ -198,11 +214,13 @@ impl FileTransDialog {
             let _ = EnableWindow(self.save_browser_btn, 0);
             let _ = CheckDlgButton(self.hwnd, ctrl_id::OUTPUT_1 as i32, BST_CHECKED);
         }
+        self.populate_engine_combo();
+        self.initialize_translation_combos()?;
         self.update_engine_label();
         Ok(())
     }
 
-    fn handle_command(&mut self, cmd: u16, _notify_code: u32) {
+    fn handle_command(&mut self, cmd: u16, notify_code: u32) {
         use ctrl_id::*;
 
         match cmd {
@@ -213,8 +231,191 @@ impl FileTransDialog {
             OUTPUT_3 => self.write_type = WriteType::OriginalTransNewline,
             NO_TRANS_LINEFEED => self.no_trans_linefeed = !self.no_trans_linefeed,
             BTN_TRANSLATE => self.start_translation(),
+            ENGINE_COMBO | SOURCE_LANG_COMBO | TARGET_LANG_COMBO if notify_code == 1 => {
+                self.handle_translation_combo_change(cmd)
+            }
             _ => {}
         }
+    }
+
+    fn add_combo_item(&self, combo: HWND, text: &str) {
+        let wide = crate::win32::to_wide(text);
+        unsafe {
+            let _ = SendMessageW(combo, CB_ADDSTRING, 0, wide.as_ptr() as isize);
+        }
+    }
+
+    fn populate_engine_combo(&self) {
+        for engine in &ENGINES[..CUSTOM_INDEX] {
+            self.add_combo_item(self.engine_combo, engine.display_name());
+        }
+        if self.config.translation.custom_apis.is_empty() {
+            self.add_combo_item(self.engine_combo, &self.config.translation.custom.name);
+        } else {
+            for api in &self.config.translation.custom_apis {
+                self.add_combo_item(self.engine_combo, &api.name);
+            }
+        }
+        unsafe {
+            let _ = SendMessageW(self.engine_combo, CB_SETDROPPEDWIDTH, 220, 0);
+        }
+    }
+
+    fn initialize_translation_combos(&mut self) -> Result<()> {
+        let configured = self
+            .config
+            .translation
+            .get_engine()
+            .map_err(|error| Error::new(HRESULT(E_INVALIDARG), error.to_string()))?;
+        let engine = if configured.supports_file_translation() {
+            configured
+        } else {
+            ENGINES[0]
+        };
+        let engine_index = if engine == TranslationEngine::Custom {
+            CUSTOM_INDEX
+                + self
+                    .config
+                    .translation
+                    .active_custom_api_index()
+                    .map_err(|error| Error::new(HRESULT(E_INVALIDARG), error.to_string()))?
+        } else {
+            index_from_engine(engine)
+                .ok_or_else(|| Error::new(HRESULT(E_INVALIDARG), "지원하지 않는 번역 엔진"))?
+        };
+        let source = self
+            .config
+            .translation
+            .get_source_language()
+            .map_err(|error| Error::new(HRESULT(E_INVALIDARG), error.to_string()))?;
+        let target = self
+            .config
+            .translation
+            .get_target_language()
+            .map_err(|error| Error::new(HRESULT(E_INVALIDARG), error.to_string()))?;
+        let source_index = engine
+            .supported_source_languages()
+            .iter()
+            .position(|&language| language == source)
+            .unwrap_or(0);
+        let source = engine.supported_source_languages()[source_index];
+        let target_index = engine
+            .supported_targets_for(source)
+            .iter()
+            .position(|&language| language == target)
+            .unwrap_or(0);
+
+        unsafe {
+            let _ = SendMessageW(self.engine_combo, CB_SETCURSEL, engine_index, 0);
+        }
+        self.populate_language_combos(engine);
+        unsafe {
+            let _ = SendMessageW(self.source_lang_combo, CB_SETCURSEL, source_index, 0);
+        }
+        self.populate_target_combo(engine, source);
+        unsafe {
+            let _ = SendMessageW(self.target_lang_combo, CB_SETCURSEL, target_index, 0);
+        }
+        let target = engine.supported_targets_for(source)[target_index];
+        self.config.translation.set_engine(engine);
+        self.config.translation.set_source_language(source);
+        self.config.translation.set_target_language(target);
+        Ok(())
+    }
+
+    fn populate_language_combos(&self, engine: TranslationEngine) {
+        unsafe {
+            let _ = SendMessageW(self.source_lang_combo, CB_RESETCONTENT, 0, 0);
+            for &language in engine.supported_source_languages() {
+                self.add_combo_item(
+                    self.source_lang_combo,
+                    crate::translation::lang_utils::to_korean_name(language),
+                );
+            }
+            let _ = SendMessageW(self.source_lang_combo, CB_SETCURSEL, 0, 0);
+        }
+        let source = engine.supported_source_languages()[0];
+        self.populate_target_combo(engine, source);
+    }
+
+    fn populate_target_combo(
+        &self,
+        engine: TranslationEngine,
+        source: crate::translation::Language,
+    ) {
+        unsafe {
+            let _ = SendMessageW(self.target_lang_combo, CB_RESETCONTENT, 0, 0);
+            for language in engine.supported_targets_for(source) {
+                self.add_combo_item(
+                    self.target_lang_combo,
+                    crate::translation::lang_utils::to_korean_name(language),
+                );
+            }
+            let _ = SendMessageW(self.target_lang_combo, CB_SETCURSEL, 0, 0);
+        }
+    }
+
+    fn handle_translation_combo_change(&mut self, cmd: u16) {
+        let engine_index = unsafe { SendMessageW(self.engine_combo, CB_GETCURSEL, 0, 0) as usize };
+        let Some(engine) = engine_from_index(engine_index) else {
+            return;
+        };
+        if cmd == ctrl_id::ENGINE_COMBO {
+            self.populate_language_combos(engine);
+        } else if cmd == ctrl_id::SOURCE_LANG_COMBO {
+            let source_index =
+                unsafe { SendMessageW(self.source_lang_combo, CB_GETCURSEL, 0, 0) as usize };
+            if let Some(&source) = engine.supported_source_languages().get(source_index) {
+                self.populate_target_combo(engine, source);
+            }
+        }
+        self.apply_current_translation_settings();
+        self.update_engine_label();
+    }
+
+    fn apply_current_translation_settings(&mut self) {
+        let engine_index = unsafe { SendMessageW(self.engine_combo, CB_GETCURSEL, 0, 0) as usize };
+        let source_index =
+            unsafe { SendMessageW(self.source_lang_combo, CB_GETCURSEL, 0, 0) as usize };
+        let target_index =
+            unsafe { SendMessageW(self.target_lang_combo, CB_GETCURSEL, 0, 0) as usize };
+        let Some(engine) = engine_from_index(engine_index) else {
+            return;
+        };
+        let Some(&source) = engine.supported_source_languages().get(source_index) else {
+            return;
+        };
+        let targets = engine.supported_targets_for(source);
+        let Some(&target) = targets.get(target_index) else {
+            return;
+        };
+        if engine == TranslationEngine::Custom {
+            let custom_index = engine_index - CUSTOM_INDEX;
+            let name = if self.config.translation.custom_apis.is_empty() {
+                (custom_index == 0).then(|| self.config.translation.custom.name.clone())
+            } else {
+                self.config
+                    .translation
+                    .custom_apis
+                    .get(custom_index)
+                    .map(|api| api.name.clone())
+            };
+            let Some(name) = name else {
+                return;
+            };
+            if self.config.translation.select_custom_api(&name).is_err() {
+                return;
+            }
+        }
+        self.config.translation.set_engine(engine);
+        self.config.translation.set_source_language(source);
+        self.config.translation.set_target_language(target);
+        let route = self
+            .config
+            .translation
+            .store_active_route(crate::config::TranslationRoute::File);
+        self.actions
+            .set_translation_route(crate::config::TranslationRoute::File, route);
     }
 
     /// 엔진 안내 라벨 텍스트 갱신
@@ -230,11 +431,6 @@ impl FileTransDialog {
                     return;
                 }
             };
-            if !engine.supports_file_translation() {
-                let _ = set_window_text(self.engine_label, UNSUPPORTED_ENGINE_NOTICE);
-                self.set_translate_enabled(false);
-                return;
-            }
             let engine_name: String = match engine {
                 TranslationEngine::EzTrans => "EzTrans64".into(),
                 TranslationEngine::Google => "Google".into(),
@@ -266,9 +462,7 @@ impl FileTransDialog {
             };
             (engine_name, source, target)
         };
-        let text = format!(
-            "현재 번역 엔진: {engine_name} ({source} → {target})\r\n엔진/언어는 \"번역\" 또는 \"설정\" 다이얼로그에서 변경할 수 있습니다.",
-        );
+        let text = format!("파일 번역 엔진: {engine_name} ({source} → {target})");
         let _ = set_window_text(self.engine_label, &text);
         self.set_translate_enabled(true);
     }
@@ -409,8 +603,7 @@ impl FileTransDialog {
         if FileTransProgressDialog::activate_existing() {
             return;
         }
-        // 다이얼로그가 떠 있는 동안 다른 창에서 설정이 바뀌었을 수 있으므로
-        // 번역 시작 직전에 안내 라벨을 한 번 갱신해 최신 상태를 보여준다.
+        self.apply_current_translation_settings();
         self.update_engine_label();
 
         if !self

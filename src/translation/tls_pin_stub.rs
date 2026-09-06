@@ -1,6 +1,5 @@
 //! `tls_pin.rs`가 없는 빌드의 TLS 설정.
 
-
 use std::sync::Arc;
 
 use rustls::Error as TlsError;

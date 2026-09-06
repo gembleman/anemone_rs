@@ -14,6 +14,7 @@ pub mod glossary;
 pub(crate) mod hook_find;
 pub mod settings;
 pub mod translate;
+mod translation_route;
 
 pub use backlog::BacklogDialog;
 pub use file_trans::FileTransDialog;

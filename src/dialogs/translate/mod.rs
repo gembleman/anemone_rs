@@ -17,7 +17,6 @@ use crate::app::action::AppActionSender;
 use crate::app::messages::WM_TRANSLATION_COMPLETE;
 use crate::app::services::GuiTranslationHost;
 use crate::config::Config;
-use crate::translation::TranslationEngine;
 use crate::translation::manual::ManualTranslationOptions;
 type Result<T> = windows_core::Result<T>;
 
@@ -55,7 +54,6 @@ mod subclass_id {
 }
 
 const AUTO_TRANSLATE_TIMER: usize = 0xA710;
-const CUSTOM_ENGINE_INDEX: usize = TranslationEngine::Custom as usize;
 
 /// 번역 대화상자
 pub struct TranslateDialog {
@@ -162,11 +160,14 @@ impl HostedDialog for TranslateDialog {
 impl TranslateDialog {
     fn new(
         hwnd: HWND,
-        config: Config,
+        mut config: Config,
         translation_service: Rc<GuiTranslationHost>,
         actions: AppActionSender,
         session: u64,
     ) -> Self {
+        config
+            .translation
+            .activate_route(crate::config::TranslationRoute::Manual);
         Self {
             hwnd,
             config,
@@ -214,13 +215,5 @@ impl TranslateDialog {
 
     pub(crate) fn current_session() -> Option<u64> {
         DialogHost::<Self>::with_state(|dialog| dialog.session)
-    }
-}
-
-fn engine_from_combo_index(index: usize) -> Option<TranslationEngine> {
-    if index >= CUSTOM_ENGINE_INDEX {
-        Some(TranslationEngine::Custom)
-    } else {
-        TranslationEngine::from_u8(index as u8)
     }
 }

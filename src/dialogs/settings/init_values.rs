@@ -84,15 +84,10 @@ impl SettingsDialog {
     }
 
     fn initialize_translation_engine_selection(&self, config: &Config) -> Result<()> {
-        let engine_names = [
-            "EzTrans64",
-            "Google",
-            "DeepL",
-            "Papago API",
-            "LLM",
-            "MyS Translater",
-            "Custom API",
-        ];
+        let engine_names: Vec<&str> = crate::translation::TranslationEngine::ALL
+            .iter()
+            .map(|engine| engine.display_name())
+            .collect();
         let engine = config
             .translation
             .get_engine()

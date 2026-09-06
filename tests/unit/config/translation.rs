@@ -1,5 +1,5 @@
 use super::*;
-use crate::translation::DeepLStrategy;
+use crate::translation::{DeepLStrategy, Language, TranslationEngine};
 
 fn config_with_custom_apis(apis: Vec<CustomApiConfig>, selected: &str) -> TranslationConfig {
     TranslationConfig {
@@ -331,6 +331,97 @@ fn get_engine_reports_a_parse_error_for_a_corrupted_value() {
         ..TranslationConfig::default()
     };
     assert!(config.get_engine().is_err());
+}
+
+#[test]
+fn missing_route_settings_follow_the_overlay_for_compatibility() {
+    let mut config: TranslationConfig =
+        toml::from_str("engine = \"deepl\"\nsource_lang = \"en\"\ntarget_lang = \"ko\"\n").unwrap();
+
+    assert!(config.manual.is_none());
+    assert!(config.file.is_none());
+    config.activate_route(TranslationRoute::Manual);
+
+    assert_eq!(config.get_engine().unwrap(), TranslationEngine::DeepL);
+    assert_eq!(config.get_source_language().unwrap(), Language::Eng);
+    assert_eq!(config.get_target_language().unwrap(), Language::Kor);
+}
+
+#[test]
+fn manual_and_file_routes_keep_independent_selections() {
+    let mut config = TranslationConfig::default();
+    config.set_engine(TranslationEngine::Google);
+    config.set_source_language(Language::Eng);
+    config.set_target_language(Language::Kor);
+    config.store_active_route(TranslationRoute::Manual);
+
+    config.set_engine(TranslationEngine::DeepL);
+    config.set_source_language(Language::Jpn);
+    config.set_target_language(Language::Eng);
+    config.store_active_route(TranslationRoute::File);
+
+    let mut manual = config.clone();
+    manual.activate_route(TranslationRoute::Manual);
+    assert_eq!(manual.get_engine().unwrap(), TranslationEngine::Google);
+    assert_eq!(manual.get_source_language().unwrap(), Language::Eng);
+    assert_eq!(manual.get_target_language().unwrap(), Language::Kor);
+
+    let mut file = config;
+    file.activate_route(TranslationRoute::File);
+    assert_eq!(file.get_engine().unwrap(), TranslationEngine::DeepL);
+    assert_eq!(file.get_source_language().unwrap(), Language::Jpn);
+    assert_eq!(file.get_target_language().unwrap(), Language::Eng);
+}
+
+#[test]
+fn route_settings_validate_engine_and_language_values() {
+    assert!(
+        toml::from_str::<TranslationConfig>(
+            "[manual]\nengine = \"bogus\"\nsource_lang = \"ja\"\ntarget_lang = \"ko\"\n"
+        )
+        .is_err()
+    );
+    assert!(
+        toml::from_str::<TranslationConfig>(
+            "[file]\nengine = \"google\"\nsource_lang = \"bogus\"\ntarget_lang = \"ko\"\n"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn route_settings_round_trip_through_toml() {
+    let mut config = TranslationConfig::default();
+    config.set_engine(TranslationEngine::Google);
+    config.set_source_language(Language::Eng);
+    config.set_target_language(Language::Kor);
+    config.store_active_route(TranslationRoute::Manual);
+    config.set_engine(TranslationEngine::DeepL);
+    config.set_source_language(Language::Jpn);
+    config.set_target_language(Language::Eng);
+    config.store_active_route(TranslationRoute::File);
+
+    let saved = toml::to_string(&config).unwrap();
+    let loaded: TranslationConfig = toml::from_str(&saved).unwrap();
+
+    assert_eq!(loaded.manual, config.manual);
+    assert_eq!(loaded.file, config.file);
+}
+
+#[test]
+fn removed_custom_api_falls_back_to_the_first_registered_api() {
+    let mut config =
+        config_with_custom_apis(vec![named_api("first"), named_api("second")], "first");
+    config.manual = Some(TranslationRouteConfig {
+        engine: "custom".into(),
+        source_lang: "ja".into(),
+        target_lang: "ko".into(),
+        custom_api: "removed".into(),
+    });
+
+    config.activate_route(TranslationRoute::Manual);
+
+    assert_eq!(config.custom_api, "first");
 }
 
 #[test]

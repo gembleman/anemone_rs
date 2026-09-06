@@ -13,6 +13,38 @@ pub struct EzTransPostprocessEntry {
     pub target: String,
 }
 
+/// 번역 설정을 사용하는 경로.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TranslationRoute {
+    Manual,
+    File,
+}
+
+/// 한 번역 경로가 마지막으로 선택한 엔진과 언어.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TranslationRouteConfig {
+    #[serde(deserialize_with = "deserialize_engine")]
+    pub engine: String,
+    #[serde(deserialize_with = "deserialize_language")]
+    pub source_lang: String,
+    #[serde(deserialize_with = "deserialize_language")]
+    pub target_lang: String,
+    /// Custom API 엔진을 쓸 때 선택한 등록 이름.
+    pub custom_api: String,
+}
+
+impl Default for TranslationRouteConfig {
+    fn default() -> Self {
+        Self {
+            engine: default_engine(),
+            source_lang: default_source_lang(),
+            target_lang: default_target_lang(),
+            custom_api: String::new(),
+        }
+    }
+}
+
 /// 번역 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TranslationConfig {
@@ -31,6 +63,12 @@ pub struct TranslationConfig {
         deserialize_with = "deserialize_language"
     )]
     pub target_lang: String,
+    /// 번역 창 전용 선택. 없는 예전 설정은 오버레이 선택을 따른다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual: Option<TranslationRouteConfig>,
+    /// 파일 번역 전용 선택. 없는 예전 설정은 오버레이 선택을 따른다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<TranslationRouteConfig>,
     /// EzTrans 평면 사전 경로. 이전 설정 키 이름은 serde 별칭으로 호환한다.
     #[serde(default, alias = "eztrans_dll_path")]
     pub eztrans_dictionary_path: String,
@@ -153,6 +191,58 @@ impl TranslationConfig {
     /// 엔진 설정
     pub fn set_engine(&mut self, engine: crate::translation::TranslationEngine) {
         self.engine = engine.to_str().to_string();
+    }
+
+    /// 선택한 경로의 설정을 기본 필드에 복사한다.
+    ///
+    /// 이후 기존 `PreparedJob::from_config` 경로를 그대로 사용할 수 있다.
+    pub fn activate_route(&mut self, route: TranslationRoute) {
+        let selection = match route {
+            TranslationRoute::Manual => self.manual.clone(),
+            TranslationRoute::File => self.file.clone(),
+        };
+        let Some(selection) = selection else {
+            return;
+        };
+        self.engine = selection.engine;
+        self.source_lang = selection.source_lang;
+        self.target_lang = selection.target_lang;
+        self.custom_api = selection.custom_api;
+        if !self.custom_apis.is_empty() && self.active_custom_api_index().is_err() {
+            self.custom_api = self.custom_apis[0].name.clone();
+        }
+    }
+
+    /// 현재 기본 필드 값을 해당 경로의 독립 설정으로 저장한다.
+    pub fn store_active_route(&mut self, route: TranslationRoute) -> TranslationRouteConfig {
+        let selection = TranslationRouteConfig {
+            engine: self.engine.clone(),
+            source_lang: self.source_lang.clone(),
+            target_lang: self.target_lang.clone(),
+            custom_api: self.custom_api.clone(),
+        };
+        match route {
+            TranslationRoute::Manual => self.manual = Some(selection.clone()),
+            TranslationRoute::File => self.file = Some(selection.clone()),
+        }
+        selection
+    }
+
+    /// 한 경로의 독립 설정을 바꾼다. 실제 값이 달라졌는지 반환한다.
+    pub fn set_route_config(
+        &mut self,
+        route: TranslationRoute,
+        selection: TranslationRouteConfig,
+    ) -> bool {
+        let slot = match route {
+            TranslationRoute::Manual => &mut self.manual,
+            TranslationRoute::File => &mut self.file,
+        };
+        if slot.as_ref() == Some(&selection) {
+            return false;
+        }
+        *slot = Some(selection);
+        true
     }
 
     /// 현재 선택된 Custom API를 반환한다. 새 목록이 없으면 이전 단일 설정을 사용한다.
@@ -383,6 +473,8 @@ impl Default for TranslationConfig {
             engine: "eztrans".to_string(),
             source_lang: "ja".to_string(),
             target_lang: "ko".to_string(),
+            manual: None,
+            file: None,
             eztrans_dictionary_path: default_eztrans_subpath("JisJK.flat.bin"),
             eztrans_ehnd_path: default_eztrans_subpath("Ehnd"),
             eztrans_dat_path: None,

@@ -48,6 +48,14 @@ impl AppActionSender {
         self.send(AppAction::ClearTranslationCache);
     }
 
+    pub(crate) fn set_translation_route(
+        &self,
+        route: crate::config::TranslationRoute,
+        config: crate::config::TranslationRouteConfig,
+    ) {
+        self.send(AppAction::SetTranslationRoute { route, config });
+    }
+
     pub(crate) fn save_hook_profile(&self, hook_name: String, hook_code: Option<String>) {
         self.send(AppAction::SaveHookProfile {
             hook_name,
