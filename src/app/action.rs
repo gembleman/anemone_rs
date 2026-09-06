@@ -37,7 +37,16 @@ impl AppActionSender {
     }
 
     pub(crate) fn preview_settings(&self, draft: SettingsDraft) {
-        self.send(AppAction::PreviewSettings(draft));
+        let mut queue = self.queue.borrow_mut();
+        if let Some(AppAction::PreviewSettings(pending)) = queue.back_mut() {
+            *pending = draft;
+        } else {
+            queue.push_back(AppAction::PreviewSettings(draft));
+        }
+        drop(queue);
+        if unsafe { PostMessageW(self.hwnd, WM_APP_ACTION, 0, 0) } == 0 {
+            tracing::error!("AppAction 알림을 게시하지 못했습니다");
+        }
     }
 
     pub(crate) fn clear_backlog(&self) {
@@ -114,8 +123,8 @@ impl App {
                 }
                 Effect::SyncWindowState => self.sync_window_state(),
                 Effect::SaveConfig => {
-                    if let Err(error) = self.model.config.save() {
-                        tracing::error!("AppAction 설정 저장 실패: {error}");
+                    if !self.services.config_save.request(self.model.config.clone()) {
+                        tracing::error!("설정 저장 워커가 요청을 받지 못했습니다");
                     }
                 }
                 Effect::SetWindowVisible(visible) => {

@@ -93,8 +93,8 @@ impl App {
         let magnetic_changed = active_before != self.magnetic.is_some()
             || magnetic_enabled != self.model.config.magnetic_mode;
         self.sync_magnetic_checkbox();
-        if magnetic_changed && let Err(error) = self.model.config.save() {
-            tracing::error!("Failed to persist magnetic mode synchronization: {error}");
+        if magnetic_changed && !self.services.config_save.request(self.model.config.clone()) {
+            tracing::error!("Failed to request magnetic mode persistence");
         }
 
         let visible = configured_visible || self.model.runtime.overlay_notice.is_some();

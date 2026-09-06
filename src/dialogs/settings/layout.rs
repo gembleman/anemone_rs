@@ -52,6 +52,16 @@ impl SettingsDialog {
                 let _ = ShowWindow(hwnd, SW_HIDE);
             }
             for &hwnd in &self.tab_controls[new_tab] {
+                // 번역 엔진 전용 컨트롤은 아래 update_engine_controls가 필요한
+                // 그룹만 표시한다. 여기서 전부 표시하면 곧바로 다시 숨기게 된다.
+                if new_tab == TAB_TRANSLATION
+                    && self
+                        .engine_controls
+                        .iter()
+                        .any(|group| group.contains(&hwnd))
+                {
+                    continue;
+                }
                 let _ = ShowWindow(hwnd, SW_SHOW);
             }
         }

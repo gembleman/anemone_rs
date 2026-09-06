@@ -61,8 +61,8 @@ impl App {
             tracing::error!("Failed to apply magnetic mode request: {error}");
         }
         self.sync_magnetic_checkbox();
-        if let Err(error) = self.model.config.save() {
-            tracing::error!("Failed to persist magnetic mode: {error}");
+        if !self.services.config_save.request(self.model.config.clone()) {
+            tracing::error!("Failed to request magnetic mode persistence");
         }
     }
 
@@ -95,8 +95,8 @@ impl App {
             self.clear_overlay_notice();
         }
         self.sync_magnetic_checkbox();
-        if let Err(error) = self.model.config.save() {
-            tracing::error!("Failed to persist selected magnetic target: {error}");
+        if !self.services.config_save.request(self.model.config.clone()) {
+            tracing::error!("Failed to request selected magnetic target persistence");
         }
     }
 

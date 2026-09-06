@@ -7,6 +7,8 @@ use super::{
 };
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const DEFAULT_WINDOW_WIDTH: i32 = 844;
+pub const DEFAULT_WINDOW_HEIGHT: i32 = 200;
 
 /// 애플리케이션 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -117,8 +119,8 @@ impl Default for Config {
             click_through: false,
             window_x: None,
             window_y: None,
-            window_width: None,
-            window_height: None,
+            window_width: Some(DEFAULT_WINDOW_WIDTH),
+            window_height: Some(DEFAULT_WINDOW_HEIGHT),
 
             clipboard_watch: true,
             clipboard_max_length: 300,

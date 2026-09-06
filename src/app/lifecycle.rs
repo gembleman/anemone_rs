@@ -28,7 +28,7 @@ use super::{
     services::AppServices, state, window_proc::MIN_WINDOW_SIZE,
 };
 use crate::clipboard::ClipboardWatcher;
-use crate::config::Config;
+use crate::config::{Config, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH};
 use crate::d2d::D2DRenderer;
 use crate::dialogs::helpers::dispatch_resource_dialog_message;
 use crate::hotkey::HotkeyManager;
@@ -36,8 +36,6 @@ use crate::menu::ContextMenu;
 use crate::tray::{self, TrayIcon};
 
 const APP_ICON_ID: u32 = 1;
-const INITIAL_WINDOW_WIDTH: i32 = 400;
-const INITIAL_WINDOW_HEIGHT: i32 = 200;
 
 #[cfg(feature = "benchmark")]
 use super::bench;
@@ -55,6 +53,8 @@ impl Drop for AppCleanupGuard {
                 && let Ok(app) = app.try_borrow()
             {
                 app.services.translation_ui.unregister(app.hwnd);
+                // 이전 비동기 저장이 최종 설정보다 늦게 파일을 덮지 않게 한다.
+                app.services.config_save.shutdown();
                 if let Err(error) = app.model.config.save() {
                     tracing::error!("설정 저장 실패: {error}");
                 }
@@ -177,7 +177,7 @@ impl App {
 
             // Redirection surface 없이 DComp premultiplied-alpha visual을 노출한다.
             let (create_width, create_height) =
-                saved_size.unwrap_or((INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT));
+                saved_size.unwrap_or((DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
             let default_monitor = primary_monitor_rect();
             let (create_x, create_y) = saved_position.unwrap_or_else(|| {
                 default_monitor
@@ -212,8 +212,8 @@ impl App {
             let (initial_width, initial_height) = saved_size.map_or_else(
                 || {
                     (
-                        crate::dpi::scale(INITIAL_WINDOW_WIDTH, initial_dpi).max(1),
-                        crate::dpi::scale(INITIAL_WINDOW_HEIGHT, initial_dpi).max(1),
+                        crate::dpi::scale(DEFAULT_WINDOW_WIDTH, initial_dpi).max(1),
+                        crate::dpi::scale(DEFAULT_WINDOW_HEIGHT, initial_dpi).max(1),
                     )
                 },
                 |(width, height)| (width.max(min_size), height.max(min_size)),
@@ -500,6 +500,10 @@ fn centered_position(monitor: RECT, width: i32, height: i32) -> (i32, i32) {
     )
 }
 
+fn last_win_error() -> Error {
+    Error::from_hresult(HRESULT::from_win32(unsafe { GetLastError() }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,8 +518,4 @@ mod tests {
         };
         assert_eq!(centered_position(monitor, 400, 200), (-1160, 340));
     }
-}
-
-fn last_win_error() -> Error {
-    Error::from_hresult(HRESULT::from_win32(unsafe { GetLastError() }))
 }

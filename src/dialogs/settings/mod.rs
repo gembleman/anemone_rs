@@ -3,6 +3,7 @@
 mod color_button;
 mod ctrl_id;
 mod engine_panel;
+mod eztrans_path;
 mod handlers;
 mod handlers_dialogs;
 mod handlers_input;
@@ -68,6 +69,10 @@ pub struct SettingsDialog {
     update_available: Cell<bool>,
     mys_signup_worker: RefCell<Option<mys_signup::SignupWorker>>,
     mys_signup_in_progress: Cell<bool>,
+    mys_usage_worker: RefCell<Option<engine_panel::MysUsageWorker>>,
+    mys_usage_refresh_in_progress: Cell<bool>,
+    eztrans_path_worker: RefCell<Option<eztrans_path::EzTransPathWorker>>,
+    eztrans_path_validation_pending: Cell<bool>,
 }
 
 pub(crate) struct SettingsInit {
@@ -96,6 +101,10 @@ impl HostedDialog for SettingsDialog {
             update_available: Cell::new(false),
             mys_signup_worker: RefCell::new(None),
             mys_signup_in_progress: Cell::new(false),
+            mys_usage_worker: RefCell::new(None),
+            mys_usage_refresh_in_progress: Cell::new(false),
+            eztrans_path_worker: RefCell::new(None),
+            eztrans_path_validation_pending: Cell::new(false),
         };
         dialog.initialize_controls()?;
         Ok(dialog)
@@ -195,6 +204,12 @@ impl HostedDialog for SettingsDialog {
         // 기다리고, 못 끝내면 detach한 채 넘어간다 — 응답이 창이 사라진 뒤
         // 도착해도 PostMessageW가 조용히 실패할 뿐이라 안전하다.
         if let Some(worker) = self.mys_signup_worker.borrow_mut().take() {
+            worker.shutdown();
+        }
+        if let Some(worker) = self.mys_usage_worker.borrow_mut().take() {
+            worker.shutdown();
+        }
+        if let Some(worker) = self.eztrans_path_worker.borrow_mut().take() {
             worker.shutdown();
         }
         if let Some(actions) = &self.actions {
@@ -326,6 +341,14 @@ impl SettingsDialog {
             }
             mys_signup::WM_MYS_SIGNUP_RESULT => {
                 self.handle_mys_signup_result();
+                Some(0)
+            }
+            engine_panel::WM_MYS_USAGE_RESULT => {
+                self.handle_mys_usage_result();
+                Some(0)
+            }
+            eztrans_path::WM_EZTRANS_PATH_RESULT => {
+                self.handle_eztrans_path_result();
                 Some(0)
             }
             WM_GETMINMAXINFO => {

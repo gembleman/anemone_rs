@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::config::TextAlign;
-use crate::translation::settings::TranslationSettingsEditor;
 use secret_format::format_deepl_key;
 use windows_core::{Error, HRESULT};
 
@@ -124,26 +123,17 @@ impl SettingsDialog {
         Ok(())
     }
 
-    /// 저장된 경로를 쓸 수 없으면 편집란을 비운 채로 연다. (설정 값 자체는 보존한다.)
-    /// 입력란이 비어 있으므로 경고 라벨도 함께 비워 둔다.
+    /// 설정 창을 열 때는 파일 시스템을 조회하지 않는다.
     fn initialize_eztrans_values(&self, config: &Config) -> Result<()> {
-        let dictionary_path = &config.translation.eztrans_dictionary_path;
-        let dictionary_display =
-            if TranslationSettingsEditor::eztrans_dictionary_invalid(dictionary_path) {
-                ""
-            } else {
-                dictionary_path.as_str()
-            };
-        self.set_text(ctrl_id::EZTRANS_DICTIONARY_EDIT, dictionary_display)?;
+        self.set_text(
+            ctrl_id::EZTRANS_DICTIONARY_EDIT,
+            &config.translation.eztrans_dictionary_path,
+        )?;
         self.set_text(ctrl_id::EZTRANS_DICTIONARY_WARNING_LABEL, "")?;
-
-        let ehnd_path = &config.translation.eztrans_ehnd_path;
-        let ehnd_display = if TranslationSettingsEditor::eztrans_ehnd_invalid(ehnd_path) {
-            ""
-        } else {
-            ehnd_path.as_str()
-        };
-        self.set_text(ctrl_id::EZTRANS_EHND_EDIT, ehnd_display)?;
+        self.set_text(
+            ctrl_id::EZTRANS_EHND_EDIT,
+            &config.translation.eztrans_ehnd_path,
+        )?;
         self.set_text(ctrl_id::EZTRANS_EHND_WARNING_LABEL, "")?;
         self.set_text(
             ctrl_id::EZTRANS_DICTIONARY_COUNT_LABEL,
@@ -188,9 +178,9 @@ impl SettingsDialog {
 
     /// 서버 URL도 API 토큰도 입력란이 없다 — URL은 config.toml의 값을 그대로
     /// 쓰고, 토큰은 앱이 받아서 암호화해 보관한다. 화면에는 보유 여부만 띄운다.
+    /// 사용량은 사용자가 새로고침 버튼을 누를 때만 조회한다.
     fn initialize_mys_translater_values(&self, _config: &Config) -> Result<()> {
         self.refresh_mys_token_status();
-        self.refresh_mys_usage();
         Ok(())
     }
 

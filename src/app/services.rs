@@ -17,6 +17,7 @@ use crate::update::worker::{
     CheckTrigger, UpdateOutcome, UpdateRequest, UpdateRequestError, UpdateWorker,
 };
 
+use super::config_save::ConfigSaveWorker;
 use super::messages::{
     WM_APP_HOOK_STATE, WM_TRANSLATION_COMPLETE, WM_UPDATE_PROGRESS, WM_UPDATE_RESULT,
 };
@@ -29,6 +30,7 @@ pub(crate) struct AppServices {
     pub translation_cache: Rc<TranslationCacheStore>,
     pub update: Rc<UpdateWorker>,
     pub hook: Rc<HookWorker>,
+    pub(super) config_save: ConfigSaveWorker,
 }
 
 impl AppServices {
@@ -45,16 +47,19 @@ impl AppServices {
             WM_UPDATE_PROGRESS,
         ));
         let hook = Rc::new(HookWorker::spawn(hwnd, WM_APP_HOOK_STATE));
+        let config_save = ConfigSaveWorker::spawn();
         Self {
             translation_ui,
             file_translation,
             translation_cache,
             update,
             hook,
+            config_save,
         }
     }
 
     pub fn shutdown(&self) {
+        self.config_save.shutdown();
         self.translation_ui.shutdown();
         let report = self.file_translation.shutdown(Duration::from_secs(2));
         if report.detached > 0 {

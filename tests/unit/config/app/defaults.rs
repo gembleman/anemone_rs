@@ -9,6 +9,13 @@ fn default_shadow_offsets_are_zero() {
 }
 
 #[test]
+fn default_overlay_window_size_is_844_by_200() {
+    let config = Config::default();
+    assert_eq!(config.window_width, Some(844));
+    assert_eq!(config.window_height, Some(200));
+}
+
+#[test]
 fn out_of_range_toml_is_normalized_at_deserialize_boundary() {
     let mut raw = Config {
         border_width: i32::MAX,

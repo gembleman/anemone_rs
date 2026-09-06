@@ -107,8 +107,8 @@ impl App {
         self.model.config.hook.enabled = true;
         self.model.config.hook.last_target_pid = pid;
         self.model.config.hook.last_target_name = process_name;
-        if let Err(error) = self.model.config.save() {
-            tracing::warn!("마지막 후킹 대상 저장 실패: {error}");
+        if !self.services.config_save.request(self.model.config.clone()) {
+            tracing::warn!("마지막 후킹 대상 저장 요청 실패");
         }
 
         if let Some(profile) = saved_profile {

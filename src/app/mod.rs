@@ -21,6 +21,7 @@ mod bench_app;
 pub(crate) mod action;
 pub(crate) mod backlog;
 mod commands;
+mod config_save;
 pub(crate) mod hook_text;
 mod lifecycle;
 pub(crate) mod messages;

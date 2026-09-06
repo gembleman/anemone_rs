@@ -324,7 +324,7 @@ impl SettingsDialog {
                     );
                     self.set_control_text(EZTRANS_DICTIONARY_EDIT, &path);
                     // 경고 라벨만 갱신하고 선택한 경로는 그대로 유지한다.
-                    self.refresh_eztrans_path_warnings();
+                    self.request_eztrans_path_validation();
                 }
                 Ok(None) => {}
                 Err(error) => self.show_file_dialog_error(&error),
@@ -338,7 +338,7 @@ impl SettingsDialog {
                         TranslationSettingChange::EzTransEhndPath(path.clone()),
                     );
                     self.set_control_text(EZTRANS_EHND_EDIT, &path);
-                    self.refresh_eztrans_path_warnings();
+                    self.request_eztrans_path_validation();
                 }
                 Ok(None) => {}
                 Err(error) => self.show_file_dialog_error(&error),
@@ -357,7 +357,7 @@ impl SettingsDialog {
             }
             MYS_TRANSLATER_FREE_TOKEN_BTN => self.handle_mys_free_token_button(),
             MYS_TRANSLATER_PURCHASE_BTN => self.handle_mys_purchase_button(),
-            MYS_TRANSLATER_USAGE_REFRESH_BTN => self.refresh_mys_usage(),
+            MYS_TRANSLATER_USAGE_REFRESH_BTN => self.handle_mys_usage_refresh_button(),
 
             // 글로서리 편집 다이얼로그
             LLM_GLOSSARY_EDIT_BTN => self.open_glossary_editor(),
@@ -368,14 +368,6 @@ impl SettingsDialog {
             UPDATE_AUTO_CHECK => toggle_field!(self, BoolSetting::UpdateCheckEnabled),
 
             _ => {}
-        }
-    }
-
-    /// EzTrans 초기화 동기화 (다른 엔진은 워커가 매번 자격증명을 받아 stateless)
-    fn sync_translation_manager(&self) {
-        let config = self.draft.borrow();
-        if let Err(e) = TranslationSettingsEditor::sync_runtime(&config.translation) {
-            tracing::warn!("EzTrans init failed in sync: {e}");
         }
     }
 
@@ -405,9 +397,6 @@ impl SettingsDialog {
     }
 
     fn finish_translation_change(&self, result: TranslationSettingsChangeResult) {
-        if result.runtime_sync_required {
-            self.sync_translation_manager();
-        }
         self.finish_settings_change(SettingsChangeResult::from_changed(result.changed));
     }
 
@@ -443,7 +432,6 @@ impl SettingsDialog {
         if !take_unapplied_changes(&self.has_unapplied_changes) {
             return;
         }
-        self.sync_translation_manager();
         let applied = record_last_applied(self.draft.as_ref(), &self.last_applied);
         if let Some(actions) = &self.actions {
             actions.commit_settings(applied);
@@ -458,7 +446,6 @@ impl SettingsDialog {
         ) else {
             return;
         };
-        self.sync_translation_manager();
         if let Some(actions) = &self.actions {
             actions.preview_settings(restored);
         }

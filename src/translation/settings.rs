@@ -2,8 +2,10 @@
 
 use crate::config::TranslationConfig;
 use crate::config::limits;
+#[cfg(test)]
+use crate::translation::PreparedJob;
 use crate::translation::llm::ReasoningEffort;
-use crate::translation::{DeepLApiTier, Language, LlmProvider, PreparedJob, TranslationEngine};
+use crate::translation::{DeepLApiTier, Language, LlmProvider, TranslationEngine};
 
 pub enum TranslationSettingChange {
     Engine(TranslationEngine),
@@ -126,6 +128,7 @@ impl TranslationSettingsEditor {
     }
 
     /// EzTrans가 선택되면 두 필수 경로를 포함해 런타임 초기화를 검증한다.
+    #[cfg(test)]
     pub fn sync_runtime(config: &TranslationConfig) -> Result<(), String> {
         if config.get_engine().map_err(|error| error.to_string())? != TranslationEngine::EzTrans {
             return Ok(());

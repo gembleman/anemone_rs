@@ -10,7 +10,7 @@ use super::{SettingsDialog, ctrl_id};
 use crate::config::{ColorType, TextType};
 use crate::dialogs::color::{ColorDialog, ColorDialogConfig};
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
-use crate::translation::settings::{TranslationSettingChange, TranslationSettingsEditor};
+use crate::translation::settings::TranslationSettingChange;
 use crate::win32::to_wide;
 type Result<T> = windows_core::Result<T>;
 
@@ -256,55 +256,6 @@ impl SettingsDialog {
         }];
         crate::dialogs::file_dialog::open_file(self.hwnd, title, &filters)
             .map(|path| path.map(|p| p.to_string_lossy().into_owned()))
-    }
-
-    /// 선택된 EzTrans 경로를 찾을 수 없으면 각 입력란 아래 라벨에 경고를 표시하고,
-    /// 찾을 수 있으면 라벨을 비운다. 선택한 경로는 그대로 두며 저장도 막지 않는다.
-    pub(super) fn refresh_eztrans_path_warnings(&self) {
-        let (dictionary_path, ehnd_path) = {
-            let config = self.draft.borrow();
-            (
-                config.translation.eztrans_dictionary_path.clone(),
-                config.translation.eztrans_ehnd_path.clone(),
-            )
-        };
-
-        // 빈 경로는 "폴더가 아니다"가 아니라 "아직 선택하지 않았다"이므로 문구를
-        // 나눈다. 두 경우 모두 안내가 필요하지만 원인을 섞으면 사용자가 잘못된
-        // 경로를 지웠다는 착각을 한다.
-        let dictionary_empty = dictionary_path.trim().is_empty();
-        let dictionary_invalid = !dictionary_empty
-            && TranslationSettingsEditor::eztrans_dictionary_invalid(&dictionary_path);
-        if dictionary_invalid {
-            tracing::warn!("EzTrans 평면 사전으로 쓸 수 없는 파일입니다: {dictionary_path}");
-        }
-        self.set_control_text(
-            ctrl_id::EZTRANS_DICTIONARY_WARNING_LABEL,
-            if dictionary_empty {
-                "⚠ EzTrans 평면 사전이 선택되지 않았습니다. JisJK.flat.bin을 선택하세요."
-            } else if dictionary_invalid {
-                "⚠ EzTrans 평면 사전이 아닙니다. JisJK.flat.bin을 선택하세요."
-            } else {
-                ""
-            },
-        );
-
-        let ehnd_empty = ehnd_path.trim().is_empty();
-        let ehnd_invalid =
-            !ehnd_empty && TranslationSettingsEditor::eztrans_ehnd_invalid(&ehnd_path);
-        if ehnd_invalid {
-            tracing::warn!("EzTrans Ehnd 폴더로 쓸 수 없는 경로입니다: {ehnd_path}");
-        }
-        self.set_control_text(
-            ctrl_id::EZTRANS_EHND_WARNING_LABEL,
-            if ehnd_empty {
-                "⚠ EzTrans 필터 폴더가 선택되지 않았습니다. Ehnd 폴더를 선택하세요."
-            } else if ehnd_invalid {
-                "⚠ EzTrans 필터 폴더가 아닙니다. Ehnd 폴더를 선택하세요."
-            } else {
-                ""
-            },
-        );
     }
 
     pub(super) fn show_file_dialog_error(&self, error: &windows_core::Error) {

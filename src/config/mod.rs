@@ -12,6 +12,7 @@ mod text;
 mod translation;
 
 pub use app::Config;
+pub(crate) use app::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH};
 pub use custom_api::CustomApiConfig;
 pub use hook::{HookConfig, SavedHookProfile};
 pub(crate) use hook::{MAX_MERGE_WINDOW_MS, MIN_MERGE_WINDOW_MS};

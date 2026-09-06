@@ -26,7 +26,7 @@ const VACUUM_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 /// `None`으로 변환해 캐시 미스로 위장한다 — 캐시 미스는 유료 엔진 API 재호출
 /// (재과금)로 이어지므로 VACUUM_BUSY_TIMEOUT보다 짧게라도 대기를 준다.
 /// UI 체감 지연을 과하게 늘리지 않도록 VACUUM_BUSY_TIMEOUT(30초)보다 짧게 잡는다.
-const UI_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const UI_BUSY_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
@@ -45,10 +45,9 @@ pub struct TranslationCacheStore {
     conn: Option<RefCell<Connection>>,
     db_path: Option<PathBuf>,
     puts_since_prune: Cell<u64>,
-    /// 이 저장소의 VACUUM이 백그라운드에서 실행 중인지. 프로세스 전역이 아니라
-    /// 인스턴스별로 두어야 한다 — 전역 플래그는 서로 다른 DB 파일의 VACUUM끼리도
-    /// 막아버린다. 백그라운드 스레드와 공유하므로 `Arc`.
-    vacuum_in_progress: Arc<AtomicBool>,
+    clear_in_progress: Arc<AtomicBool>,
+    #[cfg(not(test))]
+    prune_in_progress: Arc<AtomicBool>,
 }
 
 impl TranslationCacheStore {
@@ -61,9 +60,11 @@ impl TranslationCacheStore {
                     conn: Some(RefCell::new(conn)),
                     db_path: Some(path.to_path_buf()),
                     puts_since_prune: Cell::new(0),
-                    vacuum_in_progress: Arc::new(AtomicBool::new(false)),
+                    clear_in_progress: Arc::new(AtomicBool::new(false)),
+                    #[cfg(not(test))]
+                    prune_in_progress: Arc::new(AtomicBool::new(false)),
                 };
-                store.prune();
+                store.schedule_prune();
                 store
             }
             Err(error) => {
@@ -72,7 +73,9 @@ impl TranslationCacheStore {
                     conn: None,
                     db_path: None,
                     puts_since_prune: Cell::new(0),
-                    vacuum_in_progress: Arc::new(AtomicBool::new(false)),
+                    clear_in_progress: Arc::new(AtomicBool::new(false)),
+                    #[cfg(not(test))]
+                    prune_in_progress: Arc::new(AtomicBool::new(false)),
                 }
             }
         }
@@ -84,6 +87,7 @@ impl TranslationCacheStore {
 
     /// 만료(TTL 초과) 항목과 행 수 상한 초과분을 삭제한다.
     /// get 지연과 clear() 프리즈의 근원인 무한 누적을 막는 유일한 회수 경로다.
+    #[cfg(test)]
     fn prune(&self) {
         self.prune_at(Self::now_secs());
     }
@@ -91,6 +95,7 @@ impl TranslationCacheStore {
     /// `prune`의 본체. 기준 시각을 인자로 받아 TTL 경계 테스트가 저장소와
     /// 동일한 `now`를 공유할 수 있게 한다 — 각자 `now_secs()`를 부르면 그 사이
     /// 초 경계를 넘길 때 경계 판정이 1초 밀려 테스트가 간헐적으로 깨진다.
+    #[cfg(test)]
     fn prune_at(&self, now: i64) {
         let Some(conn) = self.conn.as_ref() else {
             return;
@@ -178,6 +183,9 @@ impl TranslationCacheStore {
     /// 준비된 Statement를 재사용한다 (단순 PK 조회의 prepare는 수십 us지만
     /// 호출당 반복은 무의미한 비용이다).
     pub fn get(&self, key: &CacheKey) -> Option<String> {
+        if self.clear_in_progress.load(Ordering::Acquire) {
+            return None;
+        }
         let conn = self.conn.as_ref()?;
         // prepare_cached는 &self지만 내부 StatementCache를 쓰므로 RefCell이 필요하다.
         // CachedStatement는 클로저 안에서 즉시 소비돼 borrow를 넘기지 않는다.
@@ -210,6 +218,13 @@ impl TranslationCacheStore {
 
     /// 번역 결과를 캐시에 저장(갱신)한다.
     pub fn put(&self, key: &CacheKey, translation: &str) {
+        if self.clear_in_progress.load(Ordering::Acquire) {
+            return;
+        }
+        #[cfg(not(test))]
+        if self.prune_in_progress.load(Ordering::Acquire) {
+            return;
+        }
         let Some(conn) = self.conn.as_ref() else {
             return;
         };
@@ -242,72 +257,115 @@ impl TranslationCacheStore {
         let puts = self.puts_since_prune.get() + 1;
         if puts >= PUTS_PER_PRUNE {
             self.puts_since_prune.set(0);
-            self.prune();
+            self.schedule_prune();
         } else {
             self.puts_since_prune.set(puts);
         }
     }
 
-    /// 캐시에 저장된 모든 항목을 비운다. DELETE는 UI 스레드에서 끝내고,
-    /// 파일 크기 회수를 위한 VACUUM(캐시가 크면 수 초)만 백그라운드 스레드로
-    /// 미룬다 — clear() 프리즈의 원인이 바로 VACUUM이다.
+    /// 캐시 삭제와 파일 정리를 백그라운드에서 실행한다.
     pub fn clear(&self) {
         self.puts_since_prune.set(0);
-        let Some(conn) = self.conn.as_ref() else {
-            return;
-        };
-        if let Err(error) = conn.borrow().execute("DELETE FROM translation_cache", []) {
-            tracing::warn!("번역 캐시 비우기 실패: {error}");
-            return;
-        }
         let Some(path) = self.db_path.as_ref() else {
             return;
         };
-        Self::vacuum_in_background(path, Arc::clone(&self.vacuum_in_progress));
-    }
-
-    /// VACUUM은 DB 전체를 재작성하므로 별도 연결의 백그라운드 스레드에서 실행한다.
-    /// WAL 모드에서 쓰기는 하나뿐이므로 get/put과 경합하면 busy_timeout으로
-    /// 대기한다. 결과를 기다리는 호출자는 없어 실패해도 로그만 남긴다.
-    ///
-    /// `clear()`가 연달아 호출되면(예: 사용자가 버튼을 연타) 매번 새 스레드 +
-    /// 새 연결의 VACUUM이 만들어져 서로 busy 경합을 벌인다. 이미 VACUUM이
-    /// 진행 중이면 이번 호출은 건너뛴다 — DELETE는 이미 끝났으므로 논리적
-    /// 정합성엔 문제가 없고, 다음 clear()가 다시 VACUUM을 예약해 준다.
-    /// 이 게이트는 저장소 인스턴스별이다: 전역이면 서로 다른 DB 파일의 VACUUM도
-    /// 부당하게 막힌다.
-    fn vacuum_in_background(path: &Path, in_progress: Arc<AtomicBool>) {
-        if in_progress
+        if self
+            .clear_in_progress
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            tracing::debug!("translation cache VACUUM already running; skipping");
             return;
         }
+        let path = path.to_path_buf();
+        let in_progress = Arc::clone(&self.clear_in_progress);
+        let spawn = std::thread::Builder::new()
+            .name("anemone-cache-clear".to_string())
+            .spawn(move || {
+                let result = Connection::open(&path).and_then(|conn| {
+                    conn.busy_timeout(VACUUM_BUSY_TIMEOUT)?;
+                    conn.execute("DELETE FROM translation_cache", [])?;
+                    conn.execute("VACUUM", [])?;
+                    Ok(())
+                });
+                in_progress.store(false, Ordering::Release);
+                match result {
+                    Ok(()) => tracing::debug!("translation cache clear complete"),
+                    Err(error) => tracing::warn!("번역 캐시 비우기 실패: {error}"),
+                }
+            });
+        if let Err(error) = spawn {
+            self.clear_in_progress.store(false, Ordering::Release);
+            tracing::warn!("번역 캐시 정리 스레드를 시작하지 못했습니다: {error}");
+        }
+    }
 
-        // 패닉 경로에서도 플래그가 반드시 풀리도록 Drop으로 해제한다 — 스레드
-        // 안에서 앞으로 코드가 늘어나도 unlock 누락을 걱정할 필요가 없다.
-        struct ResetOnDrop(Arc<AtomicBool>);
-        impl Drop for ResetOnDrop {
-            fn drop(&mut self) {
-                self.0.store(false, Ordering::Release);
+    #[cfg(not(test))]
+    fn prune_in_background(&self) {
+        let Some(path) = self.db_path.as_ref() else {
+            return;
+        };
+        if self
+            .prune_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let path = path.to_path_buf();
+        let in_progress = Arc::clone(&self.prune_in_progress);
+        let now = Self::now_secs();
+        let spawn = std::thread::Builder::new()
+            .name("anemone-cache-prune".to_string())
+            .spawn(move || {
+                let result = Connection::open(&path).and_then(|conn| {
+                    conn.busy_timeout(VACUUM_BUSY_TIMEOUT)?;
+                    Self::prune_connection(&conn, now);
+                    Ok(())
+                });
+                in_progress.store(false, Ordering::Release);
+                if let Err(error) = result {
+                    tracing::warn!("번역 캐시 백그라운드 정리 실패: {error}");
+                }
+            });
+        if let Err(error) = spawn {
+            self.prune_in_progress.store(false, Ordering::Release);
+            tracing::warn!("번역 캐시 정리 스레드를 시작하지 못했습니다: {error}");
+        }
+    }
+
+    fn schedule_prune(&self) {
+        #[cfg(test)]
+        self.prune();
+        #[cfg(not(test))]
+        self.prune_in_background();
+    }
+
+    #[cfg(not(test))]
+    fn prune_connection(conn: &Connection, now: i64) {
+        let cutoff = now - CACHE_TTL_SECS;
+        match conn.execute(
+            "DELETE FROM translation_cache WHERE updated_at < ?1",
+            [cutoff],
+        ) {
+            Ok(removed) if removed > 0 => tracing::debug!(removed, "translation cache TTL prune"),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!("번역 캐시 TTL 정리 실패: {error}");
+                return;
             }
         }
-
-        let path = path.to_path_buf();
-        std::thread::spawn(move || {
-            let _guard = ResetOnDrop(in_progress);
-            let result = Connection::open(&path)
-                .and_then(|conn| {
-                    conn.busy_timeout(VACUUM_BUSY_TIMEOUT)?;
-                    conn.execute("VACUUM", [])
-                })
-                .map(|_| ());
-            match result {
-                Ok(()) => tracing::debug!("translation cache VACUUM complete"),
-                Err(error) => tracing::warn!("번역 캐시 VACUUM 실패: {error}"),
-            }
-        });
+        match conn.execute(
+            "DELETE FROM translation_cache
+             WHERE rowid NOT IN (
+                 SELECT rowid FROM translation_cache
+                 ORDER BY updated_at DESC LIMIT ?1
+             )",
+            [CACHE_MAX_ROWS],
+        ) {
+            Ok(removed) if removed > 0 => tracing::debug!(removed, "translation cache cap prune"),
+            Ok(_) => {}
+            Err(error) => tracing::warn!("번역 캐시 상한 정리 실패: {error}"),
+        }
     }
 }
 
