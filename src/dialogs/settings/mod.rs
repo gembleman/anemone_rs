@@ -191,7 +191,7 @@ impl HostedDialog for SettingsDialog {
     }
 
     fn destroy(&mut self) {
-        // 무료 토큰 워커를 먼저 정리한다. 진행 중인 요청이 있으면 최대 2초
+        // 무료 API key 워커를 먼저 정리한다. 진행 중인 요청이 있으면 최대 2초
         // 기다리고, 못 끝내면 detach한 채 넘어간다 — 응답이 창이 사라진 뒤
         // 도착해도 PostMessageW가 조용히 실패할 뿐이라 안전하다.
         if let Some(worker) = self.mys_signup_worker.borrow_mut().take() {

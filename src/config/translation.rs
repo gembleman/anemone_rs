@@ -335,7 +335,7 @@ where
 ///
 /// 복호화 실패는 오류로 올리지 않는다 — 설정 로드가 실패하면 파일 전체가
 /// 손상본으로 격리되어(`Config::load_or_default`) 다른 설정까지 잃는다.
-/// 토큰만 비우면 이용자는 "무료 토큰 받기"로 다시 받을 수 있다.
+/// 토큰만 비우면 이용자는 "무료 API key 받기"로 다시 받을 수 있다.
 fn deserialize_secret<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,

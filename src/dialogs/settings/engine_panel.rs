@@ -34,10 +34,10 @@ pub(super) fn format_mys_usage(
     snapshot: Option<crate::translation::mys_usage::UsageSnapshot>,
 ) -> String {
     let Some(usage) = snapshot else {
-        return "이 기기 이번 달 사용량: 아직 없음".to_string();
+        return "이번 달 사용량: 아직 없음".to_string();
     };
     format!(
-        "이 기기 이번 달: 신규 {}토큰 (입력 {} / 출력 {})\r\n캐시 {}자 · 처리 {}건",
+        "이번 달: 신규 {}토큰 (입력 {} / 출력 {})\r\n캐시 {}자 · 처리 {}건",
         format_count(usage.fresh_total_tokens()),
         format_count(usage.fresh_prompt_tokens),
         format_count(usage.fresh_output_tokens),
@@ -96,7 +96,7 @@ impl SettingsDialog {
             if configured {
                 "발급됨 (앱이 보관합니다)"
             } else {
-                "없음 — [무료 토큰 받기]를 눌러 주세요"
+                "없음 — [무료 API key 받기]를 눌러 주세요"
             },
         );
     }
