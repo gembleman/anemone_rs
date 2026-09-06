@@ -1,6 +1,7 @@
-use windows::{
-    Win32::{Foundation::*, UI::Input::KeyboardAndMouse::*},
-    core::*,
+use windows_core::*;
+use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey,
 };
 
 use crate::config::{HotkeyConfig, HotkeySlot};
@@ -52,7 +53,9 @@ impl HotkeyManager {
         // SAFETY: self.hwnd is a valid window handle. RegisterHotKey associates the hotkey
         // with this window using a unique id provided by the caller.
         unsafe {
-            RegisterHotKey(Some(self.hwnd), id, modifiers, vk)?;
+            if RegisterHotKey(self.hwnd, id, modifiers, vk) == 0 {
+                return Err(Error::from_thread());
+            }
             self.registered.push(id);
             Ok(())
         }
@@ -67,7 +70,7 @@ impl HotkeyManager {
             // SAFETY: self.hwnd is a valid window handle. UnregisterHotKey removes a hotkey
             // previously registered with RegisterHotKey using the same hwnd and id.
             unsafe {
-                let _ = UnregisterHotKey(Some(self.hwnd), id);
+                let _ = UnregisterHotKey(self.hwnd, id);
             }
         }
         self.registered.truncate(start);

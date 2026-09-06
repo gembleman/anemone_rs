@@ -12,7 +12,6 @@ pub mod file_trans_progress;
 pub mod font;
 pub mod glossary;
 pub(crate) mod hook_find;
-pub(crate) mod hook_select;
 pub mod settings;
 pub mod translate;
 
@@ -25,7 +24,7 @@ pub use translate::TranslateDialog;
 pub(crate) const TBM_GETPOS: u32 = 1024;
 
 fn trackbar_thumb_position(code: u32, wparam: usize) -> Option<i32> {
-    use windows::Win32::UI::Controls::{TB_THUMBPOSITION, TB_THUMBTRACK};
+    use windows_sys::Win32::UI::Controls::{TB_THUMBPOSITION, TB_THUMBTRACK};
 
     match code {
         TB_THUMBPOSITION | TB_THUMBTRACK => Some(((wparam >> 16) & 0xffff) as i32),

@@ -46,3 +46,7 @@ impl FileTranslationError {
         Self::Backend(message.into())
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/file_trans/error.rs"]
+mod tests;

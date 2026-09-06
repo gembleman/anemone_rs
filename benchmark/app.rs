@@ -110,7 +110,7 @@ impl App {
         for i in 0..iters {
             // 접미사만 바꿔 layout 변화는 줄이고 cache miss를 만든다.
             if let Some(orig) = saved_text.as_ref() {
-                self.model.runtime.translated_text = format!("{}#{}", orig, i);
+                self.model.runtime.translated_text = format!("{orig}#{i}");
             }
             bench::phase_begin();
             let started = std::time::Instant::now();

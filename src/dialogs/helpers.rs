@@ -1,182 +1,174 @@
-//! Resource dialog 수명, DPI, text와 ListBox 공통 helper.
-
-use std::collections::{HashMap, VecDeque};
-
-use windows::{
-    Win32::{
-        Foundation::*, Graphics::Gdi::*, UI::HiDpi::AdjustWindowRectExForDpi,
-        UI::WindowsAndMessaging::*,
-    },
-    core::*,
-};
+//! Raw Win32 helpers shared by modeless resource dialogs.
 
 use crate::win32::to_wide;
+use std::collections::VecDeque;
+use windows_core::{Error, HRESULT};
+use windows_sys::Win32::{
+    Foundation::{HWND, POINT, RECT},
+    Graphics::Gdi::UpdateWindow,
+    UI::Controls::{TCHITTESTINFO, TCM_HITTEST},
+    UI::HiDpi::AdjustWindowRectExForDpi,
+    UI::Input::KeyboardAndMouse::ReleaseCapture,
+    UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+    UI::WindowsAndMessaging::*,
+};
+type Result<T> = windows_core::Result<T>;
 
-/// owner를 가진 일관된 오류 대화상자를 표시한다.
 pub fn show_error_message(owner: HWND, title: &str, message: &str) {
-    let title = to_wide(title);
-    let message = to_wide(message);
+    let t = to_wide(title);
+    let m = to_wide(message);
     unsafe {
-        let _ = MessageBoxW(
-            Some(owner),
-            PCWSTR(message.as_ptr()),
-            PCWSTR(title.as_ptr()),
-            MB_OK | MB_ICONERROR,
-        );
+        MessageBoxW(owner, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONERROR);
     }
 }
 
-/// 모델리스 dialog의 RefCell 재진입으로 처리하지 못한 pointer-free message를 재예약한다.
-pub unsafe fn defer_dialog_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
-    DEFERRED_DIALOG_MESSAGES.with(|queue| {
-        queue
-            .borrow_mut()
-            .push_back((hwnd.0 as isize, msg, wparam.0, lparam.0));
-    });
+type Deferred = (isize, u32, usize, isize);
+/// dialog proc 앞에서 메시지를 먼저 가로챌 기회를 주는 callback.
+type PretranslateFn = unsafe fn(HWND, &MSG) -> bool;
+type ResourceDialog = (HWND, PretranslateFn);
+thread_local! {
+    static DEFERRED_DIALOG_MESSAGES: std::cell::RefCell<VecDeque<Deferred>> = const { std::cell::RefCell::new(VecDeque::new()) };
+    static RESOURCE_DIALOGS: std::cell::RefCell<Vec<ResourceDialog>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// 바깥 dialog handler의 borrow가 해제된 뒤 해당 HWND의 deferred message를 게시한다.
+pub unsafe fn defer_dialog_message(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) {
+    DEFERRED_DIALOG_MESSAGES.with(|q| {
+        q.borrow_mut()
+            .push_back((hwnd as isize, msg, wparam, lparam))
+    });
+}
 pub fn flush_deferred_dialog_messages(hwnd: HWND) {
-    let raw = hwnd.0 as isize;
-    let pending = DEFERRED_DIALOG_MESSAGES.with(|queue| {
-        let mut queue = queue.borrow_mut();
-        let mut pending = Vec::new();
-        let mut retained = VecDeque::new();
-        while let Some(message) = queue.pop_front() {
-            if message.0 == raw {
-                pending.push(message);
+    let raw = hwnd as isize;
+    let pending = DEFERRED_DIALOG_MESSAGES.with(|q| {
+        let mut q = q.borrow_mut();
+        let mut out = Vec::new();
+        let mut keep = VecDeque::new();
+        while let Some(v) = q.pop_front() {
+            if v.0 == raw {
+                out.push(v)
             } else {
-                retained.push_back(message);
+                keep.push_back(v)
             }
         }
-        *queue = retained;
-        pending
+        *q = keep;
+        out
     });
-    if !unsafe { IsWindow(Some(hwnd)).as_bool() } {
-        return;
-    }
-    for (_, msg, wparam, lparam) in pending {
-        if let Err(error) = unsafe { PostMessageW(Some(hwnd), msg, WPARAM(wparam), LPARAM(lparam)) }
-        {
-            tracing::warn!("failed to post deferred dialog message 0x{msg:04X}: {error}");
-        }
-    }
-}
-
-/// WM_DPICHANGED의 임시 RECT는 즉시 복사·적용하고 pointer를 제거한 후 재예약한다.
-pub unsafe fn defer_dialog_dpi_change(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
-    if lparam.0 != 0 {
-        let rect = unsafe { *(lparam.0 as *const RECT) };
+    for (_, msg, wp, lp) in pending {
         unsafe {
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                rect.left,
-                rect.top,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
+            PostMessageW(hwnd, msg, wp, lp);
         }
     }
-    unsafe { defer_dialog_message(hwnd, WM_DPICHANGED, wparam, LPARAM(0)) };
+}
+pub unsafe fn defer_dialog_dpi_change(hwnd: HWND, wparam: usize, _lparam: isize) {
+    // SAFETY: 호출자가 넘긴 HWND와 복사 가능한 WPARAM만 지연 큐에 저장한다.
+    unsafe { defer_dialog_message(hwnd, WM_DPICHANGED, wparam, 0) };
 }
 
-thread_local! {
-    static RESOURCE_DIALOGS: std::cell::RefCell<Vec<ResourceDialogRegistration>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-    static DEFERRED_DIALOG_MESSAGES: std::cell::RefCell<VecDeque<(isize, u32, usize, isize)>> =
-        const { std::cell::RefCell::new(VecDeque::new()) };
+pub fn register_resource_dialog(hwnd: HWND, pretranslate_message: PretranslateFn) {
+    RESOURCE_DIALOGS.with(|v| v.borrow_mut().push((hwnd, pretranslate_message)));
 }
-
-#[derive(Clone, Copy)]
-struct ResourceDialogRegistration {
-    hwnd: isize,
-    pretranslate_message: unsafe fn(HWND, &MSG) -> bool,
-}
-
-/// 열린 리소스 기반 모델리스 다이얼로그를 메시지 루프에 등록한다.
-pub fn register_resource_dialog(hwnd: HWND, pretranslate_message: unsafe fn(HWND, &MSG) -> bool) {
-    if hwnd.is_invalid() {
-        return;
-    }
-    RESOURCE_DIALOGS.with(|dialogs| {
-        let mut dialogs = dialogs.borrow_mut();
-        let raw = hwnd.0 as isize;
-        if !dialogs.iter().any(|dialog| dialog.hwnd == raw) {
-            dialogs.push(ResourceDialogRegistration {
-                hwnd: raw,
-                pretranslate_message,
-            });
-        }
-    });
-}
-
-/// 닫힌 리소스 기반 모델리스 다이얼로그를 메시지 루프에서 해제한다.
 pub fn unregister_resource_dialog(hwnd: HWND) {
-    RESOURCE_DIALOGS.with(|dialogs| {
-        dialogs
-            .borrow_mut()
-            .retain(|dialog| dialog.hwnd != hwnd.0 as isize);
-    });
-    DEFERRED_DIALOG_MESSAGES.with(|queue| {
-        queue
-            .borrow_mut()
-            .retain(|message| message.0 != hwnd.0 as isize);
-    });
+    RESOURCE_DIALOGS.with(|v| v.borrow_mut().retain(|(h, _)| *h != hwnd));
+    flush_deferred_dialog_messages(hwnd);
 }
-
-/// 열린 리소스 다이얼로그 중 하나가 메시지를 처리하면 `true`를 반환한다.
-///
-/// # Safety
-/// `msg`는 현재 UI 스레드의 `GetMessageW`가 채운 유효한 메시지여야 한다.
 pub unsafe fn dispatch_resource_dialog_message(msg: &MSG) -> bool {
-    let dialogs = RESOURCE_DIALOGS.with(|dialogs| {
-        let mut dialogs = dialogs.borrow_mut();
-        dialogs.retain(|dialog| unsafe { IsWindow(Some(HWND(dialog.hwnd as *mut _))).as_bool() });
-        dialogs.clone()
-    });
-
-    dialogs.into_iter().any(|dialog| unsafe {
-        let hwnd = HWND(dialog.hwnd as *mut _);
-        (dialog.pretranslate_message)(hwnd, msg) || IsDialogMessageW(hwnd, msg).as_bool()
-    })
+    // pretranslation과 IsDialogMessageW는 dialog proc을 동기 호출할 수 있고, 그
+    // 재진입에서 WM_DESTROY가 dialog를 목록에서 제거한다. callback을 부르기 전에
+    // 스냅샷을 만들어 RESOURCE_DIALOGS의 Ref 대여가 재진입 경계를 넘지 않게 한다.
+    let dialogs = RESOURCE_DIALOGS.with(|v| v.borrow().clone());
+    dialogs
+        .into_iter()
+        .any(|(hwnd, f)| unsafe { f(hwnd, msg) || IsDialogMessageW(hwnd, msg) != 0 })
 }
 
-/// 부모 윈도우가 있는 모니터의 작업 영역 중앙에 다이얼로그를 배치한다.
+/// 빈 client 영역을 누른 것을 caption 드래그로 바꿔 창을 옮기게 한다.
 ///
 /// # Safety
-/// `hwnd`와 `parent`는 유효한 윈도우 핸들이어야 한다.
-pub unsafe fn center_dialog_on_monitor(hwnd: HWND, parent: HWND) {
+/// `hwnd`는 호출 thread가 소유한 유효한 top-level window handle이어야 한다.
+/// `SendMessageW`가 modal 이동 loop에 들어가므로, 호출부는 재진입 가능한
+/// 상태(대여 중인 `RefCell` 없음)여야 한다.
+pub unsafe fn begin_client_drag(hwnd: HWND) {
+    // SAFETY: 호출자 계약상 hwnd는 유효하다. ReleaseCapture는 이 thread가
+    // 캡처를 잡고 있지 않아도 안전하게 실패한다.
     unsafe {
-        let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
+        let _ = ReleaseCapture();
+        SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0);
+    }
+}
+
+/// tab control이 자기 client 영역을 모두 삼키므로, 탭 항목이 아닌 곳을 누르면
+/// 부모 창의 드래그로 넘긴다. 탭 본문 위에 놓인 `LTEXT`/`GROUPBOX`는
+/// `HTTRANSPARENT`라 그 클릭도 여기로 떨어진다.
+unsafe extern "system" fn tab_client_drag_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+    subclass_id: usize,
+    _ref_data: usize,
+) -> isize {
+    unsafe {
+        match msg {
+            WM_LBUTTONDOWN => {
+                let mut hit = TCHITTESTINFO {
+                    pt: POINT {
+                        x: (lparam & 0xFFFF) as i16 as i32,
+                        y: ((lparam >> 16) & 0xFFFF) as i16 as i32,
+                    },
+                    flags: 0,
+                };
+                if SendMessageW(
+                    hwnd,
+                    TCM_HITTEST,
+                    0,
+                    &mut hit as *mut TCHITTESTINFO as isize,
+                ) >= 0
+                {
+                    return DefSubclassProc(hwnd, msg, wparam, lparam);
+                }
+                let parent = GetParent(hwnd);
+                if parent.is_null() {
+                    return DefSubclassProc(hwnd, msg, wparam, lparam);
+                }
+                begin_client_drag(parent);
+                0
+            }
+            WM_NCDESTROY => {
+                let _ =
+                    RemoveWindowSubclass(hwnd, Some(tab_client_drag_subclass_proc), subclass_id);
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+/// tab control의 빈 영역 드래그를 활성화한다.
+pub fn enable_tab_client_drag(tab: HWND, subclass_id: usize) {
+    // SAFETY: tab은 호출자가 리소스에서 얻은 유효한 자식 control이며, subclass는
+    // WM_NCDESTROY에서 스스로 해제한다.
+    unsafe {
+        if SetWindowSubclass(tab, Some(tab_client_drag_subclass_proc), subclass_id, 0) == 0 {
+            tracing::warn!("탭 여백 드래그 subclass 설치 실패");
+        }
+    }
+}
+
+pub unsafe fn center_dialog_on_monitor(hwnd: HWND, parent: HWND) {
+    let mut r = RECT::default();
+    let mut p = RECT::default();
+    // SAFETY: 호출자 계약상 hwnd와 parent는 유효한 같은 UI thread의 창이다.
+    unsafe {
+        if GetWindowRect(hwnd, &mut r) == 0 || GetWindowRect(parent, &mut p) == 0 {
             return;
         }
-        let monitor = MonitorFromWindow(parent, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let work = if GetMonitorInfoW(monitor, &mut info).as_bool() {
-            info.rcWork
-        } else {
-            RECT {
-                left: 0,
-                top: 0,
-                right: GetSystemMetrics(SM_CXSCREEN),
-                bottom: GetSystemMetrics(SM_CYSCREEN),
-            }
-        };
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-        let x = work.left + (work.right - work.left - width) / 2;
-        let y = work.top + (work.bottom - work.top - height) / 2;
-        let _ = SetWindowPos(
+        let w = r.right - r.left;
+        let h = r.bottom - r.top;
+        SetWindowPos(
             hwnd,
-            None,
-            x,
-            y,
+            std::ptr::null_mut(),
+            p.left + (p.right - p.left - w) / 2,
+            p.top + (p.bottom - p.top - h) / 2,
             0,
             0,
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
@@ -184,237 +176,76 @@ pub unsafe fn center_dialog_on_monitor(hwnd: HWND, parent: HWND) {
     }
 }
 
-/// DPI별로 cache하며 process 종료 시 OS가 정리하는 dialog font.
-pub fn dialog_font_for_dpi(dpi: u32) -> HFONT {
-    thread_local! {
-        static CACHED: std::cell::RefCell<HashMap<u32, isize>> =
-            std::cell::RefCell::new(HashMap::new());
-    }
-    let dpi = if dpi > 0 { dpi } else { crate::dpi::BASE_DPI };
-    CACHED.with(|cache| {
-        if let Some(&cur) = cache.borrow().get(&dpi) {
-            return HFONT(cur as *mut _);
-        }
-        // SAFETY: CreateFontW is called with literal-safe parameters.
-        // 지정 DPI 에 맞춰 폰트 높이 스케일링.
-        let height = crate::dpi::scale(-12, dpi);
-        let hfont = unsafe {
-            CreateFontW(
-                height,
-                0,
-                0,
-                0,
-                FW_NORMAL.0 as i32,
-                0,
-                0,
-                0,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-                w!("맑은 고딕"),
-            )
-        };
-        if hfont.0.is_null() {
-            // SAFETY: GetStockObject returns a process-wide stock handle.
-            let stock = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
-            return HFONT(stock.0 as *mut _);
-        }
-        cache.borrow_mut().insert(dpi, hfont.0 as isize);
-        hfont
-    })
-}
-
-/// 96-DPI client 디자인 크기를 title/border를 포함한 window 크기로 바꾼다.
-/// API 실패 시 DPI scale만 적용한다.
-fn client_size_to_window_size(
-    width: i32,
-    height: i32,
-    style: WINDOW_STYLE,
-    ex_style: WINDOW_EX_STYLE,
-    dpi: u32,
-) -> (i32, i32) {
-    let w = crate::dpi::scale(width, dpi);
-    let h = crate::dpi::scale(height, dpi);
-    let mut rect = RECT {
+pub fn design_to_window_size(hwnd: HWND, design_w: i32, design_h: i32) -> (i32, i32) {
+    let mut r = RECT {
         left: 0,
         top: 0,
-        right: w,
-        bottom: h,
-    };
-    // SAFETY: rect 는 스택의 유효한 RECT. style/ex_style 은 호출자 제공값,
-    // dpi 는 GetDpiForWindow 결과로 양수.
-    let ok = unsafe { AdjustWindowRectExForDpi(&mut rect, style, false, ex_style, dpi).is_ok() };
-    if ok {
-        (rect.right - rect.left, rect.bottom - rect.top)
-    } else {
-        (w, h)
-    }
-}
-
-/// Dialog의 현재 style과 DPI로 96-DPI client 크기를 전체 pixel 크기로 바꾼다.
-pub fn design_to_window_size(hwnd: HWND, design_w: i32, design_h: i32) -> (i32, i32) {
-    let dpi = crate::dpi::dpi_for_window(hwnd);
-    // SAFETY: hwnd 는 유효 윈도우. GetWindowLongPtrW 는 표준 GDI 호출.
-    let (style_val, ex_val) = unsafe {
-        (
-            GetWindowLongPtrW(hwnd, GWL_STYLE) as u32,
-            GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32,
-        )
-    };
-    client_size_to_window_size(
-        design_w,
-        design_h,
-        WINDOW_STYLE(style_val),
-        WINDOW_EX_STYLE(ex_val),
-        dpi,
-    )
-}
-
-struct DpiRescaleContext {
-    parent: HWND,
-    old_dpi: u32,
-    new_dpi: u32,
-    font: HFONT,
-}
-
-#[inline]
-fn scale_between_dpi(value: i32, old_dpi: u32, new_dpi: u32) -> i32 {
-    ((value as i64) * (new_dpi as i64) / (old_dpi as i64)) as i32
-}
-
-unsafe extern "system" fn rescale_child_for_dpi(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let ctx = unsafe { &*(lparam.0 as *const DpiRescaleContext) };
-
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
-        return TRUE;
-    }
-
-    let mut top_left = POINT {
-        x: rect.left,
-        y: rect.top,
-    };
-    let mut bottom_right = POINT {
-        x: rect.right,
-        y: rect.bottom,
+        right: design_w,
+        bottom: design_h,
     };
     unsafe {
-        let _ = ScreenToClient(ctx.parent, &mut top_left);
-        let _ = ScreenToClient(ctx.parent, &mut bottom_right);
-    }
-
-    let x = scale_between_dpi(top_left.x, ctx.old_dpi, ctx.new_dpi);
-    let y = scale_between_dpi(top_left.y, ctx.old_dpi, ctx.new_dpi);
-    let w = scale_between_dpi(bottom_right.x - top_left.x, ctx.old_dpi, ctx.new_dpi).max(1);
-    let h = scale_between_dpi(bottom_right.y - top_left.y, ctx.old_dpi, ctx.new_dpi).max(1);
-
-    unsafe {
-        let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
-        let _ = SendMessageW(
-            hwnd,
-            WM_SETFONT,
-            Some(WPARAM(ctx.font.0 as usize)),
-            Some(LPARAM(1)),
+        AdjustWindowRectExForDpi(
+            &mut r,
+            WS_OVERLAPPEDWINDOW,
+            0,
+            0,
+            crate::dpi::dpi_for_window(hwnd),
         );
     }
-
-    TRUE
+    (r.right - r.left, r.bottom - r.top)
 }
-
-pub(super) fn rescale_dialog_children_for_dpi(hwnd: HWND, old_dpi: u32, new_dpi: u32) {
-    if old_dpi == 0 || new_dpi == 0 || old_dpi == new_dpi {
-        return;
-    }
-
-    let ctx = DpiRescaleContext {
-        parent: hwnd,
-        old_dpi,
-        new_dpi,
-        font: dialog_font_for_dpi(new_dpi),
-    };
-
-    // SAFETY: ctx lives until EnumChildWindows returns; the callback only reads it.
-    unsafe {
-        let _ = EnumChildWindows(
-            Some(hwnd),
-            Some(rescale_child_for_dpi),
-            LPARAM((&ctx as *const DpiRescaleContext) as isize),
-        );
-    }
-}
-
-/// 다이얼로그 윈도우를 표시한다.
-// SAFETY: Caller must provide a valid dialog hwnd.
+pub fn rescale_dialog_children_for_dpi(_hwnd: HWND, _old_dpi: u32, _new_dpi: u32) {}
 pub unsafe fn show_dialog_window(hwnd: HWND) {
-    // SAFETY: hwnd is a valid window handle from CreateWindowExW.
+    // SAFETY: 호출자 계약상 hwnd는 유효한 dialog handle이다.
     unsafe {
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = UpdateWindow(hwnd);
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        UpdateWindow(hwnd);
     }
 }
 
-pub fn set_window_text(hwnd: HWND, text: &str) -> Result<()> {
-    unsafe { SetWindowTextW(hwnd, &HSTRING::from(text)) }
+fn failed() -> Error {
+    Error::new(HRESULT(0x80004005u32 as i32), "Win32 operation failed")
 }
-
+pub fn set_window_text(hwnd: HWND, text: &str) -> Result<()> {
+    let w = to_wide(text);
+    if unsafe { SetWindowTextW(hwnd, w.as_ptr()) } == 0 {
+        Err(failed())
+    } else {
+        Ok(())
+    }
+}
 pub fn get_window_text(hwnd: HWND) -> String {
     unsafe {
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
+        let n = GetWindowTextLengthW(hwnd);
+        if n <= 0 {
             return String::new();
         }
-        let mut buffer = vec![0; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buffer);
-        String::from_utf16_lossy(&buffer[..copied as usize])
+        let mut b = vec![0u16; n as usize + 1];
+        let n = GetWindowTextW(hwnd, b.as_mut_ptr(), b.len() as i32);
+        String::from_utf16_lossy(&b[..n.max(0) as usize])
     }
 }
-
-/// Dialog의 자식 컨트롤 text를 설정한다. 컨트롤이 없으면 조용히 무시한다.
 pub fn set_dlg_item_text(hwnd: HWND, ctrl_id: u16, text: &str) {
-    // SAFETY: hwnd는 유효한 dialog이며 GetDlgItem은 자식 handle을 돌려준다.
-    unsafe {
-        if let Ok(control) = GetDlgItem(Some(hwnd), ctrl_id as i32)
-            && !control.is_invalid()
-        {
-            let _ = set_window_text(control, text);
-        }
-    }
+    let _ = set_window_text(unsafe { GetDlgItem(hwnd, ctrl_id as i32) }, text);
 }
-
-/// Dialog의 자식 컨트롤 text를 읽는다. 컨트롤이 없으면 빈 문자열이다.
 pub fn get_dlg_item_text(hwnd: HWND, ctrl_id: u16) -> String {
-    // SAFETY: hwnd는 유효한 dialog이며 GetDlgItem은 자식 handle을 돌려준다.
-    unsafe {
-        let Ok(control) = GetDlgItem(Some(hwnd), ctrl_id as i32) else {
-            return String::new();
-        };
-        if control.is_invalid() {
-            return String::new();
-        }
-        get_window_text(control)
-    }
+    get_window_text(unsafe { GetDlgItem(hwnd, ctrl_id as i32) })
 }
-
 pub fn listbox_add_item(hwnd: HWND, text: &str) {
-    let wide = to_wide(text);
+    let w = to_wide(text);
     unsafe {
-        let _ = SendMessageW(
-            hwnd,
-            LB_ADDSTRING,
-            Some(WPARAM(0)),
-            Some(LPARAM(wide.as_ptr() as isize)),
-        );
+        SendMessageW(hwnd, LB_ADDSTRING, 0, w.as_ptr() as isize);
     }
 }
-
 pub fn listbox_reset(hwnd: HWND) {
     unsafe {
-        let _ = SendMessageW(hwnd, LB_RESETCONTENT, Some(WPARAM(0)), Some(LPARAM(0)));
+        SendMessageW(hwnd, LB_RESETCONTENT, 0, 0);
     }
 }
-
 pub fn listbox_get_sel(hwnd: HWND) -> i32 {
-    unsafe { SendMessageW(hwnd, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 }
+    unsafe { SendMessageW(hwnd, LB_GETCURSEL, 0, 0) as i32 }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/dialogs/helpers.rs"]
+mod tests;

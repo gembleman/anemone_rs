@@ -1,11 +1,16 @@
-use windows::{
-    Win32::{Foundation::*, UI::WindowsAndMessaging::*},
-    core::*,
+use std::io;
+use windows_sys::Win32::{
+    Foundation::{GetLastError, HWND, SetLastError},
+    UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DeleteMenu, DestroyMenu, GetMenuItemCount, MF_BYPOSITION,
+        MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, PostMessageW, SetForegroundWindow,
+        TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+    },
 };
 
 use crate::config::Config;
 
-fn popup_flags() -> TRACK_POPUP_MENU_FLAGS {
+fn popup_flags() -> u32 {
     TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY
 }
 
@@ -21,7 +26,6 @@ pub mod id {
     pub const BACKLOG: u16 = 109;
     pub const TRANSLATE: u16 = 111;
     pub const FILE_TRANS: u16 = 112;
-    pub const HOOK_SELECT: u16 = 113;
     pub const HOOK_FIND: u16 = 114;
     pub const HOOK_STOP: u16 = 115;
     pub const EXIT: u16 = 110;
@@ -31,132 +35,146 @@ pub mod id {
     pub const TEXT_SIZE_DOWN: u16 = 202;
 }
 
+/// 체크 상태에 따른 메뉴 플래그
+#[inline]
+fn checked_flag(checked: bool) -> u32 {
+    if checked {
+        MF_STRING | MF_CHECKED
+    } else {
+        MF_STRING
+    }
+}
+
+/// 활성/비활성 상태에 따른 메뉴 플래그
+#[inline]
+pub fn enabled_flag(enabled: bool) -> u32 {
+    if enabled {
+        MF_STRING
+    } else {
+        MF_GRAYED | MF_STRING
+    }
+}
+
+/// "클립보드 감시" 항목의 플래그.
+///
+/// 후킹 세션 중에는 클립보드 감시가 자동으로 멈추므로(`app::state::
+/// clipboard_capture_is_paused`) 지금 토글해도 즉시 달라지는 게 없다. 헛클릭을
+/// 막기 위해 항목을 비활성화하되, 체크 표시는 저장된 설정 그대로 둔다 — 후킹을
+/// 끊으면 그 설정으로 되돌아가기 때문이다.
+#[inline]
+fn clipboard_watch_flag(watching: bool, hook_active: bool) -> u32 {
+    checked_flag(watching) | if hook_active { MF_GRAYED } else { 0 }
+}
+
 pub struct ContextMenu {
-    hmenu: HMENU,
+    hmenu: windows_sys::Win32::UI::WindowsAndMessaging::HMENU,
 }
 
 impl ContextMenu {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> io::Result<Self> {
         // SAFETY: CreatePopupMenu requires no preconditions and returns a new valid menu handle.
         unsafe {
-            let hmenu = CreatePopupMenu()?;
+            let hmenu = CreatePopupMenu();
+            if hmenu.is_null() {
+                return Err(io::Error::last_os_error());
+            }
             Ok(Self { hmenu })
         }
     }
 
-    pub fn build(&self, config: &Config, hook_active: bool) -> Result<()> {
-        /// 체크 상태에 따른 메뉴 플래그
-        #[inline]
-        fn checked_flag(checked: bool) -> MENU_ITEM_FLAGS {
-            if checked {
-                MF_STRING | MF_CHECKED
-            } else {
-                MF_STRING
-            }
+    /// 항목 하나를 끝에 덧붙인다.
+    ///
+    /// 트레이 메뉴를 통째로 만드는 `build`와 달리, 목록 컨트롤의 우클릭 메뉴처럼
+    /// 호출부가 항목을 직접 구성하는 팝업에 쓴다.
+    pub fn append(&self, flags: u32, id: u16, text: &str) -> io::Result<()> {
+        let wide = crate::win32::to_wide(text);
+        // SAFETY: self.hmenu는 new()가 만든 유효한 팝업 메뉴이고, wide는 이 호출이
+        // 끝날 때까지 살아 있는 NUL 종료 문자열이다.
+        if unsafe { AppendMenuW(self.hmenu, flags, id as usize, wide.as_ptr()) } == 0 {
+            return Err(io::Error::last_os_error());
         }
+        Ok(())
+    }
 
-        /// 활성/비활성 상태에 따른 메뉴 플래그
-        #[inline]
-        fn enabled_flag(enabled: bool) -> MENU_ITEM_FLAGS {
-            if enabled {
-                MF_STRING
-            } else {
-                MF_GRAYED | MF_STRING
-            }
-        }
-
+    pub fn build(&self, config: &Config, hook_active: bool) -> io::Result<()> {
         // SAFETY: self.hmenu is a valid menu handle created by CreatePopupMenu. All
         // AppendMenuW calls use valid menu item IDs and static string literals (w! macro).
         // DeleteMenu with MF_BYPOSITION and index 0 removes items from the front.
         unsafe {
+            macro_rules! append {
+                ($flags:expr, $id:expr, $text:expr) => {{
+                    let wide = crate::win32::to_wide($text);
+                    if AppendMenuW(self.hmenu, $flags, $id as usize, wide.as_ptr()) == 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                }};
+                ($flags:expr, $id:expr) => {{
+                    if AppendMenuW(self.hmenu, $flags, $id as usize, std::ptr::null()) == 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                }};
+            }
             // 메뉴 초기화 (기존 항목 제거)
-            while GetMenuItemCount(Some(self.hmenu)) > 0 {
+            while GetMenuItemCount(self.hmenu) > 0 {
                 let _ = DeleteMenu(self.hmenu, 0, MF_BYPOSITION);
             }
 
             // 윈도우 표시/숨김
             let show_text = if config.window_visible {
-                w!("윈도우 숨기기")
+                "윈도우 숨기기"
             } else {
-                w!("윈도우 표시")
+                "윈도우 표시"
             };
-            AppendMenuW(self.hmenu, MF_STRING, id::WINDOW_SHOW as usize, show_text)?;
-            AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
+            append!(MF_STRING, id::WINDOW_SHOW, show_text);
+            append!(MF_SEPARATOR, 0);
 
-            AppendMenuW(
-                self.hmenu,
+            append!(
                 checked_flag(config.click_through),
-                id::CLICK_THROUGH as usize,
-                w!("클릭 통과"),
-            )?;
-            AppendMenuW(
-                self.hmenu,
-                checked_flag(config.clipboard_watch),
-                id::CLIPBOARD_WATCH as usize,
-                w!("클립보드 감시"),
-            )?;
-            AppendMenuW(
-                self.hmenu,
+                id::CLICK_THROUGH,
+                "클릭 통과"
+            );
+            append!(
+                clipboard_watch_flag(config.clipboard_watch, hook_active),
+                id::CLIPBOARD_WATCH,
+                "클립보드 감시"
+            );
+            append!(
                 checked_flag(config.magnetic_mode),
-                id::MAGNETIC_MODE as usize,
-                w!("자석 모드"),
-            )?;
-            AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
+                id::MAGNETIC_MODE,
+                "자석 모드"
+            );
+            append!(MF_SEPARATOR, 0);
 
-            AppendMenuW(
-                self.hmenu,
+            append!(
                 checked_flag(config.background_visible),
-                id::BACKGROUND_TOGGLE as usize,
-                w!("배경 표시"),
-            )?;
-            AppendMenuW(
-                self.hmenu,
+                id::BACKGROUND_TOGGLE,
+                "배경 표시"
+            );
+            append!(
                 checked_flag(config.border_visible),
-                id::BORDER_TOGGLE as usize,
-                w!("테두리 표시"),
-            )?;
-            AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
+                id::BORDER_TOGGLE,
+                "테두리 표시"
+            );
+            append!(MF_SEPARATOR, 0);
 
-            AppendMenuW(self.hmenu, MF_STRING, id::TRANSLATE as usize, w!("번역"))?;
-            AppendMenuW(
-                self.hmenu,
-                MF_STRING,
-                id::FILE_TRANS as usize,
-                w!("파일 번역"),
-            )?;
-            AppendMenuW(
-                self.hmenu,
-                MF_STRING,
-                id::HOOK_SELECT as usize,
-                w!("게임 후킹 대상 선택…"),
-            )?;
-            AppendMenuW(
-                self.hmenu,
-                enabled_flag(hook_active),
-                id::HOOK_FIND as usize,
-                w!("후크 찾기…"),
-            )?;
-            AppendMenuW(
-                self.hmenu,
-                enabled_flag(hook_active),
-                id::HOOK_STOP as usize,
-                w!("후킹 중지"),
-            )?;
-            AppendMenuW(self.hmenu, MF_STRING, id::BACKLOG as usize, w!("백로그"))?;
-            AppendMenuW(self.hmenu, MF_STRING, id::SETTINGS as usize, w!("설정"))?;
-            AppendMenuW(self.hmenu, MF_SEPARATOR, 0, None)?;
+            append!(MF_STRING, id::TRANSLATE, "번역");
+            append!(MF_STRING, id::FILE_TRANS, "파일 번역");
+            append!(MF_STRING, id::HOOK_FIND, "후킹 관리…");
+            append!(enabled_flag(hook_active), id::HOOK_STOP, "후킹 중지");
+            append!(MF_STRING, id::BACKLOG, "백로그");
+            append!(MF_STRING, id::SETTINGS, "설정");
+            append!(MF_SEPARATOR, 0);
 
-            AppendMenuW(self.hmenu, MF_STRING, id::EXIT as usize, w!("종료"))?;
-
-            Ok(())
+            append!(MF_STRING, id::EXIT, "종료");
         }
+        Ok(())
     }
 
     /// Show the popup without sending `WM_COMMAND` to the owner window.
     ///
     /// Returning the selected command keeps menu tracking from re-entering the app's
     /// `RefCell<App>` through a synchronous owner notification.
-    pub fn show(&self, hwnd: HWND, x: i32, y: i32) -> Result<Option<u16>> {
+    pub fn show(&self, hwnd: HWND, x: i32, y: i32) -> io::Result<Option<u16>> {
         // SAFETY: hwnd is a valid window handle from the caller. self.hmenu is a valid
         // popup menu handle. SetForegroundWindow and TrackPopupMenu use valid handles.
         // PostMessageW with WM_NULL is the standard pattern to dismiss the menu properly.
@@ -164,16 +182,17 @@ impl ContextMenu {
             let _ = SetForegroundWindow(hwnd);
             // With TPM_RETURNCMD, zero means either cancellation or failure. Clear the
             // thread error first so a non-zero value afterwards can be reported precisely.
-            SetLastError(WIN32_ERROR(0));
-            let command = TrackPopupMenu(self.hmenu, popup_flags(), x, y, None, hwnd, None);
-            if command.0 == 0 {
+            SetLastError(0);
+            let command =
+                TrackPopupMenu(self.hmenu, popup_flags(), x, y, 0, hwnd, std::ptr::null());
+            if command == 0 {
                 let error = GetLastError();
-                if error.0 != 0 {
-                    return Err(Error::from_hresult(HRESULT::from_win32(error.0)));
+                if error != 0 {
+                    return Err(io::Error::from_raw_os_error(error as i32));
                 }
             }
-            PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0))?;
-            Ok((command.0 != 0).then_some(command.0 as u16))
+            let _ = PostMessageW(hwnd, WM_NULL, 0, 0);
+            Ok((command != 0).then_some(command as u16))
         }
     }
 }

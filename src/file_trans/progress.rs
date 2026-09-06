@@ -22,6 +22,8 @@ pub enum FileTranslationProgress {
 }
 
 impl FileTranslationProgress {
+    /// terminal 이벤트까지 수집하는 테스트·벤치 하네스만 쓴다.
+    #[cfg(any(test, feature = "benchmark"))]
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Finished(_))
     }

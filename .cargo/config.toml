@@ -1,2 +1,12 @@
 [build]
 target = "x86_64-pc-windows-msvc"
+
+[target.x86_64-pc-windows-msvc]
+runner = [
+    "pwsh",
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "scripts/run_with_hooks.ps1",
+]

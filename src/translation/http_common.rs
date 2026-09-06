@@ -14,6 +14,13 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// 긴 생성 응답을 허용하되 종료 지연을 제한하는 LLM 요청별 timeout.
 pub const LLM_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// 모든 번역 요청에 싣는 User-Agent. reqwest는 이 헤더를 기본으로 보내지 않는데,
+/// CDN 앞단(공식 MyS 서버는 Cloudflare 뒤에 있다)의 브라우저 무결성 검사가
+/// User-Agent 없는 요청을 차단한다 — 그러면 JSON 오류 봉투가 아니라 CDN의
+/// `error code: 1010` 본문이 돌아와 호출부가 원인을 알 수 없게 된다.
+/// `update::USER_AGENT`와 같은 표기를 쓴다.
+const USER_AGENT: &str = concat!("AnemoneRS/", env!("CARGO_PKG_VERSION"));
+
 /// 정상 응답은 번역 결과로 충분한 크기만 허용하고, 오류 본문은 사용자 메시지와
 /// 로그에 필요한 작은 범위로 더 엄격히 제한한다.
 const SUCCESS_BODY_LIMIT: usize = 8 * 1024 * 1024;
@@ -23,14 +30,22 @@ pub fn create_client() -> reqwest::Client {
     INSTALL_RUSTLS_PROVIDER.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
         .timeout(REQUEST_TIMEOUT)
-        .connect_timeout(CONNECT_TIMEOUT)
-        .build()
-        .unwrap_or_else(|error| {
-            tracing::warn!("reqwest 클라이언트 빌드 실패, 기본값 사용: {error}");
-            reqwest::Client::new()
-        })
+        .connect_timeout(CONNECT_TIMEOUT);
+    // 공식 MyS Translater 서버로 가는 연결에만 공개키 핀이 걸린다. 다른
+    // 호스트는 평소대로 플랫폼 신뢰 저장소 검사만 받는다.
+    match super::tls_pin::client_config() {
+        Ok(config) => builder = builder.tls_backend_preconfigured(config),
+        Err(error) => {
+            tracing::error!("TLS 공개키 핀 설정 실패, 기본 인증서 검증만 사용합니다: {error}");
+        }
+    }
+    builder.build().unwrap_or_else(|error| {
+        tracing::warn!("reqwest 클라이언트 빌드 실패, 기본값 사용: {error}");
+        reqwest::Client::new()
+    })
 }
 
 /// 성공 body를 반환하고 오류 status를 `TranslationError::Api`로 바꾼다.

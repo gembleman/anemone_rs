@@ -1,7 +1,7 @@
 [package]
 name = "anemone_inject32"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # x64 anemone.exe가 x86 게임에 lunahook_rs32.dll을 주입할 때 스폰하는 최소 헬퍼.
 # WOW64 경계를 넘는 CreateRemoteThread는 불가능하므로, 32비트 프로세스인 이

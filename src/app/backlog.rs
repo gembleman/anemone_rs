@@ -76,10 +76,12 @@ impl BacklogStore {
         while self.entries.len() > MAX_BACKLOG_ENTRIES
             || (self.text_bytes > MAX_BACKLOG_TEXT_BYTES && self.entries.len() > 1)
         {
-            let removed = self
-                .entries
-                .pop_front()
-                .expect("backlog limit requires at least one removable entry");
+            // while 조건이 항상 항목 하나 이상을 보장하지만, 만에 하나 어긋나도
+            // panic 대신 루프를 조용히 종료해 방금 push한 항목을 지키게 한다.
+            let Some(removed) = self.entries.pop_front() else {
+                tracing::warn!("backlog eviction loop found no entry to remove; stopping early");
+                break;
+            };
             self.text_bytes = self.text_bytes.saturating_sub(entry_text_bytes(&removed));
             evicted = true;
         }

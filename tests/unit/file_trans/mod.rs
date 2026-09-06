@@ -1,6 +1,6 @@
 use super::{
-    FileTransJobData, FileTransTask, FileTranslationError, FileTranslationSummary,
-    FileTranslationSupervisor, ProgressEvent, WriteType, default_output_paths, run,
+    FileTranslationError, FileTranslationProgress, FileTranslationRequest, FileTranslationSummary,
+    FileTranslationSupervisor, FileTranslationTask, WriteType, default_output_paths, run,
     validate_job_paths,
 };
 use crate::translation::{Language, PreparedJob};
@@ -31,8 +31,8 @@ impl Drop for TestDirectory {
     }
 }
 
-fn job(input_files: Vec<PathBuf>, output_files: Vec<PathBuf>) -> FileTransJobData {
-    FileTransJobData {
+fn job(input_files: Vec<PathBuf>, output_files: Vec<PathBuf>) -> FileTranslationRequest {
+    FileTranslationRequest {
         input_files,
         output_files,
         write_type: WriteType::TranslationOnly,
@@ -42,7 +42,7 @@ fn job(input_files: Vec<PathBuf>, output_files: Vec<PathBuf>) -> FileTransJobDat
     }
 }
 
-fn receive_through_terminal(task: &FileTransTask) -> Vec<ProgressEvent> {
+fn receive_through_terminal(task: &FileTranslationTask) -> Vec<FileTranslationProgress> {
     let mut events = Vec::new();
     loop {
         let event = task
@@ -120,12 +120,12 @@ fn runner_delivers_ordered_progress_and_one_complete() {
     assert_eq!(
         events,
         [
-            ProgressEvent::TotalFiles(1),
-            ProgressEvent::TotalLines(0),
-            ProgressEvent::FileIndex(1),
-            ProgressEvent::FileName("empty.txt".into()),
-            ProgressEvent::FileLines(0),
-            ProgressEvent::Finished(Ok(FileTranslationSummary {
+            FileTranslationProgress::TotalFiles(1),
+            FileTranslationProgress::TotalLines(0),
+            FileTranslationProgress::FileIndex(1),
+            FileTranslationProgress::FileName("empty.txt".into()),
+            FileTranslationProgress::FileLines(0),
+            FileTranslationProgress::Finished(Ok(FileTranslationSummary {
                 total_files: 1,
                 total_lines: 0,
             })),
@@ -134,7 +134,7 @@ fn runner_delivers_ordered_progress_and_one_complete() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::Finished(Ok(_))))
+            .filter(|event| matches!(event, FileTranslationProgress::Finished(Ok(_))))
             .count(),
         1
     );
@@ -153,7 +153,7 @@ fn runner_error_has_one_terminal_error_and_no_complete() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::Finished(Err(_))))
+            .filter(|event| matches!(event, FileTranslationProgress::Finished(Err(_))))
             .count(),
         1
     );
@@ -181,7 +181,7 @@ fn runner_cancellation_has_one_cancelled_and_no_complete() {
             .filter(|event| {
                 matches!(
                     event,
-                    ProgressEvent::Finished(Err(FileTranslationError::Cancelled))
+                    FileTranslationProgress::Finished(Err(FileTranslationError::Cancelled))
                 )
             })
             .count(),
@@ -201,7 +201,7 @@ fn cancellation_cleans_temporary_output_and_preserves_existing_result() {
     let events = std::cell::RefCell::new(Vec::new());
 
     run(&job, |event| {
-        if event == ProgressEvent::FileProgress(1) {
+        if event == FileTranslationProgress::FileProgress(1) {
             cancel.store(true, Ordering::SeqCst);
         }
         events.borrow_mut().push(event);
@@ -216,7 +216,7 @@ fn cancellation_cleans_temporary_output_and_preserves_existing_result() {
             .filter(|event| {
                 matches!(
                     event,
-                    ProgressEvent::Finished(Err(FileTranslationError::Cancelled))
+                    FileTranslationProgress::Finished(Err(FileTranslationError::Cancelled))
                 )
             })
             .count(),

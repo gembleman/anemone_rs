@@ -39,7 +39,7 @@ fn dropped_pending_output_preserves_existing_file() {
 
     {
         let mut pending = PendingOutput::create(&output).unwrap();
-        pending.writer().write_all(b"incomplete").unwrap();
+        pending.write_all(b"incomplete").unwrap();
     }
 
     assert_eq!(std::fs::read_to_string(output).unwrap(), "기존 결과");
@@ -53,7 +53,7 @@ fn persisted_output_replaces_existing_file() {
     std::fs::write(&output, "기존 결과").unwrap();
 
     let mut pending = PendingOutput::create(&output).unwrap();
-    pending.writer().write_all("완성 결과".as_bytes()).unwrap();
+    pending.write_all("완성 결과".as_bytes()).unwrap();
     pending.persist().unwrap();
 
     assert_eq!(std::fs::read_to_string(output).unwrap(), "완성 결과");
@@ -68,10 +68,7 @@ fn failed_persist_removes_the_temporary_output() {
 
     let mut pending = PendingOutput::create(&output).unwrap();
     let temporary = pending.temp_path().to_path_buf();
-    pending
-        .writer()
-        .write_all(b"complete but cannot replace")
-        .unwrap();
+    pending.write_all(b"complete but cannot replace").unwrap();
 
     assert!(pending.persist().is_err());
     assert!(!temporary.exists());
@@ -196,7 +193,7 @@ impl EzTransBatchTranslator for MockBatchTranslator {
         self.batches.lock().unwrap().extend(
             batches
                 .iter()
-                .map(|batch| batch.iter().map(|text| text.to_string()).collect()),
+                .map(|batch| batch.iter().map(std::string::ToString::to_string).collect()),
         );
         Ok(batches
             .into_iter()
@@ -210,9 +207,9 @@ impl EzTransBatchTranslator for MockBatchTranslator {
     }
 }
 
-fn eztrans_job() -> crate::file_trans::FileTransJobData {
+fn eztrans_job() -> crate::file_trans::FileTranslationRequest {
     use crate::translation::{Language, PreparedJob};
-    crate::file_trans::FileTransJobData {
+    crate::file_trans::FileTranslationRequest {
         input_files: Vec::new(),
         output_files: Vec::new(),
         write_type: super::WriteType::TranslationOnly,
@@ -313,7 +310,7 @@ fn eztrans_batches_are_balanced_across_configured_processes_and_bounded() {
 #[test]
 fn cancellation_aborts_an_in_flight_file_http_request() {
     use crate::config::{LlmConfig, TranslationConfig};
-    use crate::file_trans::FileTransJobData;
+    use crate::file_trans::FileTranslationRequest;
     use crate::translation::PreparedJob;
     use std::net::TcpListener;
     use std::sync::Arc;
@@ -327,7 +324,7 @@ fn cancellation_aborts_an_in_flight_file_http_request() {
     });
 
     let cancel_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let job = FileTransJobData {
+    let job = FileTranslationRequest {
         input_files: Vec::new(),
         output_files: Vec::new(),
         write_type: super::WriteType::TranslationOnly,

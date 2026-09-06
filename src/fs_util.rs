@@ -70,63 +70,27 @@ fn unique_temp_path(path: &Path) -> PathBuf {
 ///
 /// Windows의 기존 파일 overwrite 의미를 보존하기 위한 단일 플랫폼 경계다.
 pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
-    use windows::Win32::Storage::FileSystem::{
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
     };
-    use windows::core::HSTRING;
 
-    let source = HSTRING::from(source.as_os_str());
-    let destination = HSTRING::from(destination.as_os_str());
-    unsafe {
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain([0]).collect();
+    let destination: Vec<u16> = destination.as_os_str().encode_wide().chain([0]).collect();
+    let succeeded = unsafe {
         MoveFileExW(
-            &source,
-            &destination,
+            source.as_ptr(),
+            destination.as_ptr(),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
         )
-        .map_err(|error| io::Error::other(error.to_string()))
+    };
+    if succeeded == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn atomic_write_replaces_existing_file_without_temp_residue() {
-        let root = std::env::temp_dir().join(format!(
-            "anemone-atomic-write-{}-{}",
-            std::process::id(),
-            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&root).expect("create test directory");
-        let path = root.join("config.toml");
-        fs::write(&path, "old").expect("seed old file");
-
-        atomic_write(&path, b"new contents").expect("atomic replace");
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "new contents");
-        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[test]
-    fn atomic_write_retries_a_colliding_temp_name() {
-        let root = std::env::temp_dir().join(format!(
-            "anemone-atomic-collision-{}-{}",
-            std::process::id(),
-            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let collision = root.join("collision.tmp");
-        let fallback = root.join("fallback.tmp");
-        fs::write(&collision, b"stale").unwrap();
-
-        let (file, selected) =
-            create_unique_temp_from([collision.clone(), fallback.clone()]).unwrap();
-        drop(file);
-
-        assert_eq!(selected, fallback);
-        assert_eq!(fs::read(&collision).unwrap(), b"stale");
-        fs::remove_dir_all(root).unwrap();
-    }
-}
+#[path = "../tests/unit/fs_util.rs"]
+mod tests;

@@ -14,6 +14,7 @@ pub(super) fn engines() -> Result<(), String> {
         TranslationEngine::DeepL,
         TranslationEngine::Papago,
         TranslationEngine::Llm,
+        TranslationEngine::MysTranslater,
         TranslationEngine::Custom,
     ];
     for e in ENGINES {
@@ -25,8 +26,7 @@ pub(super) fn engines() -> Result<(), String> {
 pub(super) fn languages(args: LanguagesArgs) -> Result<(), String> {
     let engine = args
         .engine
-        .map(TranslationEngine::from)
-        .unwrap_or(TranslationEngine::Google);
+        .map_or(TranslationEngine::Google, TranslationEngine::from);
     let source = engine.supported_source_languages();
     let target = engine.supported_target_languages();
 

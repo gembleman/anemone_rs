@@ -25,9 +25,6 @@ fn main() {
     let backlog_rc =
         fs::read_to_string("resources/backlog.rc").expect("Failed to read backlog dialog resource");
     res.append_rc_content(&backlog_rc);
-    let hook_select_rc = fs::read_to_string("resources/hook_select.rc")
-        .expect("Failed to read hook select dialog resource");
-    res.append_rc_content(&hook_select_rc);
     let hook_find_rc = fs::read_to_string("resources/hook_find.rc")
         .expect("Failed to read hook find dialog resource");
     res.append_rc_content(&hook_find_rc);
@@ -40,10 +37,46 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/file_trans.rc");
     println!("cargo:rerun-if-changed=resources/translate.rc");
     println!("cargo:rerun-if-changed=resources/backlog.rc");
-    println!("cargo:rerun-if-changed=resources/hook_select.rc");
     println!("cargo:rerun-if-changed=resources/hook_find.rc");
 
+    detect_mys_private();
     copy_eztrans_assets();
+}
+
+/// 아래 파일들이 모두 있으면 `mys_private` cfg를 켠다. 없으면 같은 폴더의
+/// `*_stub.rs`가 대신 컴파일된다.
+fn detect_mys_private() {
+    println!("cargo::rustc-check-cfg=cfg(mys_private)");
+
+    const PRIVATE_SOURCES: [&str; 5] = [
+        "src/translation/mys_translater.rs",
+        "src/translation/mys_usage.rs",
+        "src/translation/mys_signup.rs",
+        "src/dialogs/settings/mys_signup.rs",
+        // 설정 파일 암호화 키의 원재료. 공개되면 암호화가 무의미해진다.
+        "src/config/secret_key.rs",
+    ];
+
+    for path in PRIVATE_SOURCES {
+        println!("cargo:rerun-if-changed={path}");
+    }
+
+    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let missing: Vec<&str> = PRIVATE_SOURCES
+        .into_iter()
+        .filter(|path| !manifest_dir.join(path).exists())
+        .collect();
+
+    match missing.len() {
+        0 => println!("cargo::rustc-cfg=mys_private"),
+        // 일부만 있으면 stub과 섞여 알아보기 힘든 컴파일 오류가 난다.
+        n if n < PRIVATE_SOURCES.len() => panic!(
+            "MyS Translater 모듈이 일부만 있습니다. 누락: {}. \
+             전부 채우거나 전부 지워 주세요.",
+            missing.join(", ")
+        ),
+        _ => {}
+    }
 }
 
 /// 프로젝트 루트의 `eztrans_dll/` 폴더에서 순수 Rust 엔진에 필요한 자산을

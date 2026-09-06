@@ -7,6 +7,9 @@ mod outline_text_renderer;
 mod renderer;
 mod style;
 mod text;
+mod text_bitmap;
+mod text_hit_test;
+mod text_measure;
 
 pub use composition::{CompositionRenderer, WaitOutcome};
 pub use renderer::D2DRenderer;
@@ -45,12 +48,8 @@ impl MeasureSlot {
     pub(crate) const COUNT: usize = 4;
 
     /// 슬롯 전체 목록 — 배열 순회/정리에 쓴다.
-    pub(crate) const ALL: [MeasureSlot; Self::COUNT] = [
-        Self::Name,
-        Self::Original,
-        Self::Translation,
-        Self::Notice,
-    ];
+    pub(crate) const ALL: [MeasureSlot; Self::COUNT] =
+        [Self::Name, Self::Original, Self::Translation, Self::Notice];
 }
 
 /// `ALL`의 위치가 discriminant와 일치함을 컴파일 타임에 봉인한다.

@@ -15,6 +15,9 @@ pub enum TranslationSettingChange {
     RemoveDeepLKey(usize),
     PapagoClientId(String),
     PapagoClientSecret(String),
+    // 번역 서버 URL은 설정 창에서 바꿀 수 없다 — config.toml의
+    // `mys_translater_url`이 유일한 경로다.
+    MysTranslaterApiKey(String),
     EzTransDictionaryPath(String),
     EzTransEhndPath(String),
     LlmModel(String),
@@ -61,184 +64,40 @@ impl TranslationSettingsEditor {
         config: &mut TranslationConfig,
         change: TranslationSettingChange,
     ) -> Result<TranslationSettingsChangeResult, TranslationSettingsError> {
+        use TranslationSettingChange::*;
+
         let runtime_sync_required = matches!(
             change,
-            TranslationSettingChange::Engine(_)
-                | TranslationSettingChange::EzTransDictionaryPath(_)
-                | TranslationSettingChange::EzTransEhndPath(_)
+            Engine(_) | EzTransDictionaryPath(_) | EzTransEhndPath(_)
         );
+        // 각 variant를 정확히 한 번만 매치하고, 해당 payload만 헬퍼로 넘긴다.
+        // 헬퍼는 자기 그룹 밖 variant를 받을 일이 구조적으로 없으므로 catch-all이 없다.
         let changed = match change {
-            TranslationSettingChange::Engine(value) => {
-                if value.supported_source_languages().is_empty()
-                    || value.supported_target_languages().is_empty()
-                {
-                    return Err(TranslationSettingsError::NoSupportedLanguage { engine: value });
-                }
-                let mut changed = set_if_changed(&mut config.engine, value.to_str().to_string());
-                changed |= normalize_language(
-                    &mut config.source_lang,
-                    value.supported_source_languages(),
-                    value,
-                )?;
-                changed |= normalize_language(
-                    &mut config.target_lang,
-                    value.supported_target_languages(),
-                    value,
-                )?;
-                let source = crate::translation::lang_utils::from_code(&config.source_lang)
-                    .ok_or_else(|| {
-                        TranslationSettingsError::InvalidCurrentConfig(
-                            "소스 언어를 해석할 수 없습니다".into(),
-                        )
-                    })?;
-                let target = crate::translation::lang_utils::from_code(&config.target_lang)
-                    .ok_or_else(|| {
-                        TranslationSettingsError::InvalidCurrentConfig(
-                            "대상 언어를 해석할 수 없습니다".into(),
-                        )
-                    })?;
-                if !value.supports_pair(source, target) {
-                    let replacement = value
-                        .supported_targets_for(source)
-                        .into_iter()
-                        .next()
-                        .ok_or(TranslationSettingsError::NoSupportedLanguage { engine: value })?;
-                    changed |= set_if_changed(
-                        &mut config.target_lang,
-                        crate::translation::lang_utils::to_code(replacement).to_string(),
-                    );
-                }
-                changed
-            }
-            TranslationSettingChange::SourceLanguage(value) => {
-                let engine = config.get_engine().map_err(|error| {
-                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
-                })?;
-                if !engine.supported_source_languages().contains(&value) {
-                    return Err(TranslationSettingsError::UnsupportedSourceLanguage);
-                }
-                let mut changed = set_if_changed(
-                    &mut config.source_lang,
-                    crate::translation::lang_utils::to_code(value).to_string(),
-                );
-                let target = config.get_target_language().map_err(|error| {
-                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
-                })?;
-                if !engine.supports_pair(value, target) {
-                    let replacement = engine
-                        .supported_targets_for(value)
-                        .into_iter()
-                        .next()
-                        .ok_or(TranslationSettingsError::NoSupportedLanguage { engine })?;
-                    changed |= set_if_changed(
-                        &mut config.target_lang,
-                        crate::translation::lang_utils::to_code(replacement).to_string(),
-                    );
-                }
-                changed
-            }
-            TranslationSettingChange::TargetLanguage(value) => {
-                let engine = config.get_engine().map_err(|error| {
-                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
-                })?;
-                let source = config.get_source_language().map_err(|error| {
-                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
-                })?;
-                if !engine.supports_pair(source, value) {
-                    return Err(TranslationSettingsError::UnsupportedTargetLanguage);
-                }
-                set_if_changed(
-                    &mut config.target_lang,
-                    crate::translation::lang_utils::to_code(value).to_string(),
-                )
-            }
-            TranslationSettingChange::LlmProvider(value) => {
-                let before = config.llm.get_provider().map_err(|error| {
-                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
-                })?;
-                config.llm.set_provider(value);
-                before != value
-            }
-            TranslationSettingChange::DeepLStrategyRoundRobin(value) => set_if_changed(
-                &mut config.deepl_strategy,
-                if value {
-                    "round-robin".into()
-                } else {
-                    "failover".into()
-                },
-            ),
-            TranslationSettingChange::AddDeepLKey { tier, key } => {
-                let value = key.trim();
-                if !value.is_empty() && DeepLApiTier::from_api_key(value) != tier {
-                    return Err(match tier {
-                        DeepLApiTier::Free => TranslationSettingsError::InvalidDeepLFreeKey,
-                        DeepLApiTier::Pro => TranslationSettingsError::InvalidDeepLProKey,
-                    });
-                }
-                if value.is_empty() || config.deepl_keys.iter().any(|key| key == value) {
-                    false
-                } else {
-                    config.deepl_keys.push(value.to_string());
-                    true
-                }
-            }
-            TranslationSettingChange::RemoveDeepLKey(index) => {
-                if index >= config.deepl_keys.len() {
-                    false
-                } else {
-                    config.deepl_keys.remove(index);
-                    true
-                }
-            }
-            TranslationSettingChange::PapagoClientId(value) => {
-                set_if_changed(&mut config.papago_client_id, value)
-            }
-            TranslationSettingChange::PapagoClientSecret(value) => {
-                set_if_changed(&mut config.papago_client_secret, value)
-            }
-            TranslationSettingChange::EzTransDictionaryPath(value) => {
+            Engine(value) => apply_engine_change(config, value)?,
+            SourceLanguage(value) => apply_source_language_change(config, value)?,
+            TargetLanguage(value) => apply_target_language_change(config, value)?,
+            LlmProvider(value) => apply_llm_provider_change(config, value)?,
+            DeepLStrategyRoundRobin(value) => apply_deepl_strategy_change(config, value),
+            AddDeepLKey { tier, key } => apply_add_deepl_key(config, tier, key)?,
+            RemoveDeepLKey(index) => apply_remove_deepl_key(config, index),
+            PapagoClientId(value) => set_if_changed(&mut config.papago_client_id, value),
+            PapagoClientSecret(value) => set_if_changed(&mut config.papago_client_secret, value),
+            MysTranslaterApiKey(value) => set_if_changed(&mut config.mys_translater_api_key, value),
+            EzTransDictionaryPath(value) => {
                 set_if_changed(&mut config.eztrans_dictionary_path, value)
             }
-            TranslationSettingChange::EzTransEhndPath(value) => {
-                set_if_changed(&mut config.eztrans_ehnd_path, value)
-            }
-            TranslationSettingChange::LlmModel(value) => {
-                set_if_changed(&mut config.llm.model, value)
-            }
-            TranslationSettingChange::LlmApiKey(value) => {
-                set_if_changed(&mut config.llm.api_key, value)
-            }
-            TranslationSettingChange::LlmSystemPrompt(value) => {
-                set_if_changed(&mut config.llm.system_prompt, value)
-            }
-            TranslationSettingChange::LlmMaxTokensText(value) => {
-                let value = parse_unsigned(&value, "max_tokens")?;
-                set_if_changed(&mut config.llm.max_tokens, limits::llm_max_tokens(value))
-            }
-            TranslationSettingChange::LlmDebounceText(value) => {
-                let value = parse_unsigned(&value, "debounce_ms")?;
-                set_if_changed(&mut config.llm.debounce_ms, limits::llm_debounce_ms(value))
-            }
-            TranslationSettingChange::LlmTemperatureText(value) => {
-                let value = parse_finite_float(&value, "temperature")?;
-                let slider_value = limits::llm_temperature_to_slider(value);
-                set_if_changed(
-                    &mut config.llm.temperature,
-                    limits::llm_temperature_slider(slider_value),
-                )
-            }
-            TranslationSettingChange::LlmTemperatureSlider(value) => set_if_changed(
-                &mut config.llm.temperature,
-                limits::llm_temperature_slider(value),
-            ),
-            TranslationSettingChange::LlmReasoningEffort(value) => {
-                set_if_changed(&mut config.llm.reasoning_effort, value)
-            }
-            TranslationSettingChange::SelectCustomApi(value) => {
-                config.select_custom_api(&value).map_err(|error| {
-                    TranslationSettingsError::InvalidCurrentConfig(error.to_string())
-                })?
-            }
+            EzTransEhndPath(value) => set_if_changed(&mut config.eztrans_ehnd_path, value),
+            LlmModel(value) => set_if_changed(&mut config.llm.model, value),
+            LlmApiKey(value) => set_if_changed(&mut config.llm.api_key, value),
+            LlmSystemPrompt(value) => set_if_changed(&mut config.llm.system_prompt, value),
+            LlmMaxTokensText(value) => apply_llm_max_tokens(config, value)?,
+            LlmDebounceText(value) => apply_llm_debounce(config, value)?,
+            LlmTemperatureText(value) => apply_llm_temperature_text(config, value)?,
+            LlmTemperatureSlider(value) => apply_llm_temperature_slider(config, value),
+            LlmReasoningEffort(value) => set_if_changed(&mut config.llm.reasoning_effort, value),
+            SelectCustomApi(value) => config.select_custom_api(&value).map_err(|error| {
+                TranslationSettingsError::InvalidCurrentConfig(error.to_string())
+            })?,
         };
         Ok(TranslationSettingsChangeResult {
             changed,
@@ -278,6 +137,205 @@ impl TranslationSettingsEditor {
             .prepare()
             .map_err(|error| error.to_string())
     }
+}
+
+/// 엔진 전환. 새 엔진이 현재 언어쌍을 지원하지 않으면 소스/대상 언어를
+/// 새 엔진이 지원하는 값으로 정규화한다.
+fn apply_engine_change(
+    config: &mut TranslationConfig,
+    value: TranslationEngine,
+) -> Result<bool, TranslationSettingsError> {
+    if value.supported_source_languages().is_empty()
+        || value.supported_target_languages().is_empty()
+    {
+        return Err(TranslationSettingsError::NoSupportedLanguage { engine: value });
+    }
+    let mut changed = set_if_changed(&mut config.engine, value.to_str().to_string());
+    changed |= normalize_language(
+        &mut config.source_lang,
+        value.supported_source_languages(),
+        value,
+    )?;
+    changed |= normalize_language(
+        &mut config.target_lang,
+        value.supported_target_languages(),
+        value,
+    )?;
+    let source =
+        crate::translation::lang_utils::from_code(&config.source_lang).ok_or_else(|| {
+            TranslationSettingsError::InvalidCurrentConfig("소스 언어를 해석할 수 없습니다".into())
+        })?;
+    let target =
+        crate::translation::lang_utils::from_code(&config.target_lang).ok_or_else(|| {
+            TranslationSettingsError::InvalidCurrentConfig("대상 언어를 해석할 수 없습니다".into())
+        })?;
+    if !value.supports_pair(source, target) {
+        let replacement = value
+            .supported_targets_for(source)
+            .into_iter()
+            .next()
+            .ok_or(TranslationSettingsError::NoSupportedLanguage { engine: value })?;
+        changed |= set_if_changed(
+            &mut config.target_lang,
+            crate::translation::lang_utils::to_code(replacement).to_string(),
+        );
+    }
+    Ok(changed)
+}
+
+/// 소스 언어 변경. 현재 엔진이 지원하지 않으면 오류, 새 소스가 현재 대상과
+/// 짝을 이루지 못하면 대상 언어를 새 소스가 지원하는 값으로 정규화한다.
+fn apply_source_language_change(
+    config: &mut TranslationConfig,
+    value: Language,
+) -> Result<bool, TranslationSettingsError> {
+    let engine = config
+        .get_engine()
+        .map_err(|error| TranslationSettingsError::InvalidCurrentConfig(error.to_string()))?;
+    if !engine.supported_source_languages().contains(&value) {
+        return Err(TranslationSettingsError::UnsupportedSourceLanguage);
+    }
+    let mut changed = set_if_changed(
+        &mut config.source_lang,
+        crate::translation::lang_utils::to_code(value).to_string(),
+    );
+    let target = config
+        .get_target_language()
+        .map_err(|error| TranslationSettingsError::InvalidCurrentConfig(error.to_string()))?;
+    if !engine.supports_pair(value, target) {
+        let replacement = engine
+            .supported_targets_for(value)
+            .into_iter()
+            .next()
+            .ok_or(TranslationSettingsError::NoSupportedLanguage { engine })?;
+        changed |= set_if_changed(
+            &mut config.target_lang,
+            crate::translation::lang_utils::to_code(replacement).to_string(),
+        );
+    }
+    Ok(changed)
+}
+
+/// 대상 언어 변경. 현재 엔진 + 소스 언어와 짝을 이루지 못하면 오류.
+fn apply_target_language_change(
+    config: &mut TranslationConfig,
+    value: Language,
+) -> Result<bool, TranslationSettingsError> {
+    let engine = config
+        .get_engine()
+        .map_err(|error| TranslationSettingsError::InvalidCurrentConfig(error.to_string()))?;
+    let source = config
+        .get_source_language()
+        .map_err(|error| TranslationSettingsError::InvalidCurrentConfig(error.to_string()))?;
+    if !engine.supports_pair(source, value) {
+        return Err(TranslationSettingsError::UnsupportedTargetLanguage);
+    }
+    Ok(set_if_changed(
+        &mut config.target_lang,
+        crate::translation::lang_utils::to_code(value).to_string(),
+    ))
+}
+
+fn apply_llm_provider_change(
+    config: &mut TranslationConfig,
+    value: LlmProvider,
+) -> Result<bool, TranslationSettingsError> {
+    let before = config
+        .llm
+        .get_provider()
+        .map_err(|error| TranslationSettingsError::InvalidCurrentConfig(error.to_string()))?;
+    config.llm.set_provider(value);
+    Ok(before != value)
+}
+
+/// DeepL 키 선택 전략 토글.
+fn apply_deepl_strategy_change(config: &mut TranslationConfig, round_robin: bool) -> bool {
+    set_if_changed(
+        &mut config.deepl_strategy,
+        if round_robin {
+            "round-robin".into()
+        } else {
+            "failover".into()
+        },
+    )
+}
+
+/// DeepL 키 추가. 키 접미사가 선택한 유형과 어긋나면 거부하고, 빈 값이나
+/// 이미 등록된 키는 변경 없이 넘어간다.
+fn apply_add_deepl_key(
+    config: &mut TranslationConfig,
+    tier: DeepLApiTier,
+    key: String,
+) -> Result<bool, TranslationSettingsError> {
+    let value = key.trim();
+    if !value.is_empty() && DeepLApiTier::from_api_key(value) != tier {
+        return Err(match tier {
+            DeepLApiTier::Free => TranslationSettingsError::InvalidDeepLFreeKey,
+            DeepLApiTier::Pro => TranslationSettingsError::InvalidDeepLProKey,
+        });
+    }
+    if value.is_empty() || config.deepl_keys.iter().any(|key| key == value) {
+        Ok(false)
+    } else {
+        config.deepl_keys.push(value.to_string());
+        Ok(true)
+    }
+}
+
+/// DeepL 키 삭제. 범위를 벗어난 index는 변경 없이 무시한다.
+fn apply_remove_deepl_key(config: &mut TranslationConfig, index: usize) -> bool {
+    if index >= config.deepl_keys.len() {
+        false
+    } else {
+        config.deepl_keys.remove(index);
+        true
+    }
+}
+
+/// LLM 최대 토큰 수. 문자열을 파싱한 뒤 허용 범위로 clamp한다.
+fn apply_llm_max_tokens(
+    config: &mut TranslationConfig,
+    value: String,
+) -> Result<bool, TranslationSettingsError> {
+    let value = parse_unsigned(&value, "max_tokens")?;
+    Ok(set_if_changed(
+        &mut config.llm.max_tokens,
+        limits::llm_max_tokens(value),
+    ))
+}
+
+/// LLM 디바운스(ms). 문자열을 파싱한 뒤 허용 범위로 clamp한다.
+fn apply_llm_debounce(
+    config: &mut TranslationConfig,
+    value: String,
+) -> Result<bool, TranslationSettingsError> {
+    let value = parse_unsigned(&value, "debounce_ms")?;
+    Ok(set_if_changed(
+        &mut config.llm.debounce_ms,
+        limits::llm_debounce_ms(value),
+    ))
+}
+
+/// 직접 입력한 temperature. 슬라이더 눈금으로 환산해 슬라이더 입력과 같은
+/// 양자화를 거치게 한다.
+fn apply_llm_temperature_text(
+    config: &mut TranslationConfig,
+    value: String,
+) -> Result<bool, TranslationSettingsError> {
+    let value = parse_finite_float(&value, "temperature")?;
+    let slider_value = limits::llm_temperature_to_slider(value);
+    Ok(set_if_changed(
+        &mut config.llm.temperature,
+        limits::llm_temperature_slider(slider_value),
+    ))
+}
+
+/// 슬라이더로 조정한 temperature.
+fn apply_llm_temperature_slider(config: &mut TranslationConfig, value: i32) -> bool {
+    set_if_changed(
+        &mut config.llm.temperature,
+        limits::llm_temperature_slider(value),
+    )
 }
 
 /// 설정에 적힌 EzTrans 경로가 `valid` 조건을 만족하지 못하면 `true`.
@@ -336,3 +394,7 @@ fn set_if_changed<T: PartialEq>(target: &mut T, value: T) -> bool {
 #[cfg(test)]
 #[path = "../../tests/unit/translation/settings.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/translation/settings_extra.rs"]
+mod tests_extra;

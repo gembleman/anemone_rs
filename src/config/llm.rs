@@ -112,7 +112,7 @@ fn default_llm_system_prompt() -> String {
 }
 
 fn default_llm_temperature() -> f32 {
-    0.3
+    crate::config::limits::LLM_TEMPERATURE_DEFAULT
 }
 
 fn default_llm_top_p() -> f32 {

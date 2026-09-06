@@ -16,7 +16,8 @@ pub struct EzTransPostprocessEntry {
 /// 번역 설정
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TranslationConfig {
-    /// 번역 엔진: "eztrans", "google", "deepl", "papago", "llm", "custom"
+    /// 번역 엔진: "eztrans", "google", "deepl", "papago", "llm",
+    /// "mys_translater", "custom"
     #[serde(default = "default_engine", deserialize_with = "deserialize_engine")]
     pub engine: String,
     /// 소스 언어 (ISO 639-1 코드): "ja", "ko", "en", "zh", etc.
@@ -67,6 +68,21 @@ pub struct TranslationConfig {
     /// Ncloud Papago Application Client Secret
     #[serde(default)]
     pub papago_client_secret: String,
+    /// 번역 서버 주소
+    #[serde(default = "default_mys_translater_url")]
+    pub mys_translater_url: String,
+    /// 번역 서버 고객 Bearer 토큰.
+    ///
+    /// 메모리에서는 평문이지만 `config.toml`에는 암호화해 적는다 — 설정
+    /// 파일만 열어서는 토큰 값을 알 수 없어야 한다(`config::secret`).
+    /// 접두가 없는 값은 암호화 도입 이전의 평문으로 보고 그대로 읽어들이며,
+    /// 다음 저장 때 암호문으로 바뀐다.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_secret",
+        serialize_with = "serialize_secret"
+    )]
+    pub mys_translater_api_key: String,
     /// LLM 설정
     #[serde(default)]
     pub llm: LlmConfig,
@@ -97,6 +113,12 @@ fn default_deepl_strategy() -> String {
     "failover".to_string()
 }
 
+/// 공식 번역 서버 주소. 주소 자체는 비공개 모듈에만 둔다 — 엔진이 없는
+/// 빌드에서는 빈 값이라 사용자가 직접 채워야 한다.
+fn default_mys_translater_url() -> String {
+    crate::translation::mys_translater::default_base_url().to_string()
+}
+
 fn default_eztrans_process_count() -> u32 {
     2
 }
@@ -111,8 +133,7 @@ fn dat_to_sibling_ehnd(dat_path: &str) -> String {
     {
         return path
             .parent()
-            .map(|parent| parent.join("Ehnd"))
-            .unwrap_or_else(|| PathBuf::from("Ehnd"))
+            .map_or_else(|| PathBuf::from("Ehnd"), |parent| parent.join("Ehnd"))
             .to_string_lossy()
             .into_owned();
     }
@@ -158,26 +179,6 @@ impl TranslationConfig {
             .iter()
             .find(|api| api.name == self.custom_api)
             .ok_or_else(|| CustomApiSelectionError::NotFound(self.custom_api.clone()))
-    }
-
-    /// 현재 선택된 Custom API를 변경 가능하게 반환한다.
-    pub fn active_custom_api_mut(
-        &mut self,
-    ) -> Result<&mut CustomApiConfig, CustomApiSelectionError> {
-        if self.custom_apis.is_empty() {
-            return Ok(&mut self.custom);
-        }
-
-        self.validate_custom_api_names()?;
-        let index = if self.custom_api.is_empty() {
-            0
-        } else {
-            self.custom_apis
-                .iter()
-                .position(|api| api.name == self.custom_api)
-                .ok_or_else(|| CustomApiSelectionError::NotFound(self.custom_api.clone()))?
-        };
-        Ok(&mut self.custom_apis[index])
     }
 
     pub fn active_custom_api_index(&self) -> Result<usize, CustomApiSelectionError> {
@@ -229,7 +230,7 @@ impl TranslationConfig {
     pub(crate) fn migrate_legacy_custom_api(&mut self) {
         if self.custom_apis.is_empty() && !self.custom.is_default() {
             let legacy = std::mem::take(&mut self.custom);
-            self.custom_api = legacy.name.clone();
+            self.custom_api.clone_from(&legacy.name);
             self.custom_apis.push(legacy);
         } else if !self.custom_apis.is_empty() {
             self.custom = CustomApiConfig::default();
@@ -266,11 +267,6 @@ impl TranslationConfig {
     }
 
     // UI 호환 API.
-
-    /// 엔진 문자열을 u8로 변환 (UI 호환용)
-    pub fn engine_as_u8(&self) -> Result<u8, crate::translation::EnumParseError> {
-        self.get_engine().map(|engine| engine as u8)
-    }
 
     /// 언어 인덱스를 가져오기 (UI 콤보박스용)
     pub fn source_lang_index(
@@ -329,6 +325,41 @@ where
     Ok(value)
 }
 
+/// 자격 증명을 암호문으로 적는다.
+///
+/// 암호화에 실패하면 평문으로 물러나지 않고 저장 자체를 실패시킨다 —
+/// 조용히 평문을 남기면 이 필드의 존재 이유가 사라진다.
+fn serialize_secret<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::Error;
+    if value.is_empty() {
+        return serializer.serialize_str("");
+    }
+    let sealed = super::secret::seal(value).map_err(S::Error::custom)?;
+    serializer.serialize_str(&sealed)
+}
+
+/// 암호문이면 풀고, 접두가 없으면 예전 평문으로 본다.
+///
+/// 복호화 실패는 오류로 올리지 않는다 — 설정 로드가 실패하면 파일 전체가
+/// 손상본으로 격리되어(`Config::load_or_default`) 다른 설정까지 잃는다.
+/// 토큰만 비우면 이용자는 "무료 토큰 받기"로 다시 받을 수 있다.
+fn deserialize_secret<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if !super::secret::looks_sealed(&value) {
+        return Ok(value);
+    }
+    Ok(super::secret::open(&value).unwrap_or_else(|error| {
+        tracing::warn!("저장된 번역 서버 토큰을 복호화할 수 없습니다: {error}");
+        String::new()
+    }))
+}
+
 fn deserialize_language<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -372,6 +403,8 @@ impl Default for TranslationConfig {
             deepl_strategy: default_deepl_strategy(),
             papago_client_id: String::new(),
             papago_client_secret: String::new(),
+            mys_translater_url: default_mys_translater_url(),
+            mys_translater_api_key: String::new(),
             llm: LlmConfig::default(),
             custom: CustomApiConfig::default(),
             custom_api: String::new(),
@@ -389,3 +422,7 @@ pub enum CustomApiSelectionError {
     #[error("선택한 Custom API를 찾을 수 없습니다: {0}")]
     NotFound(String),
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/config/translation.rs"]
+mod tests;

@@ -1,6 +1,6 @@
 [package]
 name = "anemone_rs"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 authors = ["gembleman"]
 repository = "https://github.com/gembleman/anemone_rs.git"
@@ -13,29 +13,11 @@ benchmark = []
 version = "0.62"
 features = [
     "Win32_Foundation",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_HiDpi",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
-    "Win32_UI_Shell",
-    "Win32_UI_Shell_Common",
-    "Win32_UI_Controls",
-    "Win32_UI_Controls_Dialogs",
-    "Win32_UI_Controls_RichEdit",
-    "Win32_System_Ole",
     "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Accessibility",
-    "Win32_Globalization",
-    "Win32_System_DataExchange",
-    "Win32_System_Memory",
-    "Win32_System_Power",
-    "Win32_System_Diagnostics_Debug",
-    "Win32_System_Com",
     "Win32_System_Threading",
-    "Win32_System_Pipes",
-    "Win32_System_IO",
-    "Win32_System_ProcessStatus",
-    "Win32_Storage_FileSystem",
+    "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_Direct3D",
@@ -44,23 +26,49 @@ features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_DirectComposition",
     "Win32_Graphics_DirectWrite",
-    # 업데이트 asset 무결성 검증(SHA-256)에 CNG를 쓴다. 해시 crate를 새로
-    # 추가하지 않기 위한 선택이다.
-    "Win32_Security_Cryptography",
 ]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+unicode-normalization = "0.1"
 toml = "1.1"
 windows-numerics = "0.3"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Power",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Controls",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
 # `windows::core::implement`의 COM 코드 생성물이 `::windows_core`를 참조한다.
 windows-core = "0.62"
 eztrans_core = { path = "../eztrans_scratch/eztrans64_rs/crates/eztrans_core" }
-# 게임 텍스트 후킹 코어(LunaHook의 Rust 포팅). anemone은 rlib로만 링크해
-# protocol/host 타입을 공유하고, 주입용 cdylib DLL은 scripts/build_hooks.ps1이
-# 별도 cargo 호출로 빌드한다.
+# 게임 텍스트 후킹 코어(LunaHook의 Rust 포팅). anemone은 rlib로 링크해
+# protocol/host 타입을 공유한다. cargo run은 configured runner를 통해
+# scripts/build_hooks.ps1을 호출하고 최신 주입용 바이너리를 배치한다.
 lunahook_rs = { path = "../eztrans_scratch/lunahook_rs" }
 time = { version = "0.3", default-features = false, features = [
     "local-offset",
@@ -71,6 +79,7 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = [
     "fmt",
+    "registry",
 ] }
 
 # Async translation support
@@ -91,6 +100,9 @@ rustls = { version = "0.23", default-features = false, features = [
     "std",
     "tls12",
 ] }
+# 공개키 핀 검사기가 감싸는 바탕 검증기. reqwest가 기본 경로에서 쓰는 것과
+# 같은 크레이트라 새로 딸려 오는 의존성은 없다.
+rustls-platform-verifier = "0.7"
 httpdate = "1.0"
 quick_cache = { version = "0.7", default-features = false }
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -101,7 +113,7 @@ winresource = "0.1"
 
 [profile.release]
 # 최종 GUI 배포물은 증분 빌드보다 실행 성능과 크기를 우선한다.
-lto = "thin"
+lto = true
 codegen-units = 1
 strip = "symbols"
 panic = "abort"

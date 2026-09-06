@@ -1,20 +1,19 @@
 //! Per-Monitor V2 control 좌표와 font scaling helper.
 
-use windows::Win32::{
+use windows_sys::Win32::{
     Foundation::HWND,
     UI::HiDpi::{GetDpiForSystem, GetDpiForWindow},
-    UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI,
 };
 
 /// 디자인 기준 DPI (96 = 100%)
-pub const BASE_DPI: u32 = USER_DEFAULT_SCREEN_DPI;
+pub const BASE_DPI: u32 = 96;
 
 /// 창 DPI를 반환하며 실패하면 system DPI, 이어서 `BASE_DPI`로 fallback한다.
 pub fn dpi_for_window(hwnd: HWND) -> u32 {
     // SAFETY: GetDpiForWindow / GetDpiForSystem 모두 부수효과 없는 user32
     // 함수이며, null HWND 에는 0 을 반환하므로 결과만 검증하면 안전하다.
     unsafe {
-        if !hwnd.0.is_null() {
+        if !hwnd.is_null() {
             let dpi = GetDpiForWindow(hwnd);
             if dpi > 0 {
                 return dpi;

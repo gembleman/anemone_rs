@@ -22,6 +22,7 @@ namespace AnemoneE2E
         private struct POINT { public int X, Y; }
 
         private const uint WM_COMMAND = 0x0111;
+        private const uint WM_NCHITTEST = 0x0084;
         private const uint CB_GETCURSEL = 0x0147;
         private const uint CB_SETCURSEL = 0x014E;
         private const uint SMTO_BLOCK = 0x0001;
@@ -51,14 +52,6 @@ namespace AnemoneE2E
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr GetDlgItem(IntPtr dialog, int controlId);
 
-        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr CreateWindowExW(uint exStyle, string className, string title,
-            uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu,
-            IntPtr instance, IntPtr parameter);
-
-        [DllImport("user32.dll")]
-        private static extern bool DestroyWindow(IntPtr hwnd);
-
         [DllImport("user32.dll")]
         private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
 
@@ -66,7 +59,8 @@ namespace AnemoneE2E
         private static extern bool IsWindowVisible(IntPtr hwnd);
 
         [DllImport("user32.dll")]
-        private static extern IntPtr WindowFromPoint(POINT point);
+        private static extern IntPtr SendMessageW(IntPtr hwnd, uint message, UIntPtr wparam,
+            IntPtr lparam);
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr SendMessageTimeoutW(
@@ -165,30 +159,50 @@ namespace AnemoneE2E
 
         public static void AssertClickThrough(IntPtr overlay)
         {
-            const uint WS_POPUP = 0x80000000;
-            const uint WS_VISIBLE = 0x10000000;
             RECT rect;
             if (!GetWindowRect(overlay, out rect))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "GetWindowRect failed");
-            IntPtr target = CreateWindowExW(0, "BUTTON", "Anemone click target",
-                WS_POPUP | WS_VISIBLE, rect.Left + 20, rect.Top + 20, 80, 80,
-                IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
-            if (target == IntPtr.Zero)
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "click target creation failed");
+            int x = rect.Left + 40;
+            int y = rect.Top + 40;
+            long point = ((long)y << 16) | ((ushort)x);
+            bool clickThroughOn = false;
             try
             {
+                // Query the product wndproc directly at a fixed screen coordinate.
+                // No cursor movement, input synthesis, or desktop Z-order is involved.
                 SendCommand(overlay, 103, 0, IntPtr.Zero);
-                POINT point = new POINT { X = rect.Left + 40, Y = rect.Top + 40 };
-                IntPtr hit = WindowFromPoint(point);
-                if (hit != target)
+                clickThroughOn = true;
+                long onHit = WaitForHitTest(overlay, new IntPtr(point), true);
+                if (onHit != -1)
                     throw new InvalidOperationException(
-                        "click-through hit-test returned " + hit + " instead of target " + target);
+                        "click-through ON returned WM_NCHITTEST=" + onHit + " (expected HTTRANSPARENT)");
+
+                // OFF control: the same point must return a normal hit-test result.
+                SendCommand(overlay, 103, 0, IntPtr.Zero);
+                clickThroughOn = false;
+                long offHit = WaitForHitTest(overlay, new IntPtr(point), false);
+                if (offHit == -1)
+                    throw new InvalidOperationException(
+                        "click-through OFF returned HTTRANSPARENT unexpectedly");
             }
             finally
             {
-                SendCommand(overlay, 103, 0, IntPtr.Zero);
-                DestroyWindow(target);
+                if (clickThroughOn)
+                    SendCommand(overlay, 103, 0, IntPtr.Zero);
             }
+        }
+
+        private static long WaitForHitTest(IntPtr overlay, IntPtr point, bool transparent)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(2000);
+            long hit;
+            do
+            {
+                hit = SendMessageW(overlay, WM_NCHITTEST, UIntPtr.Zero, point).ToInt64();
+                if ((hit == -1) == transparent) return hit;
+                System.Threading.Thread.Sleep(10);
+            } while (DateTime.UtcNow < deadline);
+            return hit;
         }
 
         private static long Send(IntPtr hwnd, uint message, UIntPtr wparam, IntPtr lparam)
@@ -286,6 +300,8 @@ try {
     $startInfo.FileName = $runtimeExe
     $startInfo.WorkingDirectory = $runtimeDir
     $startInfo.UseShellExecute = $false
+    # E2E must never contact the update service or show an update prompt.
+    $startInfo.Environment['ANEMONE_DISABLE_AUTO_UPDATE'] = '1'
     $process = [System.Diagnostics.Process]::Start($startInfo)
     if ($null -eq $process) {
         throw 'GUI 프로세스를 시작하지 못했습니다.'

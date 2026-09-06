@@ -22,10 +22,15 @@ $lunahookDir = Join-Path $repoRoot "..\eztrans_scratch\lunahook_rs" | Resolve-Pa
 function Build-HookTargets {
     param([string]$Triple)
 
+    $cargoProfileArgs = @()
+    if ($Profile -eq "release") {
+        $cargoProfileArgs += "--release"
+    }
+
     Write-Host "=== [$Triple] lunahook_rs (cdylib) 빌드 ==="
     Push-Location $lunahookDir
     try {
-        cargo build --target $Triple --$Profile
+        cargo build --target $Triple @cargoProfileArgs
         if ($LASTEXITCODE -ne 0) { throw "lunahook_rs 빌드 실패 ($Triple)" }
     } finally {
         Pop-Location
@@ -45,13 +50,28 @@ function Build-HookTargets {
     New-Item -ItemType Directory -Force -Path $destDir | Out-Null
 
     $dllName = if ($archFolder -eq "x64") { "lunahook_rs64.dll" } else { "lunahook_rs32.dll" }
-    Copy-Item -Force $lunahookDll (Join-Path $destDir $dllName)
-    Write-Host "복사됨: $($lunahookDll) -> $(Join-Path $destDir $dllName)"
+    $dllDestination = Join-Path $destDir $dllName
+    $needsCopy = -not (Test-Path -LiteralPath $dllDestination)
+    if (-not $needsCopy) {
+        $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $lunahookDll).Hash
+        $destinationHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $dllDestination).Hash
+        $needsCopy = $sourceHash -ne $destinationHash
+    }
+    if ($needsCopy) {
+        try {
+            Copy-Item -LiteralPath $lunahookDll -Destination $dllDestination -Force
+        } catch {
+            throw "후킹 DLL을 교체할 수 없습니다: $dllDestination`n이 DLL을 사용 중인 게임을 완전히 종료한 뒤 다시 실행해 주세요.`n$($_.Exception.Message)"
+        }
+        Write-Host "복사됨: $($lunahookDll) -> $dllDestination"
+    } else {
+        Write-Host "최신 상태: $dllDestination"
+    }
 
     if ($archFolder -eq "x86") {
         Write-Host "=== [$Triple] anemone_inject32 빌드 ==="
         $inject32Manifest = Join-Path $repoRoot "tools\inject32\Cargo.toml"
-        cargo build --manifest-path $inject32Manifest --target $Triple --$Profile
+        cargo build --manifest-path $inject32Manifest --target $Triple @cargoProfileArgs
         if ($LASTEXITCODE -ne 0) { throw "anemone_inject32 빌드 실패" }
         $helper = Join-Path $repoRoot "tools\inject32\target\$Triple\$Profile\anemone_inject32.exe"
         if (-not (Test-Path $helper)) {

@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -54,17 +54,21 @@ impl PendingOutput {
         )))
     }
 
-    pub fn writer(&mut self) -> &mut BufWriter<File> {
-        self.writer.as_mut().expect("writer exists until persist")
-    }
-
     #[cfg(test)]
     pub fn temp_path(&self) -> &Path {
         &self.temp_path
     }
 
     pub fn persist(mut self) -> Result<(), FileTranslationError> {
-        let mut writer = self.writer.take().expect("writer exists until persist");
+        // `writer`는 이 메서드가 self를 소비할 때만 비워지므로, `persist`가 두 번
+        // 불릴 수 없는 이상 항상 Some이다. 그래도 패닉 대신 오류로 처리해 타입이
+        // 이 불변식을 강제하지 못하는 경우에도 복구 가능하게 한다.
+        let mut writer = self.writer.take().ok_or_else(|| {
+            FileTranslationError::output(format!(
+                "임시 출력 파일 writer가 이미 저장(persist)되었습니다: {}",
+                self.temp_path.display()
+            ))
+        })?;
         writer.flush().map_err(|error| {
             FileTranslationError::output(format!(
                 "임시 출력 파일을 저장할 수 없습니다: {}\n{error}",
@@ -101,6 +105,31 @@ impl Drop for PendingOutput {
                 "임시 출력 파일 삭제 실패 ({}): {error}",
                 self.temp_path.display()
             );
+        }
+    }
+}
+
+/// `write_output` 등 호출부가 내부 `Option<BufWriter<File>>`을 직접 벗기지
+/// 않고도 쓸 수 있도록 `Write`를 위임한다. `persist` 이후(즉 writer가 이미
+/// 저장을 마친 뒤)에 호출되면 패닉 대신 오류를 반환한다 — `PendingOutput`은
+/// `Drop`을 구현하므로 `writer` 필드를 부분 이동시킬 수 없어, 접근자가
+/// `Option`을 노출하지 않는 쪽으로 불변식을 옮겼다.
+impl Write for PendingOutput {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self.writer.as_mut() {
+            Some(writer) => writer.write(buf),
+            None => Err(io::Error::other(
+                "임시 출력 파일 writer가 이미 저장(persist)되어 더 이상 쓸 수 없습니다",
+            )),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self.writer.as_mut() {
+            Some(writer) => writer.flush(),
+            None => Err(io::Error::other(
+                "임시 출력 파일 writer가 이미 저장(persist)되어 더 이상 쓸 수 없습니다",
+            )),
         }
     }
 }
@@ -144,3 +173,7 @@ pub fn write_output<W: Write>(
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/file_trans/output.rs"]
+mod tests;

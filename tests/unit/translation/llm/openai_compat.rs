@@ -319,3 +319,180 @@ fn maps_error_object_to_api_error() {
         other => panic!("expected Api(401), got {other:?}"),
     }
 }
+
+#[test]
+fn flags_a_non_stop_finish_reason_when_no_text_or_error_is_present() {
+    let json = r#"{
+        "choices": [{
+            "message": { "content": null },
+            "finish_reason": "content_filter"
+        }]
+    }"#;
+    match parse_chat_completion(json) {
+        Err(TranslationError::Api {
+            code: 0, message, ..
+        }) => {
+            assert!(message.contains("content_filter"), "message: {message}");
+        }
+        other => panic!("expected Api error, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_response_with_no_text_error_or_finish_reason_is_a_parse_error() {
+    assert!(matches!(
+        parse_chat_completion(r#"{"choices":[]}"#),
+        Err(TranslationError::Parse(_))
+    ));
+}
+
+#[test]
+fn maps_a_numeric_error_code_to_api_error() {
+    let json = r#"{"error":{"message":"거부됨","code":403}}"#;
+    match parse_response(json) {
+        Err(TranslationError::Api {
+            code: 403, message, ..
+        }) => {
+            assert_eq!(message, "거부됨");
+        }
+        other => panic!("expected Api(403), got {other:?}"),
+    }
+}
+
+#[test]
+fn a_responses_output_without_text_is_a_parse_error() {
+    let json = r#"{"status":"completed","output":[{"type":"reasoning","summary":[]}]}"#;
+    assert!(matches!(
+        parse_response(json),
+        Err(TranslationError::Parse(_))
+    ));
+}
+
+#[tokio::test]
+async fn anthropic_and_gemini_are_rejected_by_the_openai_compatible_backend() {
+    for provider in [LlmProvider::Anthropic, LlmProvider::Gemini] {
+        let params = LlmCallParams {
+            provider,
+            model: "model".into(),
+            api_key: "key".into(),
+            base_url: String::new(),
+            system_prompt: String::new(),
+            temperature: 0.25,
+            top_p: 1.0,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
+            max_tokens: 123,
+            reasoning_effort: None,
+            glossary: Vec::new(),
+        };
+        let result = translate_async_with_client(
+            &crate::translation::http_common::create_client(),
+            "source",
+            Language::Eng,
+            Language::Kor,
+            &params,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(TranslationError::Engine(_))),
+            "provider={provider:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn rejects_a_missing_api_key_before_any_network_call() {
+    let params = LlmCallParams {
+        provider: LlmProvider::OpenAi,
+        model: "model".into(),
+        api_key: String::new(),
+        base_url: String::new(),
+        system_prompt: String::new(),
+        temperature: 0.25,
+        top_p: 1.0,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0,
+        max_tokens: 123,
+        reasoning_effort: None,
+        glossary: Vec::new(),
+    };
+    let result = translate_async_with_client(
+        &crate::translation::http_common::create_client(),
+        "source",
+        Language::Eng,
+        Language::Kor,
+        &params,
+    )
+    .await;
+    assert!(matches!(result, Err(TranslationError::MissingApiKey)));
+}
+
+#[tokio::test]
+async fn grok_and_openrouter_post_chat_completions_and_bear_the_api_key() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 2048];
+        loop {
+            let count = stream.read(&mut chunk).unwrap();
+            request.extend_from_slice(&chunk[..count]);
+            if request.windows(4).any(|part| part == b"\r\n\r\n") {
+                break;
+            }
+        }
+        request_tx
+            .send(String::from_utf8_lossy(&request).into_owned())
+            .unwrap();
+        let body = r#"{"choices":[{"message":{"content":"grok 번역"},"finish_reason":"stop"}]}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+
+    let params = LlmCallParams {
+        provider: LlmProvider::Grok,
+        model: "grok-4.3".into(),
+        api_key: "grok-key".into(),
+        base_url: format!("http://{address}"),
+        system_prompt: String::new(),
+        temperature: 0.25,
+        top_p: 1.0,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0,
+        max_tokens: 64,
+        reasoning_effort: None,
+        glossary: Vec::new(),
+    };
+    let translated = translate_async_with_client(
+        &crate::translation::http_common::create_client(),
+        "hello",
+        Language::Eng,
+        Language::Kor,
+        &params,
+    )
+    .await
+    .unwrap();
+    assert_eq!(translated, "grok 번역");
+
+    let request = request_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    let request = request.to_ascii_lowercase();
+    assert!(request.starts_with("post /chat/completions"));
+    assert!(request.contains("authorization: bearer grok-key"));
+    server.join().unwrap();
+}

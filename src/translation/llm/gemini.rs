@@ -146,7 +146,10 @@ fn parse_generate_content_response(json: &str) -> TranslationResult {
             .and_then(|v| v.as_str())
             .unwrap_or("Gemini 응답 에러")
             .to_string();
-        let code = err.get("code").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+        let code = err
+            .get("code")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u16;
         return Err(TranslationError::Api {
             code,
             message,

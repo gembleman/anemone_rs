@@ -2,14 +2,22 @@
 //! Callback은 등록 UI thread에서만 실행되므로 상태는 thread-local이다.
 
 use std::cell::RefCell;
+use std::io;
 use std::ptr;
 
-use windows::{
-    Win32::{
-        Foundation::*, System::Threading::GetCurrentProcessId, UI::Accessibility::*,
-        UI::WindowsAndMessaging::*,
+use windows_sys::Win32::{
+    Foundation::{ERROR_INVALID_WINDOW_HANDLE, GetLastError, HWND, LPARAM, RECT, WPARAM},
+    System::Threading::GetCurrentProcessId,
+    UI::{
+        Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
+        WindowsAndMessaging::{
+            EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
+            EVENT_SYSTEM_MINIMIZESTART, GWL_EXSTYLE, GetShellWindow, GetWindowLongW, GetWindowRect,
+            GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SW_HIDE, SW_SHOW,
+            SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow,
+            WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        },
     },
-    core::*,
 };
 
 use crate::app::messages::WM_APP_MAGNETIC_TARGET_SELECTED;
@@ -43,7 +51,7 @@ impl MagneticManager {
     pub fn new(main_hwnd: HWND, minimize_with_target: bool, window_visible: bool) -> Self {
         Self {
             main_hwnd,
-            event_hook: HWINEVENTHOOK::default(),
+            event_hook: std::ptr::null_mut(),
             minimize_with_target,
             window_visible,
         }
@@ -62,15 +70,15 @@ impl MagneticManager {
     }
 
     /// 자석 대상 선택을 기다리기 시작한다.
-    pub fn start(&mut self) -> Result<()> {
-        if !self.event_hook.0.is_null() {
+    pub fn start(&mut self) -> io::Result<()> {
+        if !self.event_hook.is_null() {
             return Ok(());
         }
 
         MAGNETIC_INSTANCE.with(|cell| {
             *cell.borrow_mut() = Some(MagneticState {
                 main_hwnd: self.main_hwnd,
-                target_hwnd: HWND::default(),
+                target_hwnd: std::ptr::null_mut(),
                 selection_pending: false,
                 is_minimized: false,
                 offset_x: 0,
@@ -85,7 +93,7 @@ impl MagneticManager {
             self.event_hook = SetWinEventHook(
                 EVENT_SYSTEM_FOREGROUND,
                 EVENT_OBJECT_LOCATIONCHANGE,
-                None,
+                std::ptr::null_mut(),
                 Some(Self::win_event_proc),
                 0,
                 0,
@@ -93,30 +101,30 @@ impl MagneticManager {
             );
         }
 
-        if self.event_hook.0.is_null() {
+        if self.event_hook.is_null() {
             MAGNETIC_INSTANCE.with(|cell| *cell.borrow_mut() = None);
             // SAFETY: GetLastError returns the last Win32 error code for the current thread.
-            return Err(Error::from_hresult(HRESULT::from_win32(unsafe {
-                GetLastError().0
-            })));
+            return Err(io::Error::from_raw_os_error(
+                unsafe { GetLastError() } as i32
+            ));
         }
 
         Ok(())
     }
 
     /// 사용자가 활성화한 외부 창을 실제 자석 대상으로 연결한다.
-    pub fn attach(&mut self, target: HWND) -> Result<()> {
+    pub fn attach(&mut self, target: HWND) -> io::Result<()> {
         if !is_external_target_window(target) {
-            return Err(Error::from_hresult(HRESULT::from_win32(
-                ERROR_INVALID_WINDOW_HANDLE.0,
-            )));
+            return Err(io::Error::from_raw_os_error(
+                ERROR_INVALID_WINDOW_HANDLE as i32,
+            ));
         }
         let (offset_x, offset_y) = self.calculate_offset(target)?;
         MAGNETIC_INSTANCE.with(|cell| {
             let mut state = cell.borrow_mut();
-            let state = state.as_mut().ok_or_else(|| {
-                Error::from_hresult(HRESULT::from_win32(ERROR_INVALID_WINDOW_HANDLE.0))
-            })?;
+            let state = state
+                .as_mut()
+                .ok_or_else(|| io::Error::from_raw_os_error(ERROR_INVALID_WINDOW_HANDLE as i32))?;
             state.target_hwnd = target;
             state.selection_pending = false;
             state.is_minimized = false;
@@ -128,12 +136,12 @@ impl MagneticManager {
 
     /// 자석 모드 중지
     pub fn stop(&mut self) {
-        if !self.event_hook.0.is_null() {
+        if !self.event_hook.is_null() {
             // SAFETY: self.event_hook is a valid hook handle from SetWinEventHook.
             unsafe {
                 let _ = UnhookWinEvent(self.event_hook);
             }
-            self.event_hook = HWINEVENTHOOK(ptr::null_mut());
+            self.event_hook = ptr::null_mut();
         }
 
         MAGNETIC_INSTANCE.with(|cell| *cell.borrow_mut() = None);
@@ -147,14 +155,18 @@ impl MagneticManager {
     }
 
     /// 현재 위치로 오프셋 계산
-    fn calculate_offset(&self, target: HWND) -> Result<(i32, i32)> {
+    fn calculate_offset(&self, target: HWND) -> io::Result<(i32, i32)> {
         // SAFETY: 두 hwnd와 출력 RECT가 유효하다.
         unsafe {
-            let mut target_rect = RECT::default();
-            let mut main_rect = RECT::default();
+            let mut target_rect: RECT = std::mem::zeroed();
+            let mut main_rect: RECT = std::mem::zeroed();
 
-            GetWindowRect(target, &mut target_rect)?;
-            GetWindowRect(self.main_hwnd, &mut main_rect)?;
+            if GetWindowRect(target, &mut target_rect) == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if GetWindowRect(self.main_hwnd, &mut main_rect) == 0 {
+                return Err(io::Error::last_os_error());
+            }
 
             let offset_x = main_rect.left - target_rect.left;
             let offset_y = main_rect.top - target_rect.top;
@@ -182,112 +194,113 @@ impl MagneticManager {
             let Ok(mut state) = cell.try_borrow_mut() else {
                 return;
             };
-            let state = match state.as_mut() {
-                Some(s) => s,
-                None => return,
+            let Some(state) = state.as_mut() else {
+                return;
             };
 
             match event {
-                EVENT_SYSTEM_FOREGROUND
-                    if state.target_hwnd.is_invalid()
-                        && !state.selection_pending
-                        && is_external_target_window(hwnd) =>
-                {
-                    state.selection_pending = true;
-                    // SAFETY: main HWND는 manager가 소유하고 target HWND 값은 message에
-                    // 복사되어 UI thread에서 검증 후 사용된다.
-                    if unsafe {
-                        PostMessageW(
-                            Some(state.main_hwnd),
-                            WM_APP_MAGNETIC_TARGET_SELECTED,
-                            WPARAM(hwnd.0 as usize),
-                            LPARAM(0),
-                        )
-                    }
-                    .is_err()
-                    {
-                        state.selection_pending = false;
-                    }
-                }
-
-                EVENT_OBJECT_LOCATIONCHANGE if hwnd == state.target_hwnd && !state.is_minimized => {
-                    let mut target_rect = RECT::default();
-                    // SAFETY: Called within unsafe extern "system" fn
-                    if unsafe { GetWindowRect(state.target_hwnd, &mut target_rect).is_ok() } {
-                        let new_x = target_rect.left + state.offset_x;
-                        let new_y = target_rect.top + state.offset_y;
-                        // SAFETY: Called within unsafe extern "system" fn
-                        unsafe {
-                            let _ = SetWindowPos(
-                                state.main_hwnd,
-                                None,
-                                new_x,
-                                new_y,
-                                0,
-                                0,
-                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                            );
-                        }
-                    }
-                }
-
-                EVENT_SYSTEM_MINIMIZESTART
-                    if hwnd == state.target_hwnd && state.minimize_with_target =>
-                {
-                    state.is_minimized = true;
-                    // SAFETY: Called within unsafe extern "system" fn
-                    unsafe {
-                        let _ = ShowWindow(state.main_hwnd, SW_HIDE);
-                    }
-                }
-
-                EVENT_SYSTEM_MINIMIZEEND if hwnd == state.target_hwnd && state.is_minimized => {
-                    state.is_minimized = false;
-                    // SAFETY: Called within unsafe extern "system" fn
-                    if state.window_visible {
-                        unsafe {
-                            let _ = ShowWindow(state.main_hwnd, SW_SHOWNOACTIVATE);
-                        }
-                    }
-
-                    let mut target_rect = RECT::default();
-                    // SAFETY: Called within unsafe extern "system" fn
-                    if unsafe { GetWindowRect(state.target_hwnd, &mut target_rect).is_ok() } {
-                        let new_x = target_rect.left + state.offset_x;
-                        let new_y = target_rect.top + state.offset_y;
-                        // SAFETY: Called within unsafe extern "system" fn
-                        unsafe {
-                            let _ = SetWindowPos(
-                                state.main_hwnd,
-                                None,
-                                new_x,
-                                new_y,
-                                0,
-                                0,
-                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                            );
-                        }
-                    }
-                }
-
+                EVENT_SYSTEM_FOREGROUND => try_select_foreground_target(state, hwnd),
+                EVENT_OBJECT_LOCATIONCHANGE => on_target_location_changed(state, hwnd),
+                EVENT_SYSTEM_MINIMIZESTART => on_target_minimize_start(state, hwnd),
+                EVENT_SYSTEM_MINIMIZEEND => on_target_minimize_end(state, hwnd),
                 _ => {}
             }
         });
     }
 }
 
+/// 아직 자석 대상이 없을 때, 사용자가 전면으로 올린 외부 창을 후보로 선정한다.
+/// 실제 연결은 UI thread가 message를 받아 검증 후 `attach`로 확정한다.
+fn try_select_foreground_target(state: &mut MagneticState, hwnd: HWND) {
+    if !state.target_hwnd.is_null() || state.selection_pending || !is_external_target_window(hwnd) {
+        return;
+    }
+
+    state.selection_pending = true;
+    // SAFETY: main HWND는 manager가 소유하고 target HWND 값은 message에
+    // 복사되어 UI thread에서 검증 후 사용된다.
+    if unsafe {
+        PostMessageW(
+            state.main_hwnd,
+            WM_APP_MAGNETIC_TARGET_SELECTED,
+            hwnd as WPARAM,
+            0 as LPARAM,
+        )
+    } == 0
+    {
+        state.selection_pending = false;
+    }
+}
+
+/// 자석 대상이 움직이면 저장해둔 오프셋만큼 주 창을 같이 옮긴다.
+fn on_target_location_changed(state: &MagneticState, hwnd: HWND) {
+    if hwnd != state.target_hwnd || state.is_minimized {
+        return;
+    }
+    reposition_main_to_target(state);
+}
+
+/// 자석 대상이 최소화되면(정책이 켜져 있을 때) 주 창도 함께 숨긴다.
+fn on_target_minimize_start(state: &mut MagneticState, hwnd: HWND) {
+    if hwnd != state.target_hwnd || !state.minimize_with_target {
+        return;
+    }
+    state.is_minimized = true;
+    // SAFETY: Called within unsafe extern "system" fn
+    unsafe {
+        let _ = ShowWindow(state.main_hwnd, SW_HIDE);
+    }
+}
+
+/// 자석 대상이 복원되면 주 창을 다시 보이고 최신 위치로 맞춘다.
+fn on_target_minimize_end(state: &mut MagneticState, hwnd: HWND) {
+    if hwnd != state.target_hwnd || !state.is_minimized {
+        return;
+    }
+    state.is_minimized = false;
+    // SAFETY: Called within unsafe extern "system" fn
+    if state.window_visible {
+        unsafe {
+            let _ = ShowWindow(state.main_hwnd, SW_SHOWNOACTIVATE);
+        }
+    }
+    reposition_main_to_target(state);
+}
+
+/// 대상 창의 현재 위치 + 저장된 오프셋으로 주 창을 옮긴다.
+fn reposition_main_to_target(state: &MagneticState) {
+    let mut target_rect = RECT::default();
+    // SAFETY: Called within unsafe extern "system" fn
+    if unsafe { GetWindowRect(state.target_hwnd, &mut target_rect) != 0 } {
+        let new_x = target_rect.left + state.offset_x;
+        let new_y = target_rect.top + state.offset_y;
+        // SAFETY: Called within unsafe extern "system" fn
+        unsafe {
+            let _ = SetWindowPos(
+                state.main_hwnd,
+                std::ptr::null_mut(),
+                new_x,
+                new_y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
 fn is_external_target_window(candidate: HWND) -> bool {
     unsafe {
-        if candidate.is_invalid() {
+        if candidate.is_null() {
             return false;
         }
         let own_pid = GetCurrentProcessId();
         let shell_hwnd = GetShellWindow();
         let mut candidate_pid = 0;
-        GetWindowThreadProcessId(candidate, Some(&mut candidate_pid));
+        GetWindowThreadProcessId(candidate, &mut candidate_pid);
         candidate_pid != 0
             && candidate_pid != own_pid
-            && IsWindowVisible(candidate).as_bool()
+            && IsWindowVisible(candidate) != 0
             && candidate != shell_hwnd
             && is_targetable_extended_style(GetWindowLongW(candidate, GWL_EXSTYLE) as u32)
             && has_window_area(candidate)
@@ -295,13 +308,13 @@ fn is_external_target_window(candidate: HWND) -> bool {
 }
 
 fn is_targetable_extended_style(style: u32) -> bool {
-    style & (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) == 0
+    style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) == 0
 }
 
 fn has_window_area(hwnd: HWND) -> bool {
-    let mut rect = RECT::default();
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
     unsafe {
-        GetWindowRect(hwnd, &mut rect).is_ok() && rect.right > rect.left && rect.bottom > rect.top
+        GetWindowRect(hwnd, &mut rect) != 0 && rect.right > rect.left && rect.bottom > rect.top
     }
 }
 
@@ -312,16 +325,5 @@ impl Drop for MagneticManager {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn target_style_rejects_shell_and_nonactivating_windows() {
-        assert!(is_targetable_extended_style(0));
-        assert!(!is_targetable_extended_style(WS_EX_TOOLWINDOW.0));
-        assert!(!is_targetable_extended_style(WS_EX_NOACTIVATE.0));
-        assert!(!is_targetable_extended_style(
-            WS_EX_TOPMOST.0 | WS_EX_TOOLWINDOW.0
-        ));
-    }
-}
+#[path = "../tests/unit/magnetic.rs"]
+mod tests;

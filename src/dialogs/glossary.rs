@@ -6,10 +6,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use windows::{
-    Win32::{Foundation::*, UI::WindowsAndMessaging::*},
-    core::*,
-};
+use windows_core::{Error, HRESULT};
+use windows_sys::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
 
 use super::helpers::{
     get_dlg_item_text, listbox_add_item, listbox_get_sel, listbox_reset, set_dlg_item_text,
@@ -17,6 +15,7 @@ use super::helpers::{
 };
 use super::host::{DialogHost, DialogResult, HostedDialog};
 use super::models::{DictionaryTarget, GlossaryDraft, SettingsDraft};
+type Result<T> = windows_core::Result<T>;
 
 mod ctrl_id {
     pub const DIALOG: u16 = 102;
@@ -81,12 +80,13 @@ impl GlossaryDialog {
             ctrl_id::BTN_CLOSE,
         ] {
             // SAFETY: self.hwnd는 WM_INITDIALOG가 전달한 유효한 다이얼로그 핸들이다.
-            unsafe { GetDlgItem(Some(self.hwnd), id as i32) }.map_err(|_| {
-                Error::new(
-                    E_FAIL,
+            let control = unsafe { GetDlgItem(self.hwnd, id as i32) };
+            if control.is_null() {
+                return Err(Error::new(
+                    HRESULT(E_FAIL),
                     format!("글로서리 컨트롤 ID {id}를 찾을 수 없습니다"),
-                )
-            })?;
+                ));
+            }
         }
         self.refresh_listbox();
         let title = match self.draft.target() {
@@ -106,7 +106,7 @@ impl GlossaryDialog {
                     DictionaryTarget::Llm => WM_GLOSSARY_APPLIED,
                     DictionaryTarget::EzTransPostprocess => WM_EZTRANS_DICTIONARY_APPLIED,
                 };
-                let _ = unsafe { PostMessageW(Some(self.owner), message, WPARAM(0), LPARAM(0)) };
+                let _ = unsafe { PostMessageW(self.owner, message, 0, 0) };
             }
             BTN_ADD => self.add_or_update_entry(),
             BTN_REMOVE => self.remove_selected(),
@@ -151,10 +151,8 @@ impl GlossaryDialog {
     fn refresh_listbox(&self) {
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox handle.
         unsafe {
-            let Ok(lb) = GetDlgItem(Some(self.hwnd), ctrl_id::LIST as i32) else {
-                return;
-            };
-            if lb.is_invalid() {
+            let lb = GetDlgItem(self.hwnd, ctrl_id::LIST as i32);
+            if lb.is_null() {
                 return;
             }
             listbox_reset(lb);
@@ -168,10 +166,8 @@ impl GlossaryDialog {
     fn listbox_get_sel(&self) -> i32 {
         // SAFETY: dialog hwnd is valid; GetDlgItem returns a valid listbox handle.
         unsafe {
-            let Ok(lb) = GetDlgItem(Some(self.hwnd), ctrl_id::LIST as i32) else {
-                return LB_ERR;
-            };
-            if lb.is_invalid() {
+            let lb = GetDlgItem(self.hwnd, ctrl_id::LIST as i32);
+            if lb.is_null() {
                 return LB_ERR;
             }
             listbox_get_sel(lb)
@@ -213,13 +209,13 @@ impl HostedDialog for GlossaryDialog {
         if msg != WM_COMMAND {
             return DialogResult::Unhandled;
         }
-        let id = (wparam.0 & 0xFFFF) as u16;
-        if id == IDCANCEL.0 as u16 || id == ctrl_id::BTN_CLOSE {
-            return DialogResult::Close(LRESULT(1));
+        let id = (wparam & 0xFFFF) as u16;
+        if id == IDCANCEL as u16 || id == ctrl_id::BTN_CLOSE {
+            return DialogResult::Close(1);
         }
-        let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+        let notify_code = ((wparam >> 16) & 0xFFFF) as u32;
         self.handle_command(id, notify_code);
-        DialogResult::Handled(LRESULT(1))
+        DialogResult::Handled(1)
     }
 
     fn applied_dpi(&mut self) -> Option<&mut u32> {

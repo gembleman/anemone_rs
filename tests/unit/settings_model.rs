@@ -62,3 +62,17 @@ fn colors_and_fonts_are_applied_as_pure_config_changes() {
     assert_eq!(config.name_style.font_face, "Test Font");
     assert_eq!(config.name_style.font_style, 3);
 }
+
+#[test]
+fn update_check_setting_toggles_the_startup_policy() {
+    let mut config = Config::default();
+    assert!(config.update_check_enabled);
+
+    let result = SettingsEditor::apply(
+        &mut config,
+        SettingsChange::Toggle(BoolSetting::UpdateCheckEnabled),
+    );
+
+    assert!(!config.update_check_enabled);
+    assert!(result.save_required);
+}

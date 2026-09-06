@@ -6,14 +6,12 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use windows::{
-    Win32::{
-        Foundation::*,
-        UI::Controls::{BST_CHECKED, CheckDlgButton},
-        UI::Input::KeyboardAndMouse::EnableWindow,
-        UI::WindowsAndMessaging::*,
-    },
-    core::*,
+use windows_core::{Error, HRESULT};
+use windows_sys::Win32::{
+    Foundation::*,
+    UI::Controls::{BST_CHECKED, CheckDlgButton},
+    UI::Input::KeyboardAndMouse::EnableWindow,
+    UI::WindowsAndMessaging::*,
 };
 
 use super::file_dialog::{FileFilter, open_files_multi, save_file};
@@ -23,9 +21,10 @@ use super::host::{DialogHost, DialogResult, HostedDialog};
 use crate::app::action::AppActionSender;
 use crate::config::Config;
 use crate::file_trans::{
-    FileTransJobData, FileTranslationSupervisor, WriteType, default_output_paths,
+    FileTranslationRequest, FileTranslationSupervisor, WriteType, default_output_paths,
     validate_job_paths,
 };
+type Result<T> = windows_core::Result<T>;
 use crate::translation::{PreparedJob, TranslationEngine};
 
 // 컨트롤 ID
@@ -91,13 +90,13 @@ impl HostedDialog for FileTransDialog {
         if msg != WM_COMMAND {
             return DialogResult::Unhandled;
         }
-        let id = (wparam.0 & 0xFFFF) as u16;
-        if id == IDCANCEL.0 as u16 || id == ctrl_id::BTN_CLOSE {
-            return DialogResult::Close(LRESULT(1));
+        let id = (wparam & 0xFFFF) as u16;
+        if id == IDCANCEL as u16 || id == ctrl_id::BTN_CLOSE {
+            return DialogResult::Close(1);
         }
-        let notify_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+        let notify_code = ((wparam >> 16) & 0xFFFF) as u32;
         self.handle_command(id, notify_code);
-        DialogResult::Handled(LRESULT(1))
+        DialogResult::Handled(1)
     }
 
     fn applied_dpi(&mut self) -> Option<&mut u32> {
@@ -165,12 +164,15 @@ impl FileTransDialog {
 
     fn initialize_controls(&mut self) -> Result<()> {
         let get_control = |id| {
-            unsafe { GetDlgItem(Some(self.hwnd), id) }.map_err(|_| {
-                Error::new(
-                    E_FAIL,
+            let control = unsafe { GetDlgItem(self.hwnd, id) };
+            if control.is_null() {
+                Err(Error::new(
+                    HRESULT(E_FAIL),
                     format!("파일 번역 컨트롤 ID {id}를 찾을 수 없습니다"),
-                )
-            })
+                ))
+            } else {
+                Ok(control)
+            }
         };
 
         self.load_edit = get_control(ctrl_id::LOAD_EDIT as i32)?;
@@ -191,7 +193,7 @@ impl FileTransDialog {
         }
 
         unsafe {
-            let _ = EnableWindow(self.save_browser_btn, false);
+            let _ = EnableWindow(self.save_browser_btn, 0);
             let _ = CheckDlgButton(self.hwnd, ctrl_id::OUTPUT_1 as i32, BST_CHECKED);
         }
         self.update_engine_label();
@@ -226,7 +228,7 @@ impl FileTransDialog {
                 }
             };
             let engine_name: String = match engine {
-                TranslationEngine::EzTrans => "EzTrans".into(),
+                TranslationEngine::EzTrans => "EzTrans64".into(),
                 TranslationEngine::Google => "Google".into(),
                 TranslationEngine::DeepL => "DeepL".into(),
                 TranslationEngine::Papago => "Papago".into(),
@@ -234,6 +236,7 @@ impl FileTransDialog {
                     Ok(provider) => format!("LLM: {}", provider.display_name()),
                     Err(error) => format!("LLM 설정 오류: {error}"),
                 },
+                TranslationEngine::MysTranslater => "MyS Translater".into(),
                 TranslationEngine::Custom => match config.translation.active_custom_api() {
                     Ok(api) => format!("Custom API: {}", api.name),
                     Err(error) => format!("Custom API 설정 오류: {error}"),
@@ -256,8 +259,7 @@ impl FileTransDialog {
             (engine_name, source, target)
         };
         let text = format!(
-            "현재 번역 엔진: {} ({} → {})\r\n엔진/언어는 \"번역\" 또는 \"설정\" 다이얼로그에서 변경할 수 있습니다.",
-            engine_name, source, target,
+            "현재 번역 엔진: {engine_name} ({source} → {target})\r\n엔진/언어는 \"번역\" 또는 \"설정\" 다이얼로그에서 변경할 수 있습니다.",
         );
         let _ = set_window_text(self.engine_label, &text);
     }
@@ -289,8 +291,13 @@ impl FileTransDialog {
             Err(error) => {
                 self.input_files.clear();
                 unsafe {
-                    let message = HSTRING::from(error.to_string());
-                    let _ = MessageBoxW(Some(self.hwnd), &message, w!("경로 오류"), MB_ICONERROR);
+                    let message = crate::win32::to_wide(&error.to_string());
+                    let _ = MessageBoxW(
+                        self.hwnd,
+                        message.as_ptr(),
+                        crate::win32::to_wide("경로 오류").as_ptr(),
+                        MB_ICONERROR,
+                    );
                 }
                 return;
             }
@@ -312,7 +319,10 @@ impl FileTransDialog {
         unsafe {
             let _ = set_window_text(self.load_edit, &input_display.join(", "));
             let _ = set_window_text(self.save_edit, &output_display.join(", "));
-            let _ = EnableWindow(self.save_browser_btn, self.input_files.len() == 1);
+            let _ = EnableWindow(
+                self.save_browser_btn,
+                if self.input_files.len() == 1 { 1 } else { 0 },
+            );
         }
 
         if let Some(first_file) = self.input_files.first() {
@@ -336,7 +346,7 @@ impl FileTransDialog {
                 spec: "*.*",
             },
         ];
-        let initial = self.output_files.first().map(|p| p.as_path());
+        let initial = self.output_files.first().map(std::path::PathBuf::as_path);
         let path = match save_file(self.hwnd, "출력 파일 위치", &filters, Some("txt"), initial)
         {
             Ok(Some(path)) => path,
@@ -363,11 +373,16 @@ impl FileTransDialog {
         let _ = set_window_text(self.preview_edit, &content);
     }
 
-    fn show_file_dialog_error(&self, error: &windows::core::Error) {
+    fn show_file_dialog_error(&self, error: &windows_core::Error) {
         tracing::error!("파일 대화상자 오류: {error}");
-        let message = HSTRING::from(format!("파일 대화상자를 열 수 없습니다.\n{error}"));
+        let message = crate::win32::to_wide(&format!("파일 대화상자를 열 수 없습니다.\n{error}"));
         unsafe {
-            let _ = MessageBoxW(Some(self.hwnd), &message, w!("오류"), MB_ICONERROR);
+            let _ = MessageBoxW(
+                self.hwnd,
+                message.as_ptr(),
+                crate::win32::to_wide("오류").as_ptr(),
+                MB_ICONERROR,
+            );
         }
     }
 
@@ -384,9 +399,9 @@ impl FileTransDialog {
             // SAFETY: self.hwnd is a valid dialog window handle used as the message box owner.
             unsafe {
                 let _ = MessageBoxW(
-                    Some(self.hwnd),
-                    w!("파일을 먼저 선택해주세요."),
-                    w!("알림"),
+                    self.hwnd,
+                    crate::win32::to_wide("파일을 먼저 선택해주세요.").as_ptr(),
+                    crate::win32::to_wide("알림").as_ptr(),
                     MB_ICONINFORMATION,
                 );
             }
@@ -395,8 +410,13 @@ impl FileTransDialog {
 
         if let Err(error) = validate_job_paths(&self.input_files, &self.output_files) {
             unsafe {
-                let message = HSTRING::from(error.to_string());
-                let _ = MessageBoxW(Some(self.hwnd), &message, w!("경로 오류"), MB_ICONERROR);
+                let message = crate::win32::to_wide(&error.to_string());
+                let _ = MessageBoxW(
+                    self.hwnd,
+                    message.as_ptr(),
+                    crate::win32::to_wide("경로 오류").as_ptr(),
+                    MB_ICONERROR,
+                );
             }
             return;
         }
@@ -409,18 +429,18 @@ impl FileTransDialog {
             Ok(spec) => spec,
             Err(error) => {
                 unsafe {
-                    let message = HSTRING::from(error.to_string());
+                    let message = crate::win32::to_wide(&error.to_string());
                     let _ = MessageBoxW(
-                        Some(self.hwnd),
-                        &message,
-                        w!("번역 설정 오류"),
+                        self.hwnd,
+                        message.as_ptr(),
+                        crate::win32::to_wide("번역 설정 오류").as_ptr(),
                         MB_ICONERROR,
                     );
                 }
                 return;
             }
         };
-        let job_data = FileTransJobData {
+        let job_data = FileTranslationRequest {
             input_files: self.input_files.clone(),
             output_files: self.output_files.clone(),
             write_type: self.write_type,

@@ -6,22 +6,21 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use windows::{
-    Win32::{
-        Foundation::{E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM},
-        System::LibraryLoader::GetModuleHandleW,
-        UI::Input::KeyboardAndMouse::EnableWindow,
-        UI::WindowsAndMessaging::{
-            CreateDialogParamW, DestroyWindow, GetWindowLongPtrW, GetWindowRect, IsWindow, MSG,
-            SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW,
-            SetWindowPos, WINDOW_LONG_PTR_INDEX, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
-        },
+use windows_core::{Error, HRESULT};
+type Result<T> = windows_core::Result<T>;
+use windows_sys::Win32::{
+    Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
+    System::LibraryLoader::GetModuleHandleW,
+    UI::Input::KeyboardAndMouse::EnableWindow,
+    UI::WindowsAndMessaging::{
+        CreateDialogParamW, DestroyWindow, GetWindowLongPtrW, GetWindowRect, IsWindow, MSG,
+        SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW,
+        SetWindowPos, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_LBUTTONDOWN,
     },
-    core::{Error, PCWSTR, Result},
 };
 
 use super::helpers::{
-    center_dialog_on_monitor, defer_dialog_dpi_change, defer_dialog_message,
+    begin_client_drag, center_dialog_on_monitor, defer_dialog_dpi_change, defer_dialog_message,
     flush_deferred_dialog_messages, register_resource_dialog, rescale_dialog_children_for_dpi,
     show_dialog_window, unregister_resource_dialog,
 };
@@ -29,8 +28,7 @@ use super::helpers::{
 // DWLP_USER follows the pointer-sized DWLP_MSGRESULT and DWLP_DLGPROC slots.
 // The windows crate exposes only the legacy 32-bit DWL_USER constant (8), which
 // overwrites DWLP_DLGPROC in a 64-bit dialog where this offset is 16.
-const DWLP_USER_INDEX: WINDOW_LONG_PTR_INDEX =
-    WINDOW_LONG_PTR_INDEX((2 * std::mem::size_of::<isize>()) as i32);
+const DWLP_USER_INDEX: i32 = (2 * size_of::<isize>()) as i32;
 
 unsafe fn set_dialog_user(hwnd: HWND, value: isize) {
     unsafe { SetWindowLongPtrW(hwnd, DWLP_USER_INDEX, value) };
@@ -79,6 +77,9 @@ pub(crate) trait HostedDialog: Sized + 'static {
     /// 이미 열려 있을 때의 처리.
     const REOPEN: ReopenPolicy = ReopenPolicy::Activate;
 
+    /// 컨트롤이 없는 client 여백을 끌어 창을 옮길 수 있게 할지.
+    const CLIENT_DRAG: bool = true;
+
     fn create(hwnd: HWND, init: Self::Init) -> Result<Self>;
 
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> DialogResult;
@@ -120,19 +121,19 @@ pub(crate) trait HostedDialog: Sized + 'static {
 
 /// `WM_DPICHANGED` 공통 처리: 자식 rescale 후 OS가 제안한 사각형으로 창을 옮긴다.
 fn apply_dpi_change<T: HostedDialog>(dialog: &mut T, hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
-    let new_dpi = (wparam.0 & 0xffff) as u32;
+    let new_dpi = (wparam & 0xffff) as u32;
     if let Some(applied) = dialog.applied_dpi() {
         rescale_dialog_children_for_dpi(hwnd, *applied, new_dpi);
         *applied = new_dpi;
     }
 
-    if lparam.0 != 0 {
+    if lparam != 0 {
         // SAFETY: WM_DPICHANGED의 LPARAM은 메시지 처리 동안 유효한 RECT 포인터다.
         unsafe {
-            let rect = &*(lparam.0 as *const RECT);
+            let rect = &*(lparam as *const RECT);
             let _ = SetWindowPos(
                 hwnd,
-                None,
+                std::ptr::null_mut(),
                 rect.left,
                 rect.top,
                 rect.right - rect.left,
@@ -153,8 +154,8 @@ unsafe fn center_dialog_on_parent(hwnd: HWND, parent: HWND) {
     unsafe {
         let mut dialog_rect = RECT::default();
         let mut parent_rect = RECT::default();
-        if GetWindowRect(hwnd, &mut dialog_rect).is_err()
-            || GetWindowRect(parent, &mut parent_rect).is_err()
+        if GetWindowRect(hwnd, &mut dialog_rect) == 0
+            || GetWindowRect(parent, &mut parent_rect) == 0
         {
             return;
         }
@@ -164,7 +165,7 @@ unsafe fn center_dialog_on_parent(hwnd: HWND, parent: HWND) {
         let y = parent_rect.top + (parent_rect.bottom - parent_rect.top - height) / 2;
         let _ = SetWindowPos(
             hwnd,
-            None,
+            std::ptr::null_mut(),
             x,
             y,
             0,
@@ -191,7 +192,9 @@ impl<T: HostedDialog> DialogHost<T> {
             }
             return match T::REOPEN {
                 ReopenPolicy::Activate => Ok(hwnd),
-                ReopenPolicy::Reject(message) => Err(Error::new(E_FAIL, message)),
+                ReopenPolicy::Reject(message) => {
+                    Err(Error::new(HRESULT(0x80004005u32 as i32), message))
+                }
             };
         }
 
@@ -206,14 +209,29 @@ impl<T: HostedDialog> DialogHost<T> {
         // SAFETY: raw envelope는 WM_INITDIALOG에서 정확히 한 번 회수한다. 콜백 전에
         // 생성이 실패하면 아래 consumed 검사에서 호출자가 회수한다.
         let created = unsafe {
-            let instance = GetModuleHandleW(None)?;
-            CreateDialogParamW(
-                Some(instance.into()),
-                PCWSTR(T::RESOURCE_ID as usize as *const u16),
-                Some(parent),
+            let instance = GetModuleHandleW(std::ptr::null());
+            if instance.is_null() {
+                return Err(Error::new(
+                    HRESULT(0x80070000u32 as i32),
+                    "GetModuleHandleW failed",
+                ));
+            }
+            let template = T::RESOURCE_ID as usize as *const u16;
+            let hwnd = CreateDialogParamW(
+                instance,
+                template,
+                parent,
                 Some(Self::dialog_proc),
-                LPARAM(raw as isize),
-            )
+                raw as isize,
+            );
+            if hwnd.is_null() {
+                Err(Error::new(
+                    HRESULT(0x80070000u32 as i32),
+                    "CreateDialogParamW failed",
+                ))
+            } else {
+                Ok(hwnd)
+            }
         };
 
         let hwnd = match created {
@@ -232,7 +250,7 @@ impl<T: HostedDialog> DialogHost<T> {
             unsafe {
                 let _ = DestroyWindow(hwnd);
             }
-            return Err(Error::new(E_FAIL, message));
+            return Err(Error::new(HRESULT(0x80004005u32 as i32), message));
         }
 
         // SAFETY: hwnd와 parent는 같은 UI thread의 유효한 window handle이다.
@@ -242,7 +260,7 @@ impl<T: HostedDialog> DialogHost<T> {
                 DialogPlacement::ParentCenter => center_dialog_on_parent(hwnd, parent),
             }
             if T::DISABLE_PARENT {
-                let _ = EnableWindow(parent, false);
+                let _ = EnableWindow(parent, 0);
                 DISABLED_PARENTS.with(|parents| {
                     parents.borrow_mut().insert(TypeId::of::<T>(), parent);
                 });
@@ -284,97 +302,106 @@ impl<T: HostedDialog> DialogHost<T> {
         let hwnd =
             HOSTED_DIALOGS.with(|dialogs| dialogs.borrow().get(&TypeId::of::<T>()).copied())?;
         // SAFETY: HWND 값 자체는 복사 가능하며 유효성만 조회한다.
-        unsafe { IsWindow(Some(hwnd)).as_bool().then_some(hwnd) }
+        unsafe { (IsWindow(hwnd) != 0).then_some(hwnd) }
     }
 
-    unsafe extern "system" fn dialog_proc(
+    /// `WM_INITDIALOG` 처리: envelope에서 `Init`을 회수해 `T::create`를 호출하고,
+    /// 성공하면 state를 `DWLP_USER`에 등록한다.
+    ///
+    /// # Safety
+    /// `lparam`은 `show`가 `Box::into_raw`로 전달한 이 타입의 유효한 envelope
+    /// 포인터이거나 0이어야 한다.
+    unsafe fn handle_init_dialog(hwnd: HWND, lparam: LPARAM) -> isize {
+        if lparam == 0 {
+            return 0;
+        }
+        // SAFETY: 호출자 계약상 lparam은 show가 Box::into_raw로 전달한 정확한 envelope 포인터다.
+        let mut envelope = unsafe { Box::from_raw(lparam as *mut InitEnvelope<T>) };
+        envelope.consumed.set(true);
+        let Some(init) = envelope.init.take() else {
+            // envelope는 WM_INITDIALOG에서 한 번만 회수되므로 이 분기는
+            // 정상 경로에서 도달하지 않는다. 그래도 패닉 대신 생성 실패로
+            // 처리해 재진입 등 예기치 못한 상황에서도 창이 조용히 닫히게 한다.
+            tracing::error!("hosted dialog init이 이미 소비되었습니다");
+            return 0;
+        };
+        match T::create(hwnd, init) {
+            Ok(dialog) => {
+                let state = Box::into_raw(Box::new(RefCell::new(dialog)));
+                // SAFETY: DWLP_USER는 dialog가 파괴될 때까지 state 포인터를 보존한다.
+                unsafe { set_dialog_user(hwnd, state as isize) };
+                HOSTED_DIALOGS.with(|dialogs| {
+                    dialogs.borrow_mut().insert(TypeId::of::<T>(), hwnd);
+                });
+                register_resource_dialog(hwnd, T::pretranslate_message);
+                1
+            }
+            Err(create_error) => {
+                *envelope.error.borrow_mut() = Some(create_error.to_string());
+                0
+            }
+        }
+    }
+
+    /// `WM_DESTROY` 처리: state를 회수해 `destroy` 훅을 부르고, 등록을 해제한 뒤
+    /// 필요하면 부모 창을 다시 활성화한다.
+    ///
+    /// # Safety
+    /// `state_ptr`는 `WM_INITDIALOG`에서 `Box::into_raw`로 만든, 아직 회수되지
+    /// 않은 이 타입의 유효한 포인터여야 한다.
+    unsafe fn handle_destroy(hwnd: HWND, state_ptr: *mut RefCell<T>) -> isize {
+        // SAFETY: 파괴는 host가 mutable borrow를 해제한 뒤 실행하므로 state를 회수할 수 있다.
+        unsafe { set_dialog_user(hwnd, 0) };
+        HOSTED_DIALOGS.with(|dialogs| {
+            dialogs.borrow_mut().remove(&TypeId::of::<T>());
+        });
+        unregister_resource_dialog(hwnd);
+        // SAFETY: 호출자 계약상 state_ptr는 WM_INITDIALOG에서 Box::into_raw로 만든 유일한 포인터다.
+        let state = unsafe { Box::from_raw(state_ptr) };
+        if let Ok(mut dialog) = state.try_borrow_mut() {
+            dialog.destroy();
+        }
+        drop(state);
+        // 부모를 다시 활성화하는 것은 state 정리 뒤에 한다. 그래야 포커스가
+        // 돌아간 부모가 즉시 보내는 message가 이미 회수된 state를 건드리지 않는다.
+        if T::DISABLE_PARENT {
+            let parent =
+                DISABLED_PARENTS.with(|parents| parents.borrow_mut().remove(&TypeId::of::<T>()));
+            if let Some(parent) = parent {
+                // SAFETY: 부모는 show에서 저장한 같은 UI thread의 창이다.
+                unsafe {
+                    let _ = EnableWindow(parent, 1);
+                    let _ = SetForegroundWindow(parent);
+                }
+            }
+        }
+        1
+    }
+
+    /// `WM_DPICHANGED` 처리: state를 빌릴 수 있으면 즉시 반영하고, 재진입 중이면
+    /// 큐에 미룬다.
+    fn handle_dpi_changed(state: &RefCell<T>, hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> isize {
+        match state.try_borrow_mut() {
+            Ok(mut dialog) => {
+                apply_dpi_change(&mut *dialog, hwnd, wparam, lparam);
+                drop(dialog);
+                flush_deferred_dialog_messages(hwnd);
+            }
+            // SAFETY: hwnd와 lparam은 시스템이 이 WM_DPICHANGED 호출에 넘긴 값 그대로다.
+            Err(_) => unsafe { defer_dialog_dpi_change(hwnd, wparam, lparam) },
+        }
+        1
+    }
+
+    /// 나머지 message를 `T::handle_message`로 넘기고, 재진입 시 defer 규칙과
+    /// `DialogResult`를 창 파괴 여부로 옮긴다.
+    fn dispatch_message(
+        state: &RefCell<T>,
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> isize {
-        if let Some(result) = T::handle_before_borrow(hwnd, msg, wparam, lparam) {
-            return result;
-        }
-
-        if msg == windows::Win32::UI::WindowsAndMessaging::WM_INITDIALOG {
-            if lparam.0 == 0 {
-                return 0;
-            }
-            // SAFETY: lparam은 show가 Box::into_raw로 전달한 정확한 envelope 포인터다.
-            let mut envelope = unsafe { Box::from_raw(lparam.0 as *mut InitEnvelope<T>) };
-            envelope.consumed.set(true);
-            let init = envelope
-                .init
-                .take()
-                .expect("hosted dialog init is consumed once");
-            match T::create(hwnd, init) {
-                Ok(dialog) => {
-                    let state = Box::into_raw(Box::new(RefCell::new(dialog)));
-                    // SAFETY: DWLP_USER는 dialog가 파괴될 때까지 state 포인터를 보존한다.
-                    unsafe { set_dialog_user(hwnd, state as isize) };
-                    HOSTED_DIALOGS.with(|dialogs| {
-                        dialogs.borrow_mut().insert(TypeId::of::<T>(), hwnd);
-                    });
-                    register_resource_dialog(hwnd, T::pretranslate_message);
-                    return 1;
-                }
-                Err(create_error) => {
-                    *envelope.error.borrow_mut() = Some(create_error.to_string());
-                    return 0;
-                }
-            }
-        }
-
-        // SAFETY: host가 초기화에 성공한 dialog만 DWLP_USER에 state를 저장한다.
-        let state_ptr = unsafe { GetWindowLongPtrW(hwnd, DWLP_USER_INDEX) } as *mut RefCell<T>;
-        if state_ptr.is_null() {
-            return 0;
-        }
-
-        if msg == WM_DESTROY {
-            // SAFETY: 파괴는 host가 mutable borrow를 해제한 뒤 실행하므로 state를 회수할 수 있다.
-            unsafe { set_dialog_user(hwnd, 0) };
-            HOSTED_DIALOGS.with(|dialogs| {
-                dialogs.borrow_mut().remove(&TypeId::of::<T>());
-            });
-            unregister_resource_dialog(hwnd);
-            // SAFETY: state_ptr는 WM_INITDIALOG에서 Box::into_raw로 만든 유일한 포인터다.
-            let state = unsafe { Box::from_raw(state_ptr) };
-            if let Ok(mut dialog) = state.try_borrow_mut() {
-                dialog.destroy();
-            }
-            drop(state);
-            // 부모를 다시 활성화하는 것은 state 정리 뒤에 한다. 그래야 포커스가
-            // 돌아간 부모가 즉시 보내는 message가 이미 회수된 state를 건드리지 않는다.
-            if T::DISABLE_PARENT {
-                let parent = DISABLED_PARENTS
-                    .with(|parents| parents.borrow_mut().remove(&TypeId::of::<T>()));
-                if let Some(parent) = parent {
-                    // SAFETY: 부모는 show에서 저장한 같은 UI thread의 창이다.
-                    unsafe {
-                        let _ = EnableWindow(parent, true);
-                        let _ = SetForegroundWindow(parent);
-                    }
-                }
-            }
-            return 1;
-        }
-
-        // SAFETY: state 포인터는 WM_DESTROY 전까지 유효하다.
-        let state = unsafe { &*state_ptr };
-        if msg == WM_DPICHANGED {
-            match state.try_borrow_mut() {
-                Ok(mut dialog) => {
-                    apply_dpi_change(&mut *dialog, hwnd, wparam, lparam);
-                    drop(dialog);
-                    flush_deferred_dialog_messages(hwnd);
-                }
-                Err(_) => unsafe { defer_dialog_dpi_change(hwnd, wparam, lparam) },
-            }
-            return 1;
-        }
-
         let response = match state.try_borrow_mut() {
             Ok(mut dialog) => dialog.handle_message(msg, wparam, lparam),
             Err(_) => {
@@ -382,10 +409,12 @@ impl<T: HostedDialog> DialogHost<T> {
                 // 처리해야 한다. 여기서 DestroyWindow를 호출하면 동기 WM_DESTROY가
                 // 아직 살아 있는 RefMut 아래의 state를 해제한다.
                 if msg == WM_CLOSE {
+                    // SAFETY: hwnd/wparam/lparam은 시스템이 이 호출에 넘긴 값 그대로다.
                     unsafe { defer_dialog_message(hwnd, msg, wparam, lparam) };
                     return 1;
                 }
                 if T::can_defer(msg) {
+                    // SAFETY: hwnd/wparam/lparam은 시스템이 이 호출에 넘긴 값 그대로다.
                     unsafe { defer_dialog_message(hwnd, msg, wparam, lparam) };
                     return 1;
                 }
@@ -394,13 +423,13 @@ impl<T: HostedDialog> DialogHost<T> {
         };
         flush_deferred_dialog_messages(hwnd);
         match response {
-            DialogResult::Handled(result) => result.0,
+            DialogResult::Handled(result) => result,
             DialogResult::Close(result) => {
                 // SAFETY: dialog borrow는 match 전에 해제됐다.
                 unsafe {
                     let _ = DestroyWindow(hwnd);
                 }
-                result.0
+                result
             }
             // WM_CLOSE를 직접 처리하지 않는 dialog는 기본 동작대로 창을 닫는다.
             // 진행률 창처럼 닫기를 취소로 바꿔야 하는 쪽은 Handled를 돌려 이 경로를 피한다.
@@ -413,5 +442,50 @@ impl<T: HostedDialog> DialogHost<T> {
             }
             DialogResult::Unhandled => 0,
         }
+    }
+
+    unsafe extern "system" fn dialog_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> isize {
+        if let Some(result) = T::handle_before_borrow(hwnd, msg, wparam, lparam) {
+            return result;
+        }
+
+        // 자식 컨트롤이 소비하지 않은 client 클릭만 dialog까지 온다 — 그 여백을
+        // caption처럼 끌 수 있게 한다. 이동 loop는 message를 다시 pump하므로
+        // state를 빌리기 전에 처리해 재진입을 안전하게 만든다.
+        if msg == WM_LBUTTONDOWN && T::CLIENT_DRAG {
+            // SAFETY: hwnd는 system이 넘긴 유효한 dialog이고 대여 중인 state가 없다.
+            unsafe { begin_client_drag(hwnd) };
+            return 1;
+        }
+
+        if msg == windows_sys::Win32::UI::WindowsAndMessaging::WM_INITDIALOG {
+            // SAFETY: lparam은 system이 이 WM_INITDIALOG 호출에 넘긴 값 그대로다.
+            return unsafe { Self::handle_init_dialog(hwnd, lparam) };
+        }
+
+        // SAFETY: host가 초기화에 성공한 dialog만 DWLP_USER에 state를 저장한다.
+        let state_ptr = unsafe { GetWindowLongPtrW(hwnd, DWLP_USER_INDEX) } as *mut RefCell<T>;
+        if state_ptr.is_null() {
+            return 0;
+        }
+
+        if msg == WM_DESTROY {
+            // SAFETY: state_ptr는 방금 확인한 대로 null이 아니며, WM_DESTROY는
+            // dialog당 정확히 한 번만 도달한다.
+            return unsafe { Self::handle_destroy(hwnd, state_ptr) };
+        }
+
+        // SAFETY: state 포인터는 WM_DESTROY 전까지 유효하다.
+        let state = unsafe { &*state_ptr };
+        if msg == WM_DPICHANGED {
+            return Self::handle_dpi_changed(state, hwnd, wparam, lparam);
+        }
+
+        Self::dispatch_message(state, hwnd, msg, wparam, lparam)
     }
 }

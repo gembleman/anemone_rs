@@ -1,16 +1,20 @@
 use std::collections::HashMap;
 
 use windows::{
-    Win32::Graphics::{
-        Direct2D::{Common::*, *},
-        DirectWrite::*,
+    Win32::{
+        Foundation::E_UNEXPECTED,
+        Graphics::{
+            Direct2D::{Common::*, *},
+            DirectWrite::*,
+        },
     },
     core::*,
 };
 use windows_numerics::Matrix3x2;
 
 use super::{
-    MeasureSlot, cache::*,
+    MeasureSlot,
+    cache::*,
     color::{argb_to_color_f, font_style_to_dwrite, text_align_to_dwrite},
     outline_text_renderer::OutlineTextRenderer,
     style::TextRenderStyle,
@@ -154,6 +158,16 @@ impl D2DRenderer {
             return Ok(g.clone());
         }
 
+        // get_or_create_layout이 방금 populate했으므로 도달 불가능하지만,
+        // 프로덕션 경로에서 panic 대신 명시적 오류로 처리한다.
+        let Some(cached) = self.text_cache[slot as usize].as_ref() else {
+            return Err(Error::new(
+                E_UNEXPECTED,
+                "text_cache not populated by get_or_create_layout",
+            ));
+        };
+        let layout = cached.layout.clone();
+
         // outline geometry 신규 생성.
         // SAFETY: d2d_factory 는 유효한 COM 객체. text_layout 도 위에서 확보.
         let path_geometry: ID2D1PathGeometry = unsafe {
@@ -161,12 +175,6 @@ impl D2DRenderer {
             let sink = geom.Open()?;
             let renderer: IDWriteTextRenderer =
                 OutlineTextRenderer::new(self.d2d_factory.clone(), sink.clone()).into();
-            let layout = self
-                .text_cache[slot as usize]
-                .as_ref()
-                .expect("text_cache populated by get_or_create_layout")
-                .layout
-                .clone();
             layout.Draw(None, &renderer, 0.0, 0.0)?;
             sink.Close()?;
             geom

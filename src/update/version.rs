@@ -12,6 +12,33 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::str::FromStr;
 
+const CURRENT_MAJOR: u32 = parse_version_component(env!("CARGO_PKG_VERSION_MAJOR"));
+const CURRENT_MINOR: u32 = parse_version_component(env!("CARGO_PKG_VERSION_MINOR"));
+const CURRENT_PATCH: u32 = parse_version_component(env!("CARGO_PKG_VERSION_PATCH"));
+const CURRENT_PRE: &str = env!("CARGO_PKG_VERSION_PRE");
+
+/// `CARGO_PKG_VERSION_*`가 담은 십진 문자열을 정수로 바꾼다.
+///
+/// `const` 문맥에서만 쓰이므로, 값이 십진수가 아니거나 `u32`를 넘치면
+/// 실행 중 패닉이 아니라 컴파일 오류로 드러난다.
+const fn parse_version_component(text: &str) -> u32 {
+    let bytes = text.as_bytes();
+    assert!(!bytes.is_empty(), "버전 구성요소가 비어 있습니다");
+
+    let mut value: u32 = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        let digit = bytes[index];
+        assert!(
+            digit >= b'0' && digit <= b'9',
+            "버전 구성요소가 십진수가 아닙니다"
+        );
+        value = value * 10 + (digit - b'0') as u32;
+        index += 1;
+    }
+    value
+}
+
 /// 릴리스 버전. 프리릴리스는 존재 여부만 기억하고 내부 순서는 비교하지 않는다.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Version {
@@ -25,12 +52,17 @@ pub struct Version {
 impl Version {
     /// 현재 실행 중인 빌드의 버전.
     ///
-    /// `CARGO_PKG_VERSION`은 빌드 시점에 Cargo가 검증한 값이라 파싱이 실패할 수
-    /// 없다. 그럼에도 실패한다면 빌드 구성이 깨진 것이므로 즉시 드러내야 한다.
+    /// Cargo가 구성요소를 개별 환경 변수로도 넘겨주므로 문자열을 다시 파싱하지
+    /// 않고 그대로 조립한다. 숫자 변환은 `const` 문맥에서 끝나기 때문에 값이
+    /// 잘못되면 런타임 패닉이 아니라 컴파일 오류가 된다.
     pub fn current() -> Self {
-        env!("CARGO_PKG_VERSION")
-            .parse()
-            .expect("CARGO_PKG_VERSION은 항상 유효한 버전이어야 한다")
+        Self {
+            major: CURRENT_MAJOR,
+            minor: CURRENT_MINOR,
+            patch: CURRENT_PATCH,
+            // 프리릴리스가 없으면 Cargo가 빈 문자열을 넘긴다.
+            pre: (!CURRENT_PRE.is_empty()).then(|| CURRENT_PRE.to_string()),
+        }
     }
 
     pub fn is_prerelease(&self) -> bool {

@@ -1,6 +1,15 @@
 use std::mem::zeroed;
 
-use windows::Win32::{Foundation::*, Graphics::Gdi::ScreenToClient, UI::WindowsAndMessaging::*};
+use windows_sys::Win32::{
+    Foundation::{HWND, POINT, RECT},
+    Graphics::Gdi::ScreenToClient,
+    UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetClientRect, GetWindowLongW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTLEFT,
+        HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_NOTOPMOST, HWND_TOPMOST, MINMAXINFO, SW_HIDE,
+        SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowLongW, SetWindowPos, ShowWindow,
+        WS_EX_TRANSPARENT,
+    },
+};
 
 /// 윈도우 표시/숨김
 pub fn set_window_visible(hwnd: HWND, visible: bool) {
@@ -21,7 +30,7 @@ pub fn set_topmost(hwnd: HWND, topmost: bool) {
         };
         let _ = SetWindowPos(
             hwnd,
-            Some(hwnd_insert),
+            hwnd_insert,
             0,
             0,
             0,
@@ -37,7 +46,7 @@ pub fn set_click_through(hwnd: HWND, click_through: bool) {
     // bitfield; use an unsigned intermediate to avoid sign extension.
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-        let mask = WS_EX_TRANSPARENT.0;
+        let mask = WS_EX_TRANSPARENT;
         let new_style = if click_through {
             style | mask
         } else {
@@ -53,7 +62,9 @@ pub fn hit_test_resize_border(hwnd: HWND, x: i32, y: i32, border_width: i32) -> 
     // Win32 coordinate conversion calls with valid parameters.
     unsafe {
         let mut rc: RECT = zeroed();
-        GetClientRect(hwnd, &mut rc).ok()?;
+        if GetClientRect(hwnd, &mut rc) == 0 {
+            return None;
+        }
 
         let mut pt = POINT { x, y };
         let _ = ScreenToClient(hwnd, &mut pt);

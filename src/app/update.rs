@@ -27,11 +27,13 @@
 
 use std::cell::Cell;
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{
-    IDYES, MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MessageBoxW, PostMessageW, WM_CLOSE,
+use windows_sys::Win32::{
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{
+        IDYES, MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MessageBoxW,
+        PostMessageW as PostMessageWSys, WM_CLOSE,
+    },
 };
-use windows::core::HSTRING;
 
 use crate::dialogs::SettingsDialog;
 use crate::update::check::UpdateCheck;
@@ -45,6 +47,16 @@ use super::{App, state};
 
 fn now_unix() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
+/// 자동 업데이트 네트워크 호출을 테스트/검증 실행에서 차단한다.
+///
+/// 일반 사용자는 `update_check_enabled` 설정으로 제어한다. `cfg!(test)`는
+/// cargo 테스트가 GUI 시작 경로를 직접 밟는 경우에도 네트워크를 만들지 않게
+/// 하고, `ANEMONE_DISABLE_AUTO_UPDATE`는 release 바이너리를 구동하는 GUI E2E가
+/// 같은 보장을 갖도록 한다.
+fn auto_update_disabled_for_test() -> bool {
+    cfg!(test) || std::env::var_os("ANEMONE_DISABLE_AUTO_UPDATE").is_some()
 }
 
 thread_local! {
@@ -126,6 +138,10 @@ impl App {
     /// GUI 진입 시점에 한 번 호출한다. 조건을 통과하면 확인 요청만 보내고 즉시
     /// 반환한다 — 시작을 지연시키지 않는다.
     pub(super) fn maybe_start_auto_update_check(&self) {
+        if auto_update_disabled_for_test() {
+            tracing::debug!("테스트/검증 실행에서는 자동 업데이트 확인을 건너뜁니다");
+            return;
+        }
         let config = &self.model.config;
         if !should_auto_check(
             config.update_check_enabled,
@@ -172,14 +188,18 @@ impl App {
         }
 
         let confirmed = unsafe {
-            let message = HSTRING::from(format!(
+            let message: Vec<u16> = format!(
                 "새 버전 {}을(를) 내려받아 적용할까요?\n적용 후 아네모네가 자동으로 재시작됩니다.",
                 update.version
-            ));
+            )
+            .encode_utf16()
+            .chain([0])
+            .collect();
+            let caption: Vec<u16> = "업데이트 적용".encode_utf16().chain([0]).collect();
             MessageBoxW(
-                Some(self.hwnd),
-                &message,
-                windows::core::w!("업데이트 적용"),
+                self.hwnd,
+                message.as_ptr(),
+                caption.as_ptr(),
                 MB_ICONQUESTION | MB_YESNO,
             )
         };
@@ -337,10 +357,8 @@ impl App {
                 // 요청하고 여기서 직접 파괴하지 않는다 — 기존 WM_CLOSE 처리
                 // (AppCleanupGuard::drop → config.save() → AppServices::shutdown())를
                 // 그대로 밟게 하기 위해서다.
-                if let Err(error) =
-                    unsafe { PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
-                {
-                    tracing::error!("업데이트 적용 후 종료 요청(WM_CLOSE) 게시 실패: {error}");
+                if unsafe { PostMessageWSys(self.hwnd, WM_CLOSE, 0, 0) } == 0 {
+                    tracing::error!("업데이트 적용 후 종료 요청(WM_CLOSE) 게시 실패");
                     RESTART_REQUESTED.with(|flag| flag.set(false));
                 }
             }
@@ -351,15 +369,19 @@ impl App {
                     "업데이트 롤백 실패. 실행 파일이 {}에 남아 있습니다: {cause}",
                     backup.display()
                 );
-                let message = HSTRING::from(format!(
+                let message: Vec<u16> = format!(
                     "업데이트에 실패했고 이전 버전으로 되돌리지도 못했습니다.\n\n{}\n\n파일의 확장자를 .exe로 바꿔주세요.\n(원인: {cause})",
                     backup.display()
-                ));
+                )
+                .encode_utf16()
+                .chain([0])
+                .collect();
+                let caption: Vec<u16> = "업데이트 적용 실패".encode_utf16().chain([0]).collect();
                 unsafe {
                     let _ = MessageBoxW(
-                        Some(self.hwnd),
-                        &message,
-                        windows::core::w!("업데이트 적용 실패"),
+                        self.hwnd,
+                        message.as_ptr(),
+                        caption.as_ptr(),
                         MB_OK | MB_ICONERROR,
                     );
                 }
@@ -405,33 +427,30 @@ mod tests;
 /// 릴리스 페이지를 기본 브라우저로 연다. 자동 업데이트 경로가 막혀도 항상
 /// 남아 있는 수동 탈출구다.
 pub(crate) fn open_release_page(owner: HWND) {
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-    use windows::core::w;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     let url = format!(
         "https://github.com/{}/{}/releases",
         crate::update::GITHUB_OWNER,
         crate::update::GITHUB_REPO
     );
-    let url_wide = HSTRING::from(url);
+    let url_wide: Vec<u16> = url.encode_utf16().chain([0]).collect();
+    let operation: Vec<u16> = "open".encode_utf16().chain([0]).collect();
     // SAFETY: owner는 유효한 창 핸들이거나 무시돼도 되는 기본값이다. 나머지
     // 인자는 정적이거나 이 함수 스코프에서 살아 있는 값이다.
     let result = unsafe {
         ShellExecuteW(
-            Some(owner),
-            w!("open"),
-            &url_wide,
-            None,
-            None,
+            owner,
+            operation.as_ptr(),
+            url_wide.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
             SW_SHOWNORMAL,
         )
     };
     // ShellExecuteW는 성공 시 32보다 큰 값을 반환한다.
-    if result.0 as isize <= 32 {
-        tracing::warn!(
-            "릴리스 페이지를 열지 못했습니다 (코드 {})",
-            result.0 as isize
-        );
+    if (result as usize) <= 32 {
+        tracing::warn!("릴리스 페이지를 열지 못했습니다 (코드 {})", result as isize);
     }
 }

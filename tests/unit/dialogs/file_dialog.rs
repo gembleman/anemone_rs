@@ -1,12 +1,43 @@
-use super::show_was_accepted;
-use windows::Win32::Foundation::ERROR_CANCELLED;
-use windows::core::{Error, HRESULT};
+use super::{classify_common_dialog_result, parse_selection};
 
 #[test]
-fn distinguishes_user_cancel_from_com_failure() {
-    let cancelled = Error::from_hresult(HRESULT::from_win32(ERROR_CANCELLED.0));
-    assert!(!show_was_accepted(Err(cancelled)).unwrap());
+fn common_dialog_zero_error_is_cancel_but_nonzero_is_failure() {
+    assert!(classify_common_dialog_result("GetOpenFileNameW", 0).is_ok());
+    let error = classify_common_dialog_result("GetOpenFileNameW", 0x3003)
+        .expect_err("nonzero CommDlgExtendedError must be surfaced");
+    assert!(error.to_string().contains("12291"));
+}
 
-    let failure = Error::from_hresult(HRESULT(0x80004005u32 as i32));
-    assert!(show_was_accepted(Err(failure)).is_err());
+#[test]
+fn parses_cancelled_or_empty_selection_as_no_paths() {
+    assert!(parse_selection(&[0], false).is_empty());
+    assert!(parse_selection(&[], false).is_empty());
+}
+
+#[test]
+fn parses_single_and_multi_file_selections() {
+    let single = "C:\\input.txt"
+        .encode_utf16()
+        .chain([0])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        parse_selection(&single, false),
+        vec![std::path::PathBuf::from("C:\\input.txt")]
+    );
+
+    let multi = "C:\\data"
+        .encode_utf16()
+        .chain([0])
+        .chain("one.txt".encode_utf16())
+        .chain([0])
+        .chain("two.txt".encode_utf16())
+        .chain([0, 0])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        parse_selection(&multi, true),
+        vec![
+            std::path::PathBuf::from("C:\\data\\one.txt"),
+            std::path::PathBuf::from("C:\\data\\two.txt"),
+        ]
+    );
 }

@@ -30,6 +30,29 @@ pub async fn translate_async_with_client(
     let source_code = lang_utils::to_papago_code(source)?;
     let target_code = lang_utils::to_papago_code(target)?;
 
+    send_papago_request(
+        client,
+        ENDPOINT,
+        text,
+        source_code,
+        target_code,
+        client_id,
+        client_secret,
+    )
+    .await
+}
+
+/// 실제 HTTP 호출부. 엔드포인트를 인자로 받아 테스트에서 로컬 스텁 서버를
+/// 주입할 수 있게 한다 (운영 경로는 항상 `ENDPOINT` 상수를 넘긴다).
+async fn send_papago_request(
+    client: &reqwest::Client,
+    endpoint: &str,
+    text: &str,
+    source_code: &str,
+    target_code: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> TranslationResult {
     let params = [
         ("source", source_code),
         ("target", target_code),
@@ -37,7 +60,7 @@ pub async fn translate_async_with_client(
     ];
 
     let response = client
-        .post(ENDPOINT)
+        .post(endpoint)
         .header("X-NCP-APIGW-API-KEY-ID", client_id)
         .header("X-NCP-APIGW-API-KEY", client_secret)
         .form(&params)
@@ -77,3 +100,7 @@ fn parse_papago_response(json: &str) -> TranslationResult {
         "Papago 응답에서 번역 결과를 찾을 수 없습니다.".to_string(),
     ))
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/translation/papago_api.rs"]
+mod tests;

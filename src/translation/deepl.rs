@@ -118,7 +118,7 @@ fn build_deepl_request(
     let body_length = request
         .body()
         .and_then(reqwest::Body::as_bytes)
-        .map_or(0, |bytes| bytes.len());
+        .map_or(0, <[u8]>::len);
     if body_length > DEEPL_REQUEST_BODY_LIMIT {
         return Err(TranslationError::RequestTooLarge {
             engine: "DeepL",

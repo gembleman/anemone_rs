@@ -3,12 +3,9 @@
 use std::cell::RefCell;
 use std::mem::zeroed;
 
-use windows::{
-    Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
-        UI::Controls::Dialogs::*, UI::Controls::*, UI::WindowsAndMessaging::*,
-    },
-    core::*,
+use windows_sys::Win32::{
+    Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
+    UI::Controls::Dialogs::*, UI::Controls::*, UI::WindowsAndMessaging::*,
 };
 
 use super::TBM_GETPOS;
@@ -74,7 +71,7 @@ struct HookContext {
 
 thread_local! {
     static HOOK_CONTEXT: RefCell<Option<HookContext>> = const { RefCell::new(None) };
-    static CUSTOM_COLORS: RefCell<[COLORREF; 16]> = const { RefCell::new([COLORREF(0xFFFFFF); 16]) };
+    static CUSTOM_COLORS: RefCell<[COLORREF; 16]> = const { RefCell::new([0xFFFFFF; 16]) };
 }
 
 pub struct ColorDialog;
@@ -107,18 +104,15 @@ impl ColorDialog {
                 }
             });
 
-            let mut custom_colors = CUSTOM_COLORS.with(|c| {
-                c.try_borrow()
-                    .map(|g| *g)
-                    .unwrap_or([COLORREF(0xFFFFFF); 16])
-            });
+            let mut custom_colors =
+                CUSTOM_COLORS.with(|c| c.try_borrow().map_or([0xFFFFFF; 16], |g| *g));
 
             let mut cc: CHOOSECOLORW = zeroed();
-            cc.lStructSize = std::mem::size_of::<CHOOSECOLORW>() as u32;
+            cc.lStructSize = size_of::<CHOOSECOLORW>() as u32;
             cc.hwndOwner = hwnd;
             cc.lpCustColors = custom_colors.as_mut_ptr();
-            cc.rgbResult = COLORREF(initial_colorref);
-            cc.lCustData = LPARAM(alpha as isize);
+            cc.rgbResult = initial_colorref;
+            cc.lCustData = alpha as isize;
             cc.Flags = CC_FULLOPEN | CC_RGBINIT | CC_ENABLEHOOK;
             cc.lpfnHook = Some(Self::hook_proc);
 
@@ -146,8 +140,8 @@ impl ColorDialog {
                 }
             });
 
-            if result.as_bool() {
-                Some(ColorResult::from_colorref(cc.rgbResult.0, final_alpha))
+            if result != 0 {
+                Some(ColorResult::from_colorref(cc.rgbResult, final_alpha))
             } else {
                 None
             }
@@ -173,17 +167,32 @@ impl ColorDialog {
             });
 
             // Red
-            GetDlgItemTextW(hdlg, COLOR_RED_EDIT as i32, &mut buf);
+            GetDlgItemTextW(
+                hdlg,
+                COLOR_RED_EDIT as i32,
+                buf.as_mut_ptr(),
+                buf.len() as i32,
+            );
             let r_str = String::from_utf16_lossy(&buf);
             let r: u32 = r_str.trim_end_matches('\0').parse().unwrap_or(0);
 
             // Green
-            GetDlgItemTextW(hdlg, COLOR_GREEN_EDIT as i32, &mut buf);
+            GetDlgItemTextW(
+                hdlg,
+                COLOR_GREEN_EDIT as i32,
+                buf.as_mut_ptr(),
+                buf.len() as i32,
+            );
             let g_str = String::from_utf16_lossy(&buf);
             let g: u32 = g_str.trim_end_matches('\0').parse().unwrap_or(0);
 
             // Blue
-            GetDlgItemTextW(hdlg, COLOR_BLUE_EDIT as i32, &mut buf);
+            GetDlgItemTextW(
+                hdlg,
+                COLOR_BLUE_EDIT as i32,
+                buf.as_mut_ptr(),
+                buf.len() as i32,
+            );
             let b_str = String::from_utf16_lossy(&buf);
             let b: u32 = b_str.trim_end_matches('\0').parse().unwrap_or(0);
 
@@ -203,6 +212,258 @@ impl ColorDialog {
         });
     }
 
+    /// `WM_INITDIALOG` 처리: no-activate 스타일 적용과 알파 컨트롤 생성.
+    ///
+    /// # Safety
+    /// `hdlg`는 훅 프로시저가 받은 유효한 dialog handle이어야 한다.
+    unsafe fn handle_init_dialog(hdlg: HWND) -> usize {
+        // SAFETY: 호출자 계약상 hdlg는 유효한 dialog handle이다.
+        unsafe {
+            let (no_activate, show_alpha) = HOOK_CONTEXT.with(|ctx| {
+                ctx.try_borrow()
+                    .ok()
+                    .and_then(|guard| {
+                        guard
+                            .as_ref()
+                            .map(|context| (context.no_activate, context.show_alpha))
+                    })
+                    .unwrap_or((true, true))
+            });
+
+            if no_activate {
+                let ex_style = GetWindowLongW(hdlg, GWL_EXSTYLE);
+                SetWindowLongW(hdlg, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE as i32);
+            }
+
+            if !show_alpha {
+                return 1; // TRUE
+            }
+
+            // 다이얼로그 크기 확장 (알파 컨트롤 공간)
+            let mut rect: RECT = zeroed();
+            let _ = GetWindowRect(hdlg, &mut rect);
+            let extra_width = Self::scale_for_dpi(60, hdlg);
+            let _ = SetWindowPos(
+                hdlg,
+                std::ptr::null_mut(),
+                rect.left,
+                rect.top,
+                rect.right - rect.left + extra_width,
+                rect.bottom - rect.top,
+                SWP_NOZORDER,
+            );
+
+            let hfont = GetStockObject(DEFAULT_GUI_FONT);
+            let hinst = GetModuleHandleW(std::ptr::null());
+
+            // 알파 트랙바 생성
+            let trackbar = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                crate::win32::to_wide("msctls_trackbar32").as_ptr(),
+                crate::win32::to_wide("").as_ptr(),
+                TBS_VERT | TBS_BOTH | TBS_NOTICKS | WS_CHILD | WS_VISIBLE,
+                Self::scale_for_dpi(540, hdlg),
+                Self::scale_for_dpi(2, hdlg),
+                Self::scale_for_dpi(25, hdlg),
+                Self::scale_for_dpi(225, hdlg),
+                hdlg,
+                IDC_ALPHA_TRACKBAR as usize as *mut _,
+                hinst,
+                std::ptr::null(),
+            );
+
+            // Trackbar와 edit 중심에 맞춘 label.
+            let label = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                crate::win32::to_wide("STATIC").as_ptr(),
+                crate::win32::to_wide("불투명도").as_ptr(),
+                // SS_CENTER = 0x1. (windows 0.62 에 상수 노출 안 됨)
+                WS_CHILD | WS_VISIBLE | 0x1,
+                Self::scale_for_dpi(522, hdlg),
+                Self::scale_for_dpi(256, hdlg),
+                Self::scale_for_dpi(60, hdlg),
+                Self::scale_for_dpi(15, hdlg),
+                hdlg,
+                std::ptr::null_mut(),
+                hinst,
+                std::ptr::null(),
+            );
+
+            // 에디트 박스 생성
+            let edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                crate::win32::to_wide("EDIT").as_ptr(),
+                crate::win32::to_wide("").as_ptr(),
+                ES_CENTER as u32 | ES_AUTOHSCROLL as u32 | WS_CHILD | WS_VISIBLE | WS_BORDER,
+                Self::scale_for_dpi(540, hdlg),
+                Self::scale_for_dpi(230, hdlg),
+                Self::scale_for_dpi(25, hdlg),
+                Self::scale_for_dpi(18, hdlg),
+                hdlg,
+                IDC_ALPHA_EDIT as usize as *mut _,
+                hinst,
+                std::ptr::null(),
+            );
+
+            // lCustData에서 초기 알파값 가져오기
+            let initial_alpha = HOOK_CONTEXT.with(|ctx| {
+                ctx.try_borrow()
+                    .ok()
+                    .and_then(|g| g.as_ref().map(|c| c.alpha))
+                    .unwrap_or(255)
+            });
+
+            // 트랙바 범위 설정 (0-255)
+            let _ = SendDlgItemMessageW(
+                hdlg,
+                IDC_ALPHA_TRACKBAR as i32,
+                TBM_SETRANGE,
+                1,
+                (255 << 16) as isize,
+            );
+
+            // 트랙바 초기 위치
+            let _ = SendDlgItemMessageW(
+                hdlg,
+                IDC_ALPHA_TRACKBAR as i32,
+                TBM_SETPOS,
+                1,
+                initial_alpha as isize,
+            );
+
+            // 에디트 초기값
+            let alpha = crate::win32::to_wide(&initial_alpha.to_string());
+            let _ = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, alpha.as_ptr());
+
+            // 폰트 적용
+            if !trackbar.is_null() {
+                let _ = SendMessageW(trackbar, WM_SETFONT, hfont as usize, 0);
+            }
+            if !label.is_null() {
+                let _ = SendMessageW(label, WM_SETFONT, hfont as usize, 0);
+            }
+            if !edit.is_null() {
+                let _ = SendMessageW(edit, WM_SETFONT, hfont as usize, 0);
+            }
+
+            1 // TRUE
+        }
+    }
+
+    /// `WM_HSCROLL`/`WM_VSCROLL` 처리: 알파 트랙바 이동을 에디트/콜백에 반영.
+    ///
+    /// # Safety
+    /// `hdlg`는 훅 프로시저가 받은 유효한 dialog handle이어야 한다.
+    unsafe fn handle_alpha_scroll(hdlg: HWND, wparam: WPARAM) -> usize {
+        // SAFETY: 호출자 계약상 hdlg는 유효한 dialog handle이다.
+        unsafe {
+            // 트랙바 스크롤 처리
+            let code = (wparam & 0xFFFF) as u32;
+            let alpha = match super::trackbar_thumb_position(code, wparam) {
+                Some(alpha) => alpha,
+                None => match code {
+                    TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP | TB_BOTTOM
+                    | TB_ENDTRACK => {
+                        SendDlgItemMessageW(hdlg, IDC_ALPHA_TRACKBAR as i32, TBM_GETPOS, 0, 0)
+                            as i32
+                    }
+                    _ => return 0,
+                },
+            };
+
+            // 에디트 업데이트
+            let alpha_text = crate::win32::to_wide(&alpha.to_string());
+            let _ = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, alpha_text.as_ptr());
+
+            // 컨텍스트에 알파값 저장
+            HOOK_CONTEXT.with(|ctx| {
+                if let Ok(mut guard) = ctx.try_borrow_mut()
+                    && let Some(ref mut c) = *guard
+                {
+                    c.alpha = alpha;
+                }
+            });
+
+            Self::notify_color_change(hdlg);
+            0 // FALSE
+        }
+    }
+
+    /// `WM_COMMAND` 처리: 알파/RGB 에디트 변경을 콜백에 반영.
+    ///
+    /// # Safety
+    /// `hdlg`는 훅 프로시저가 받은 유효한 dialog handle이어야 한다.
+    unsafe fn handle_command(hdlg: HWND, wparam: WPARAM) -> usize {
+        // SAFETY: 호출자 계약상 hdlg는 유효한 dialog handle이다.
+        unsafe {
+            let id = (wparam & 0xFFFF) as u16;
+            let notification = ((wparam >> 16) & 0xFFFF) as u32;
+            if id == IDC_ALPHA_EDIT && matches!(notification, EN_CHANGE | EN_KILLFOCUS) {
+                let mut buffer = [0u16; 16];
+                GetDlgItemTextW(
+                    hdlg,
+                    IDC_ALPHA_EDIT as i32,
+                    buffer.as_mut_ptr(),
+                    buffer.len() as i32,
+                );
+                let text = String::from_utf16_lossy(&buffer);
+                if let Ok(value) = text.trim_end_matches('\0').parse::<i32>() {
+                    let alpha = value.clamp(0, 255);
+                    let _ = SendDlgItemMessageW(
+                        hdlg,
+                        IDC_ALPHA_TRACKBAR as i32,
+                        TBM_SETPOS,
+                        1,
+                        alpha as isize,
+                    );
+                    HOOK_CONTEXT.with(|ctx| {
+                        if let Ok(mut guard) = ctx.try_borrow_mut()
+                            && let Some(ref mut context) = *guard
+                        {
+                            context.alpha = alpha;
+                        }
+                    });
+                    if notification == EN_KILLFOCUS && value != alpha {
+                        let value = crate::win32::to_wide(&alpha.to_string());
+                        let _ = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, value.as_ptr());
+                    }
+                    Self::notify_color_change(hdlg);
+                }
+            } else if matches!(id, COLOR_RED_EDIT | COLOR_GREEN_EDIT | COLOR_BLUE_EDIT)
+                && notification == EN_CHANGE
+            {
+                // 팔레트, 색상 스펙트럼, 키보드/직접 입력 모두 RGB edit을 갱신한다.
+                Self::notify_color_change(hdlg);
+            }
+            0 // FALSE
+        }
+    }
+
+    /// `WM_MOVING`/`WM_SIZING` 처리: `WS_EX_NOACTIVATE` 스타일 적용 시 위치/크기 변경 강제.
+    ///
+    /// # Safety
+    /// `hdlg`는 훅 프로시저가 받은 유효한 dialog handle이고, `lparam`은 해당
+    /// message의 `RECT` 포인터여야 한다.
+    unsafe fn handle_moving_or_sizing(hdlg: HWND, lparam: LPARAM) -> usize {
+        // SAFETY: 호출자 계약상 lparam은 WM_MOVING/WM_SIZING의 RECT 포인터다.
+        unsafe {
+            let prc = lparam as *mut RECT;
+            if !prc.is_null() {
+                let rc = &*prc;
+                let _ = SetWindowPos(
+                    hdlg,
+                    std::ptr::null_mut(),
+                    rc.left,
+                    rc.top,
+                    rc.right - rc.left,
+                    rc.bottom - rc.top,
+                    SWP_NOZORDER,
+                );
+            }
+            0 // FALSE
+        }
+    }
+
     /// CHOOSECOLOR 훅 프로시저
     // SAFETY: Windows가 유효한 dialog와 message pointer로 같은 thread에서 호출한다.
     unsafe extern "system" fn hook_proc(
@@ -213,255 +474,12 @@ impl ColorDialog {
     ) -> usize {
         unsafe {
             match msg {
-                WM_INITDIALOG => {
-                    let (no_activate, show_alpha) = HOOK_CONTEXT.with(|ctx| {
-                        ctx.try_borrow()
-                            .ok()
-                            .and_then(|guard| {
-                                guard
-                                    .as_ref()
-                                    .map(|context| (context.no_activate, context.show_alpha))
-                            })
-                            .unwrap_or((true, true))
-                    });
-
-                    if no_activate {
-                        let ex_style = GetWindowLongW(hdlg, GWL_EXSTYLE);
-                        SetWindowLongW(hdlg, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE.0 as i32);
-                    }
-
-                    if !show_alpha {
-                        return 1; // TRUE
-                    }
-
-                    // 다이얼로그 크기 확장 (알파 컨트롤 공간)
-                    let mut rect: RECT = zeroed();
-                    let _ = GetWindowRect(hdlg, &mut rect);
-                    let extra_width = Self::scale_for_dpi(60, hdlg);
-                    let _ = SetWindowPos(
-                        hdlg,
-                        None,
-                        rect.left,
-                        rect.top,
-                        rect.right - rect.left + extra_width,
-                        rect.bottom - rect.top,
-                        SWP_NOZORDER,
-                    );
-
-                    let hfont = GetStockObject(DEFAULT_GUI_FONT);
-                    let hinst = GetModuleHandleW(None).unwrap_or_default();
-
-                    // 알파 트랙바 생성
-                    let trackbar = CreateWindowExW(
-                        WINDOW_EX_STYLE::default(),
-                        w!("msctls_trackbar32"),
-                        w!(""),
-                        WINDOW_STYLE(TBS_VERT | TBS_BOTH | TBS_NOTICKS | WS_CHILD.0 | WS_VISIBLE.0),
-                        Self::scale_for_dpi(540, hdlg),
-                        Self::scale_for_dpi(2, hdlg),
-                        Self::scale_for_dpi(25, hdlg),
-                        Self::scale_for_dpi(225, hdlg),
-                        Some(hdlg),
-                        Some(HMENU(IDC_ALPHA_TRACKBAR as isize as *mut _)),
-                        Some(hinst.into()),
-                        None,
-                    );
-
-                    // Trackbar와 edit 중심에 맞춘 label.
-                    let label = CreateWindowExW(
-                        WINDOW_EX_STYLE::default(),
-                        w!("STATIC"),
-                        w!("불투명도"),
-                        // SS_CENTER = 0x1. (windows 0.62 에 상수 노출 안 됨)
-                        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | 0x1),
-                        Self::scale_for_dpi(522, hdlg),
-                        Self::scale_for_dpi(256, hdlg),
-                        Self::scale_for_dpi(60, hdlg),
-                        Self::scale_for_dpi(15, hdlg),
-                        Some(hdlg),
-                        None,
-                        Some(hinst.into()),
-                        None,
-                    );
-
-                    // 에디트 박스 생성
-                    let edit = CreateWindowExW(
-                        WS_EX_CLIENTEDGE,
-                        w!("EDIT"),
-                        w!(""),
-                        WINDOW_STYLE(
-                            ES_CENTER as u32
-                                | ES_AUTOHSCROLL as u32
-                                | WS_CHILD.0
-                                | WS_VISIBLE.0
-                                | WS_BORDER.0,
-                        ),
-                        Self::scale_for_dpi(540, hdlg),
-                        Self::scale_for_dpi(230, hdlg),
-                        Self::scale_for_dpi(25, hdlg),
-                        Self::scale_for_dpi(18, hdlg),
-                        Some(hdlg),
-                        Some(HMENU(IDC_ALPHA_EDIT as isize as *mut _)),
-                        Some(hinst.into()),
-                        None,
-                    );
-
-                    // lCustData에서 초기 알파값 가져오기
-                    let initial_alpha = HOOK_CONTEXT.with(|ctx| {
-                        ctx.try_borrow()
-                            .ok()
-                            .and_then(|g| g.as_ref().map(|c| c.alpha))
-                            .unwrap_or(255)
-                    });
-
-                    // 트랙바 범위 설정 (0-255)
-                    let _ = SendDlgItemMessageW(
-                        hdlg,
-                        IDC_ALPHA_TRACKBAR as i32,
-                        TBM_SETRANGE,
-                        WPARAM(1),
-                        LPARAM((255 << 16) as isize),
-                    );
-
-                    // 트랙바 초기 위치
-                    let _ = SendDlgItemMessageW(
-                        hdlg,
-                        IDC_ALPHA_TRACKBAR as i32,
-                        TBM_SETPOS,
-                        WPARAM(1),
-                        LPARAM(initial_alpha as isize),
-                    );
-
-                    // 에디트 초기값
-                    let alpha = HSTRING::from(initial_alpha.to_string());
-                    if let Err(e) = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &alpha) {
-                        tracing::warn!("SetDlgItemTextW failed: {e}");
-                    }
-
-                    // 폰트 적용
-                    if let Ok(trackbar) = trackbar {
-                        let _ = SendMessageW(
-                            trackbar,
-                            WM_SETFONT,
-                            Some(WPARAM(hfont.0 as usize)),
-                            Some(LPARAM(0)),
-                        );
-                    }
-                    if let Ok(label) = label {
-                        let _ = SendMessageW(
-                            label,
-                            WM_SETFONT,
-                            Some(WPARAM(hfont.0 as usize)),
-                            Some(LPARAM(0)),
-                        );
-                    }
-                    if let Ok(edit) = edit {
-                        let _ = SendMessageW(
-                            edit,
-                            WM_SETFONT,
-                            Some(WPARAM(hfont.0 as usize)),
-                            Some(LPARAM(0)),
-                        );
-                    }
-
-                    return 1; // TRUE
-                }
-
-                WM_HSCROLL | WM_VSCROLL => {
-                    // 트랙바 스크롤 처리
-                    let code = (wparam.0 & 0xFFFF) as u32;
-                    let alpha = match super::trackbar_thumb_position(code, wparam.0) {
-                        Some(alpha) => alpha,
-                        None => match code {
-                            TB_LINEUP | TB_LINEDOWN | TB_PAGEUP | TB_PAGEDOWN | TB_TOP
-                            | TB_BOTTOM | TB_ENDTRACK => {
-                                SendDlgItemMessageW(
-                                    hdlg,
-                                    IDC_ALPHA_TRACKBAR as i32,
-                                    TBM_GETPOS,
-                                    WPARAM(0),
-                                    LPARAM(0),
-                                )
-                                .0 as i32
-                            }
-                            _ => return 0,
-                        },
-                    };
-
-                    // 에디트 업데이트
-                    let alpha_text = HSTRING::from(alpha.to_string());
-                    let _ = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &alpha_text);
-
-                    // 컨텍스트에 알파값 저장
-                    HOOK_CONTEXT.with(|ctx| {
-                        if let Ok(mut guard) = ctx.try_borrow_mut()
-                            && let Some(ref mut c) = *guard
-                        {
-                            c.alpha = alpha;
-                        }
-                    });
-
-                    Self::notify_color_change(hdlg);
-                }
-
-                WM_COMMAND => {
-                    let id = (wparam.0 & 0xFFFF) as u16;
-                    let notification = ((wparam.0 >> 16) & 0xFFFF) as u32;
-                    if id == IDC_ALPHA_EDIT && matches!(notification, EN_CHANGE | EN_KILLFOCUS) {
-                        let mut buffer = [0u16; 16];
-                        GetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &mut buffer);
-                        let text = String::from_utf16_lossy(&buffer);
-                        if let Ok(value) = text.trim_end_matches('\0').parse::<i32>() {
-                            let alpha = value.clamp(0, 255);
-                            let _ = SendDlgItemMessageW(
-                                hdlg,
-                                IDC_ALPHA_TRACKBAR as i32,
-                                TBM_SETPOS,
-                                WPARAM(1),
-                                LPARAM(alpha as isize),
-                            );
-                            HOOK_CONTEXT.with(|ctx| {
-                                if let Ok(mut guard) = ctx.try_borrow_mut()
-                                    && let Some(ref mut context) = *guard
-                                {
-                                    context.alpha = alpha;
-                                }
-                            });
-                            if notification == EN_KILLFOCUS && value != alpha {
-                                let value = HSTRING::from(alpha.to_string());
-                                let _ = SetDlgItemTextW(hdlg, IDC_ALPHA_EDIT as i32, &value);
-                            }
-                            Self::notify_color_change(hdlg);
-                        }
-                    } else if matches!(id, COLOR_RED_EDIT | COLOR_GREEN_EDIT | COLOR_BLUE_EDIT)
-                        && notification == EN_CHANGE
-                    {
-                        // 팔레트, 색상 스펙트럼, 키보드/직접 입력 모두 RGB edit을 갱신한다.
-                        Self::notify_color_change(hdlg);
-                    }
-                }
-
-                WM_MOVING | WM_SIZING => {
-                    // WS_EX_NOACTIVATE 스타일 적용 시 위치/크기 변경 강제
-                    let prc = lparam.0 as *mut RECT;
-                    if !prc.is_null() {
-                        let rc = &*prc;
-                        let _ = SetWindowPos(
-                            hdlg,
-                            None,
-                            rc.left,
-                            rc.top,
-                            rc.right - rc.left,
-                            rc.bottom - rc.top,
-                            SWP_NOZORDER,
-                        );
-                    }
-                }
-
-                _ => {}
+                WM_INITDIALOG => Self::handle_init_dialog(hdlg),
+                WM_HSCROLL | WM_VSCROLL => Self::handle_alpha_scroll(hdlg, wparam),
+                WM_COMMAND => Self::handle_command(hdlg, wparam),
+                WM_MOVING | WM_SIZING => Self::handle_moving_or_sizing(hdlg, lparam),
+                _ => 0, // FALSE
             }
-
-            0 // FALSE
         }
     }
 }

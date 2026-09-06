@@ -12,7 +12,7 @@ use crate::translation::TranslationEngine;
 
 const AFTER_HELP: &str = r#"인자 없이 실행하면 GUI 모드로 시작합니다.
 
-ENGINE: eztrans | google | deepl | papago | llm | custom
+ENGINE: eztrans | google | deepl | papago | llm | mys_translater | custom
 LANG:   ISO 639-1 (예: ja, ko, en, zh)"#;
 
 #[derive(Parser)]
@@ -58,6 +58,8 @@ pub(super) enum Engine {
     Papago,
     #[value(name = "llm")]
     Llm,
+    #[value(name = "mys_translater")]
+    MysTranslater,
     #[value(name = "custom")]
     Custom,
 }
@@ -70,12 +72,14 @@ impl From<Engine> for TranslationEngine {
             Engine::DeepL => Self::DeepL,
             Engine::Papago => Self::Papago,
             Engine::Llm => Self::Llm,
+            Engine::MysTranslater => Self::MysTranslater,
             Engine::Custom => Self::Custom,
         }
     }
 }
 
 /// CLI 실행 결과. `main` 의 종료 코드와 매핑된다.
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub enum CliOutcome {
     /// CLI 처리를 완료하고 종료해야 함. exit code 포함.
     Done(i32),
@@ -85,7 +89,13 @@ pub enum CliOutcome {
 
 /// 결과를 표준 stream에 쓰고 종료 여부와 code를 반환한다.
 pub fn run() -> CliOutcome {
-    let argv: Vec<OsString> = std::env::args_os().collect();
+    run_with_argv(std::env::args_os().collect())
+}
+
+/// `run`에서 실제 프로세스 인자를 분리해, 인자 파싱/분기 결과를 테스트에서
+/// 실제 프로세스 인자나 `Config::load_or_default()`의 파일 시스템 접근 없이
+/// 검증할 수 있게 한다.
+fn run_with_argv(argv: Vec<OsString>) -> CliOutcome {
     if argv.len() <= 1 {
         return CliOutcome::Gui;
     }

@@ -7,7 +7,8 @@ use clap::ValueEnum;
 
 use crate::config::Config;
 use crate::file_trans::{
-    FileTransJobData, ProgressEvent, WriteType as CoreWriteType, run as run_file_trans,
+    FileTranslationProgress, FileTranslationRequest, WriteType as CoreWriteType,
+    run as run_file_trans,
 };
 use crate::translation::PreparedJob;
 
@@ -39,6 +40,13 @@ pub(super) struct Args {
 }
 
 pub(super) fn run(args: Args) -> Result<(), String> {
+    run_with_config(args, Config::load_or_default())
+}
+
+/// `run`에서 설정 로드를 분리해, 테스트가 실제 사용자 설정 파일을 건드리지
+/// 않고 파일 번역 실행 경로(엔진/언어 결정, 실제 파일 I/O와 번역 호출)를
+/// 검증할 수 있게 한다.
+pub(super) fn run_with_config(args: Args, config: Config) -> Result<(), String> {
     let Args {
         input,
         output,
@@ -49,14 +57,13 @@ pub(super) fn run(args: Args) -> Result<(), String> {
         no_trans_linefeed,
     } = args;
 
-    let config = Config::load_or_default();
     let engine = resolve_engine(engine, &config)?;
     let (source_lang, target_lang) = resolve_languages(&source, &target, &config)?;
 
     let translation =
         PreparedJob::with_engine_languages(&config.translation, engine, source_lang, target_lang)
             .map_err(|error| error.to_string())?;
-    let job = FileTransJobData {
+    let job = FileTranslationRequest {
         input_files: vec![input],
         output_files: vec![output],
         write_type: write_type.into(),
@@ -68,8 +75,10 @@ pub(super) fn run(args: Args) -> Result<(), String> {
     let error = RefCell::new(None);
 
     run_file_trans(&job, |event| match event {
-        ProgressEvent::TotalLines(value) => total.set(value.max(0) as usize),
-        ProgressEvent::Finished(Err(message)) => *error.borrow_mut() = Some(message.to_string()),
+        FileTranslationProgress::TotalLines(value) => total.set(value.max(0) as usize),
+        FileTranslationProgress::Finished(Err(message)) => {
+            *error.borrow_mut() = Some(message.to_string())
+        }
         _ => {}
     });
 
@@ -109,3 +118,7 @@ impl From<WriteType> for CoreWriteType {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/cli/file_trans.rs"]
+mod tests;

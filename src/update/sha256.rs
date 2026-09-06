@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use windows::Win32::Security::Cryptography::{
+use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE, BCRYPT_SHA256_ALGORITHM, BCryptCloseAlgorithmProvider,
     BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash, BCryptHashData,
     BCryptOpenAlgorithmProvider,
@@ -29,11 +29,16 @@ impl Digest {
             return Err(HashError::InvalidHex);
         }
         let mut bytes = [0u8; DIGEST_LEN];
-        for (index, chunk) in text.as_bytes().chunks_exact(2).enumerate() {
+        for (index, chunk) in text.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let pair = std::str::from_utf8(chunk).map_err(|_| HashError::InvalidHex)?;
             bytes[index] = u8::from_str_radix(pair, 16).map_err(|_| HashError::InvalidHex)?;
         }
         Ok(Self(bytes))
+    }
+
+    /// 원시 다이제스트. 16진 표기를 거치지 않고 키 유도에 쓸 때 필요하다.
+    pub fn as_bytes(&self) -> &[u8; DIGEST_LEN] {
+        &self.0
     }
 }
 
@@ -65,14 +70,17 @@ impl Hasher {
         // SAFETY: 출력 핸들 포인터가 유효하고, 실패 시 핸들은 null로 남는다.
         let algorithm = unsafe {
             let mut handle = BCRYPT_ALG_HANDLE::default();
-            BCryptOpenAlgorithmProvider(
+            let status = BCryptOpenAlgorithmProvider(
                 &mut handle,
                 BCRYPT_SHA256_ALGORITHM,
-                None,
-                Default::default(),
-            )
-            .ok()
-            .map_err(|error| HashError::Cng(error.to_string()))?;
+                std::ptr::null(),
+                0,
+            );
+            if status != 0 {
+                return Err(HashError::Cng(format!(
+                    "BCryptOpenAlgorithmProvider: 0x{status:08X}"
+                )));
+            }
             AlgorithmHandle(handle)
         };
 
@@ -80,9 +88,18 @@ impl Hasher {
         // 넘기면 CNG가 직접 할당한다(Win8+). 타깃이 Win10이라 문제없다.
         let hash = unsafe {
             let mut handle = BCRYPT_HASH_HANDLE::default();
-            BCryptCreateHash(algorithm.0, &mut handle, None, None, 0)
-                .ok()
-                .map_err(|error| HashError::Cng(error.to_string()))?;
+            let status = BCryptCreateHash(
+                algorithm.0,
+                &mut handle,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+            );
+            if status != 0 {
+                return Err(HashError::Cng(format!("BCryptCreateHash: 0x{status:08X}")));
+            }
             HashHandle(handle)
         };
 
@@ -96,12 +113,18 @@ impl Hasher {
         if data.is_empty() {
             return Ok(());
         }
-        // SAFETY: hash 핸들이 유효하고 data 슬라이스 길이가 함께 전달된다.
-        unsafe {
-            BCryptHashData(self.hash.0, data, 0)
-                .ok()
-                .map_err(|error| HashError::Cng(error.to_string()))
+        // BCryptHashData 길이는 u32이므로 큰 슬라이스도 잘리지 않게 나눠 넣는다.
+        for chunk in data.chunks(u32::MAX as usize) {
+            // SAFETY: hash 핸들이 유효하고 chunk 길이는 u32 범위 안이며 포인터와
+            // 길이가 같은 슬라이스에서 나온다.
+            unsafe {
+                let status = BCryptHashData(self.hash.0, chunk.as_ptr(), chunk.len() as u32, 0);
+                if status != 0 {
+                    return Err(HashError::Cng(format!("BCryptHashData: 0x{status:08X}")));
+                }
+            }
         }
+        Ok(())
     }
 
     /// 다이제스트를 확정한다. 호출 후 이 hasher는 재사용할 수 없다.
@@ -109,9 +132,10 @@ impl Hasher {
         let mut digest = [0u8; DIGEST_LEN];
         // SAFETY: 출력 버퍼가 SHA-256 다이제스트 길이와 정확히 같다.
         unsafe {
-            BCryptFinishHash(self.hash.0, &mut digest, 0)
-                .ok()
-                .map_err(|error| HashError::Cng(error.to_string()))?;
+            let status = BCryptFinishHash(self.hash.0, digest.as_mut_ptr(), digest.len() as u32, 0);
+            if status != 0 {
+                return Err(HashError::Cng(format!("BCryptFinishHash: 0x{status:08X}")));
+            }
         }
         Ok(Digest(digest))
     }
@@ -119,10 +143,8 @@ impl Hasher {
 
 /// 한 번에 전체 버퍼를 해시한다.
 ///
-/// 프로덕션 경로(`download.rs`)는 스트리밍 `Hasher`를 쓰므로 이 함수는 현재
-/// 단위 테스트(`tests/unit/update/sha256.rs`)에서만 쓰인다. 공개 API로 남겨
-/// 두는 게 자연스러운 one-shot 헬퍼라 `#[allow(dead_code)]`만 붙인다.
-#[allow(dead_code)]
+/// 다운로드 검증(`download.rs`)은 스트리밍 `Hasher`를 쓰지만, 짧은 버퍼를
+/// 한 번에 해시하는 곳에서는 이 one-shot 헬퍼를 쓴다.
 pub fn digest(data: &[u8]) -> Result<Digest, HashError> {
     let mut hasher = Hasher::new()?;
     hasher.update(data)?;

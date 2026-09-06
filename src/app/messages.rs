@@ -1,6 +1,6 @@
 //! 프로세스 내 Win32 창들이 공유하는 사용자 정의 메시지 ID.
 
-use windows::Win32::UI::WindowsAndMessaging::{WM_APP, WM_USER};
+use windows_sys::Win32::UI::WindowsAndMessaging::{WM_APP, WM_USER};
 
 pub(crate) const WM_TRAY_ICON: u32 = WM_USER + 1;
 pub(crate) const WM_TRANSLATION_COMPLETE: u32 = WM_USER + 100;

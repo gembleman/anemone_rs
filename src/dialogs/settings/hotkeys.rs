@@ -1,21 +1,20 @@
 //! 단축키 탭의 리스트 표시와 키 조합 캡처.
 
-use windows::{
-    Win32::{
-        Foundation::*,
-        UI::{
-            Controls::*,
-            Input::KeyboardAndMouse::*,
-            Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
-            WindowsAndMessaging::*,
-        },
+use windows_core::{Error, HRESULT};
+use windows_sys::Win32::{
+    Foundation::*,
+    UI::{
+        Controls::*,
+        Input::KeyboardAndMouse::*,
+        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+        WindowsAndMessaging::*,
     },
-    core::*,
 };
 
 use super::{SettingsDialog, ctrl_id};
 use crate::config::{HotkeyConfig, HotkeySlot, HotkeySpec};
 use crate::win32::to_wide;
+type Result<T> = windows_core::Result<T>;
 
 pub(super) const WM_HOTKEY_CAPTURED: u32 = WM_APP + 0x31;
 const HOTKEY_LIST_SUBCLASS_ID: usize = 1;
@@ -46,24 +45,16 @@ fn is_modifier_key(vk: u32) -> bool {
         VK_RWIN,
     ]
     .iter()
-    .any(|candidate| candidate.0 as u32 == vk)
+    .any(|candidate| *candidate as u32 == vk)
 }
 
 fn selected_row(list: HWND) -> Option<usize> {
-    let row = unsafe {
-        SendMessageW(
-            list,
-            LVM_GETNEXTITEM,
-            Some(WPARAM(usize::MAX)),
-            Some(LPARAM(LVNI_SELECTED as isize)),
-        )
-        .0
-    };
+    let row = unsafe { SendMessageW(list, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as isize) };
     (row >= 0).then_some(row as usize)
 }
 
 fn key_is_down(vk: VIRTUAL_KEY) -> bool {
-    unsafe { GetKeyState(vk.0 as i32) < 0 }
+    unsafe { GetKeyState(vk as i32) < 0 }
 }
 
 fn hotkey_from_state(vk: u32, ctrl: bool, shift: bool, alt: bool, win: bool) -> HotkeySpec {
@@ -106,25 +97,19 @@ unsafe extern "system" fn hotkey_list_subclass_proc(
                 let Some(row) = selected_row(hwnd) else {
                     return DefSubclassProc(hwnd, msg, wparam, lparam);
                 };
-                let vk = wparam.0 as u32;
+                let vk = wparam as u32;
                 // Ctrl -> Shift -> K 순으로 들어와도 수정자만으로는 절대 확정하지 않는다.
                 // 자동 반복 역시 최초 입력 한 번만 반영한다.
                 if !is_modifier_key(vk)
-                    && (lparam.0 & (1 << 30)) == 0
-                    && let Ok(parent) = GetParent(hwnd)
+                    && (lparam & (1 << 30)) == 0
+                    && let parent = GetParent(hwnd)
+                    && !parent.is_null()
                 {
-                    let _ = SendMessageW(
-                        parent,
-                        WM_HOTKEY_CAPTURED,
-                        Some(WPARAM(row)),
-                        Some(LPARAM(vk as isize)),
-                    );
+                    let _ = SendMessageW(parent, WM_HOTKEY_CAPTURED, row, vk as isize);
                 }
-                LRESULT(0)
+                0
             }
-            WM_KEYUP | WM_SYSKEYUP | WM_CHAR | WM_SYSCHAR if selected_row(hwnd).is_some() => {
-                LRESULT(0)
-            }
+            WM_KEYUP | WM_SYSKEYUP | WM_CHAR | WM_SYSCHAR if selected_row(hwnd).is_some() => 0,
             WM_NCDESTROY => {
                 let _ = RemoveWindowSubclass(hwnd, Some(hotkey_list_subclass_proc), subclass_id);
                 DefSubclassProc(hwnd, msg, wparam, lparam)
@@ -142,12 +127,14 @@ impl SettingsDialog {
             let _ = SendMessageW(
                 list,
                 LVM_SETEXTENDEDLISTVIEWSTYLE,
-                Some(WPARAM(styles as usize)),
-                Some(LPARAM(styles as isize)),
+                styles as usize,
+                styles as isize,
             );
 
             let mut client = RECT::default();
-            GetClientRect(list, &mut client)?;
+            if GetClientRect(list, &mut client) == 0 {
+                return Err(Error::from_thread());
+            }
             let width = (client.right - client.left).max(2);
             self.insert_hotkey_column(list, 0, "기능", width * 48 / 100)?;
             self.insert_hotkey_column(list, 1, "단축키", width * 52 / 100)?;
@@ -162,11 +149,10 @@ impl SettingsDialog {
                 Some(hotkey_list_subclass_proc),
                 HOTKEY_LIST_SUBCLASS_ID,
                 0,
-            )
-            .as_bool()
+            ) == 0
             {
                 return Err(Error::new(
-                    E_FAIL,
+                    HRESULT(E_FAIL),
                     "단축키 입력 처리를 초기화할 수 없습니다",
                 ));
             }
@@ -185,7 +171,7 @@ impl SettingsDialog {
         let column = LVCOLUMNW {
             mask: LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM,
             cx: width,
-            pszText: PWSTR(text.as_mut_ptr()),
+            pszText: text.as_mut_ptr(),
             iSubItem: index as i32,
             ..Default::default()
         };
@@ -193,13 +179,15 @@ impl SettingsDialog {
             SendMessageW(
                 list,
                 LVM_INSERTCOLUMNW,
-                Some(WPARAM(index)),
-                Some(LPARAM(&column as *const LVCOLUMNW as isize)),
+                index,
+                &column as *const LVCOLUMNW as isize,
             )
-            .0
         };
         if result < 0 {
-            Err(Error::new(E_FAIL, "단축키 목록 열을 만들 수 없습니다"))
+            Err(Error::new(
+                HRESULT(E_FAIL),
+                "단축키 목록 열을 만들 수 없습니다",
+            ))
         } else {
             Ok(())
         }
@@ -210,20 +198,16 @@ impl SettingsDialog {
         let item = LVITEMW {
             mask: LVIF_TEXT,
             iItem: row as i32,
-            pszText: PWSTR(text.as_mut_ptr()),
+            pszText: text.as_mut_ptr(),
             ..Default::default()
         };
-        let result = unsafe {
-            SendMessageW(
-                list,
-                LVM_INSERTITEMW,
-                Some(WPARAM(0)),
-                Some(LPARAM(&item as *const LVITEMW as isize)),
-            )
-            .0
-        };
+        let result =
+            unsafe { SendMessageW(list, LVM_INSERTITEMW, 0, &item as *const LVITEMW as isize) };
         if result < 0 {
-            Err(Error::new(E_FAIL, "단축키 목록 항목을 만들 수 없습니다"))
+            Err(Error::new(
+                HRESULT(E_FAIL),
+                "단축키 목록 항목을 만들 수 없습니다",
+            ))
         } else {
             Ok(())
         }
@@ -281,15 +265,15 @@ impl SettingsDialog {
             let mut text = to_wide(&hotkeys.get(*slot).to_string());
             let item = LVITEMW {
                 iSubItem: 1,
-                pszText: PWSTR(text.as_mut_ptr()),
+                pszText: text.as_mut_ptr(),
                 ..Default::default()
             };
             unsafe {
                 let _ = SendMessageW(
                     list,
                     LVM_SETITEMTEXTW,
-                    Some(WPARAM(row)),
-                    Some(LPARAM(&item as *const LVITEMW as isize)),
+                    row,
+                    &item as *const LVITEMW as isize,
                 );
             }
         }
@@ -297,53 +281,5 @@ impl SettingsDialog {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn modifier_keys_are_not_complete_hotkeys() {
-        for key in [
-            VK_CONTROL,
-            VK_LCONTROL,
-            VK_RCONTROL,
-            VK_SHIFT,
-            VK_LSHIFT,
-            VK_RSHIFT,
-            VK_MENU,
-            VK_LMENU,
-            VK_RMENU,
-            VK_LWIN,
-            VK_RWIN,
-        ] {
-            assert!(is_modifier_key(key.0 as u32));
-        }
-        assert!(!is_modifier_key(VK_K.0 as u32));
-    }
-
-    #[test]
-    fn main_key_keeps_all_pressed_modifiers() {
-        let spec = hotkey_from_state(VK_K.0 as u32, true, true, false, false);
-        assert_eq!(spec.to_string(), "Ctrl+Shift+K");
-        assert!(spec.ctrl);
-        assert!(spec.shift);
-        assert_eq!(spec.vk, VK_K.0 as u32);
-    }
-
-    #[test]
-    fn list_rows_map_to_stable_hotkey_slots() {
-        assert_eq!(slot_from_row(0), Some(HotkeySlot::ToggleWindow));
-        assert_eq!(slot_from_row(3), Some(HotkeySlot::ClipboardWatch));
-        assert_eq!(slot_from_row(4), None);
-    }
-
-    #[test]
-    fn reset_hotkeys_restores_defaults_only_when_needed() {
-        let defaults = HotkeyConfig::default();
-        let mut hotkeys = defaults.clone();
-        hotkeys.toggle_window = HotkeySpec::new(false, false, false, false, VK_F8.0 as u32);
-
-        assert!(reset_hotkeys(&mut hotkeys));
-        assert_eq!(hotkeys, defaults);
-        assert!(!reset_hotkeys(&mut hotkeys));
-    }
-}
+#[path = "../../../tests/unit/dialogs/settings/hotkeys.rs"]
+mod tests;

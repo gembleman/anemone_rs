@@ -39,7 +39,7 @@ fn build_line(matching_entries: usize, line_len: usize) -> String {
     // 사전 항목을 반복해 배치해 넣고 나머지는 평문으로 채운다.
     let mut parts: Vec<String> = Vec::new();
     let mut i = 0;
-    while parts.iter().map(|p| p.len()).sum::<usize>() < line_len {
+    while parts.iter().map(std::string::String::len).sum::<usize>() < line_len {
         if i % 3 == 0 && matching_entries > 0 {
             parts.push(format!("これはテスト文{:04}です", i % matching_entries));
             i += 1;
@@ -82,9 +82,9 @@ fn measures_postprocess_dictionary_scan() {
             .expect("non-empty dictionary builds an automaton");
         // 각 줄을 한 번만 만들어 재사용한다 (postprocess 비용만 분리).
         let lines = [
-            build_line(dict_size, 200),   // 전부 매칭 (사전이 줄마다 걸림)
+            build_line(dict_size, 200),      // 전부 매칭 (사전이 줄마다 걸림)
             build_line(dict_size / 10, 200), // 일부 매칭
-            build_line(0, 200),           // 전부 미매칭
+            build_line(0, 200),              // 전부 미매칭
         ];
         let labels = ["all-match", "partial", "no-match"];
         for (line, label) in lines.iter().zip(labels) {

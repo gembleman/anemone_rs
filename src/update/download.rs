@@ -5,6 +5,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use super::{
     AvailableUpdate, CHECK_TIMEOUT, DOWNLOAD_TIMEOUT, MAX_ASSET_BYTES, MAX_CHECKSUM_BODY,
@@ -77,13 +78,67 @@ pub(super) async fn download_with_asset_name(
     mut on_progress: impl FnMut(DownloadProgress),
 ) -> Result<StagedUpdate, UpdateError> {
     let expected = fetch_expected_digest(&update.checksum_url, asset_name).await?;
+    let (mut response, total) = open_asset_response(&update.asset_url).await?;
 
-    let url = reqwest::Url::parse(&update.asset_url)
-        .map_err(|error| UpdateError::Parse(error.to_string()))?;
+    // 파일을 만든 직후부터 Drop이 정리를 책임지도록 staged를 먼저 세운다.
+    let staged = StagedUpdate {
+        path: destination,
+        applied: false,
+    };
+    let file = std::fs::File::create(&staged.path)?;
+    let actual = stream_to_file(
+        &mut response,
+        file,
+        total,
+        MAX_ASSET_BYTES,
+        &mut on_progress,
+    )
+    .await?;
+
+    finalize_staged(staged, actual, expected)
+}
+
+/// 스트리밍이 끝난 뒤 해시를 대조한다. 불일치하면 `staged`가 스코프를 벗어나며
+/// `Drop`이 임시 파일을 지운다.
+///
+/// 네트워크와 분리해 둔 순수한 갈림길이라 로컬 파일만으로 양쪽 분기(일치/불일치)를
+/// 결정적으로 테스트할 수 있다.
+fn finalize_staged(
+    staged: StagedUpdate,
+    actual: Digest,
+    expected: Digest,
+) -> Result<StagedUpdate, UpdateError> {
+    if actual != expected {
+        tracing::warn!(
+            "업데이트 해시 불일치: 기대 {expected}, 실제 {actual}. 내려받은 파일을 폐기합니다."
+        );
+        return Err(UpdateError::ChecksumMismatch);
+    }
+    Ok(staged)
+}
+
+/// asset URL을 검증하고 요청을 보낸 뒤, 상태 코드와 `Content-Length` 상한까지
+/// 확인한 응답을 돌려준다. 본문은 아직 읽지 않은 상태다.
+async fn open_asset_response(
+    asset_url: &str,
+) -> Result<(reqwest::Response, Option<u64>), UpdateError> {
+    let url =
+        reqwest::Url::parse(asset_url).map_err(|error| UpdateError::Parse(error.to_string()))?;
     ensure_trusted_url(&url)?;
+    fetch_checked(url, DOWNLOAD_TIMEOUT, MAX_ASSET_BYTES).await
+}
 
-    let client = build_client(DOWNLOAD_TIMEOUT)?;
-    let mut response = client
+/// URL 신뢰 검사를 통과한 뒤 요청을 보내고, 상태 코드와 `Content-Length` 상한을
+/// 확인한다. 호스트 화이트리스트 검사(`ensure_trusted_url`)는 호출자 책임이다 —
+/// 이 함수 자체는 그 검사를 하지 않으므로, 테스트는 로컬 스텁 서버로 상태
+/// 코드/크기 상한 로직만 골라 검증할 수 있다.
+async fn fetch_checked(
+    url: reqwest::Url,
+    timeout: Duration,
+    max_bytes: u64,
+) -> Result<(reqwest::Response, Option<u64>), UpdateError> {
+    let client = build_client(timeout)?;
+    let response = client
         .get(url)
         .send()
         .await
@@ -95,18 +150,22 @@ pub(super) async fn download_with_asset_name(
         });
     }
     let total = response.content_length();
-    if total.is_some_and(|length| length > MAX_ASSET_BYTES) {
-        return Err(UpdateError::TooLarge {
-            limit: MAX_ASSET_BYTES,
-        });
+    if total.is_some_and(|length| length > max_bytes) {
+        return Err(UpdateError::TooLarge { limit: max_bytes });
     }
 
-    // 파일을 만든 직후부터 Drop이 정리를 책임지도록 staged를 먼저 세운다.
-    let staged = StagedUpdate {
-        path: destination,
-        applied: false,
-    };
-    let mut file = std::fs::File::create(&staged.path)?;
+    Ok((response, total))
+}
+
+/// 응답 본문을 청크 단위로 받아 `file`에 쓰면서 SHA-256을 함께 누적하고,
+/// 청크마다 진행률을 알린다. 상한 초과 시 즉시 중단한다.
+async fn stream_to_file(
+    response: &mut reqwest::Response,
+    mut file: std::fs::File,
+    total: Option<u64>,
+    max_bytes: u64,
+    on_progress: &mut impl FnMut(DownloadProgress),
+) -> Result<Digest, UpdateError> {
     let mut hasher = Hasher::new()?;
     let mut written: u64 = 0;
 
@@ -120,10 +179,8 @@ pub(super) async fn download_with_asset_name(
         .map_err(|error| UpdateError::Network(error.to_string()))?
     {
         written = written.saturating_add(chunk.len() as u64);
-        if written > MAX_ASSET_BYTES {
-            return Err(UpdateError::TooLarge {
-                limit: MAX_ASSET_BYTES,
-            });
+        if written > max_bytes {
+            return Err(UpdateError::TooLarge { limit: max_bytes });
         }
         hasher.update(&chunk)?;
         file.write_all(&chunk)?;
@@ -137,42 +194,14 @@ pub(super) async fn download_with_asset_name(
     file.sync_all()?;
     drop(file);
 
-    let actual = hasher.finish()?;
-    if actual != expected {
-        tracing::warn!(
-            "업데이트 해시 불일치: 기대 {expected}, 실제 {actual}. 내려받은 파일을 폐기합니다."
-        );
-        return Err(UpdateError::ChecksumMismatch);
-    }
-
-    Ok(staged)
+    Ok(hasher.finish()?)
 }
 
 /// `.sha256` asset을 받아 기대 다이제스트를 얻는다.
 async fn fetch_expected_digest(url: &str, asset_name: &str) -> Result<Digest, UpdateError> {
     let parsed = reqwest::Url::parse(url).map_err(|error| UpdateError::Parse(error.to_string()))?;
     ensure_trusted_url(&parsed)?;
-
-    let client = build_client(CHECK_TIMEOUT)?;
-    let response = client
-        .get(parsed)
-        .send()
-        .await
-        .map_err(|error| UpdateError::Network(error.to_string()))?;
-
-    if !response.status().is_success() {
-        return Err(UpdateError::Api {
-            code: response.status().as_u16(),
-        });
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_CHECKSUM_BODY as u64)
-    {
-        return Err(UpdateError::TooLarge {
-            limit: MAX_CHECKSUM_BODY as u64,
-        });
-    }
+    let (response, _total) = fetch_checked(parsed, CHECK_TIMEOUT, MAX_CHECKSUM_BODY as u64).await?;
 
     let body = response
         .text()

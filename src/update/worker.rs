@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 use super::check::UpdateCheck;
 use super::download::{DownloadProgress, StagedUpdate};
@@ -123,6 +123,16 @@ pub(crate) enum UpdateRequestError {
     WorkerUnavailable,
 }
 
+/// 잠금을 얻는다. poison은 이전에 잠금을 쥔 스레드가 panic했다는 뜻이지만, 여기
+/// 보호 대상(Option 교체, Vec push/take)은 모두 panic-safe 연산이라 데이터 자체는
+/// 여전히 유효하다. 다시 panic시켜 poison을 연쇄시키는 대신 이전 상태를 복구해
+/// 계속 진행한다.
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 업데이트 워커와 그 수명을 소유하는 핸들.
 ///
 /// UI 스레드는 절대 블로킹하지 않는다: 요청은 채널로 비동기 전달되고, 결과는
@@ -150,7 +160,7 @@ impl UpdateWorker {
         let worker_results = results.clone();
         let progress = Arc::new(ProgressSlot::new());
         let worker_progress = progress.clone();
-        let hwnd_raw = hwnd.0 as usize;
+        let hwnd_raw = hwnd as usize;
 
         let handle = thread::Builder::new()
             .name("anemone-update".to_string())
@@ -184,7 +194,7 @@ impl UpdateWorker {
 
     /// 요청을 큐에 넣고 즉시 반환한다. UI 스레드를 블로킹하지 않는다.
     pub(crate) fn request(&self, request: UpdateRequest) -> Result<(), UpdateRequestError> {
-        let sender = self.sender.lock().expect("update sender poisoned");
+        let sender = lock_or_recover(&self.sender);
         match sender.as_ref() {
             Some(tx) => tx
                 .send(request)
@@ -195,7 +205,7 @@ impl UpdateWorker {
 
     /// 도착한 결과를 모두 꺼낸다. 도착 순서를 보존한다.
     pub(crate) fn drain_results(&self) -> Vec<UpdateOutcome> {
-        let mut results = self.results.lock().expect("update results poisoned");
+        let mut results = lock_or_recover(&self.results);
         std::mem::take(&mut *results)
     }
 
@@ -205,11 +215,11 @@ impl UpdateWorker {
     /// 제한 시간 안에 끝나지 않으면 detach하고 넘어가 종료가 멈추지 않게 한다.
     pub(crate) fn shutdown(&self) {
         {
-            let mut sender = self.sender.lock().expect("update sender poisoned");
+            let mut sender = lock_or_recover(&self.sender);
             *sender = None;
         }
         let handle = {
-            let mut handle = self.handle.lock().expect("update worker handle poisoned");
+            let mut handle = lock_or_recover(&self.handle);
             handle.take()
         };
         if let Some(handle) = handle {
@@ -253,7 +263,7 @@ impl UpdateWorker {
                 progress_message,
             ));
             {
-                let mut results = results.lock().expect("update results poisoned");
+                let mut results = lock_or_recover(&results);
                 results.push(outcome);
             }
             Self::notify(hwnd_raw, message);
@@ -303,13 +313,12 @@ impl UpdateWorker {
 
     /// 결과가 준비됐음을 UI 스레드에 알린다.
     fn notify(hwnd_raw: usize, message: u32) {
-        let hwnd = HWND(hwnd_raw as *mut std::ffi::c_void);
         // SAFETY: UI 스레드가 소유한 창은 App이 종료될 때까지 유효하다.
         // `shutdown()`은 App 소멸 경로에서 호출되므로, 그 뒤에는 이 워커에게
         // 더 이상 새 요청이 들어오지 않고 이 알림도 발생하지 않는다.
-        let result = unsafe { PostMessageW(Some(hwnd), message, WPARAM(0), LPARAM(0)) };
-        if let Err(error) = result {
-            tracing::warn!("업데이트 결과 알림을 게시하지 못했습니다: {error}");
+        let result = unsafe { PostMessageW(hwnd_raw as HWND, message, 0, 0) };
+        if result == 0 {
+            tracing::warn!("업데이트 결과 알림을 게시하지 못했습니다");
         }
     }
 }

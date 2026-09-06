@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use windows::Win32::{
-    Foundation::{HWND, LPARAM, WPARAM},
+use windows_sys::Win32::{
+    Foundation::HWND,
     UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE},
 };
 
@@ -27,10 +27,8 @@ impl AppActionSender {
     fn send(&self, action: AppAction) {
         self.queue.borrow_mut().push_back(action);
         // SAFETY: hwnd는 App이 소유하고 action 데이터는 별도 queue가 소유한다.
-        if let Err(error) =
-            unsafe { PostMessageW(Some(self.hwnd), WM_APP_ACTION, WPARAM(0), LPARAM(0)) }
-        {
-            tracing::error!("AppAction 알림을 게시하지 못했습니다: {error}");
+        if unsafe { PostMessageW(self.hwnd, WM_APP_ACTION, 0, 0) } == 0 {
+            tracing::error!("AppAction 알림을 게시하지 못했습니다");
         }
     }
 
@@ -48,6 +46,17 @@ impl AppActionSender {
 
     pub(crate) fn clear_translation_cache(&self) {
         self.send(AppAction::ClearTranslationCache);
+    }
+
+    pub(crate) fn save_hook_profile(&self, hook_name: String, hook_code: Option<String>) {
+        self.send(AppAction::SaveHookProfile {
+            hook_name,
+            hook_code,
+        });
+    }
+
+    pub(crate) fn set_hook_merge_window(&self, window_ms: u32) {
+        self.send(AppAction::SetHookMergeWindow(window_ms));
     }
 
     pub(crate) fn settings_dialog_closed(&self) {
@@ -121,7 +130,6 @@ impl App {
                     DialogKind::Translate => self.open_translate_dialog(),
                     DialogKind::Backlog => self.open_backlog_dialog(),
                     DialogKind::FileTranslation => self.open_file_trans_dialog(),
-                    DialogKind::HookSelect => self.open_hook_select_dialog(),
                     DialogKind::HookFind => self.open_hook_find_dialog(),
                 },
                 Effect::ClearTranslationCache => self.services.translation_cache.clear(),
@@ -134,10 +142,8 @@ impl App {
                 }
                 Effect::Close => {
                     // DestroyWindow의 동기 재진입을 피하고 현재 reducer turn 뒤에 닫는다.
-                    if let Err(error) =
-                        unsafe { PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
-                    {
-                        tracing::error!("WM_CLOSE 게시 실패: {error}");
+                    if unsafe { PostMessageW(self.hwnd, WM_CLOSE, 0, 0) } == 0 {
+                        tracing::error!("WM_CLOSE 게시 실패");
                     }
                 }
                 Effect::RequestUpdateCheck => self.start_manual_update_check(),

@@ -4,8 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows_sys::Win32::{Foundation::HWND, UI::WindowsAndMessaging::PostMessageW};
 
 use crate::file_trans::FileTranslationSupervisor;
 use crate::hook::HookWorker;
@@ -113,24 +112,27 @@ struct WindowMessageNotifier;
 
 impl CompletionNotifier for WindowMessageNotifier {
     fn notify(&self, target: TargetId, _request_id: u64) -> Result<(), String> {
-        let hwnd = HWND(target.get() as *mut std::ffi::c_void);
+        let hwnd = target.get() as *mut std::ffi::c_void;
         // SAFETY: 대상 등록 세대 잠금을 보유한 워커가 호출한다. UI 파괴 경로의
         // unregister도 같은 잠금을 통과하므로 해제된 세대에는 게시하지 않는다.
         unsafe {
-            PostMessageW(
-                Some(hwnd),
+            if PostMessageW(
+                hwnd,
                 WM_TRANSLATION_COMPLETE,
                 // message는 대상별 completion queue를 비우라는 신호로만 사용한다.
-                WPARAM(0),
-                LPARAM(0),
-            )
+                0,
+                0,
+            ) == 0
+            {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
         }
-        .map_err(|error| error.to_string())
+        Ok(())
     }
 }
 
 fn target(hwnd: HWND) -> TargetId {
-    TargetId::new(hwnd.0 as usize)
+    TargetId::new(hwnd as usize)
 }
 
 /// Win32 완료 통지와 dispatcher 수명을 명시적으로 소유하는 GUI 번역 서비스.

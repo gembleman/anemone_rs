@@ -13,14 +13,22 @@ mod job;
 mod language;
 pub(crate) mod llm;
 pub(crate) mod manual;
+#[cfg(mys_private)]
+pub(crate) mod mys_signup;
+#[cfg_attr(not(mys_private), path = "mys_translater_stub.rs")]
+pub(crate) mod mys_translater;
+#[cfg_attr(not(mys_private), path = "mys_usage_stub.rs")]
+pub(crate) mod mys_usage;
 pub(crate) mod papago_api;
 mod postprocess;
 #[cfg(feature = "benchmark")]
 pub use postprocess::{
-    benchmark_apply_eztrans_dictionary, EzTransPostprocessMatcher as BenchmarkEzTransPostprocessMatcher,
+    EzTransPostprocessMatcher as BenchmarkEzTransPostprocessMatcher,
+    benchmark_apply_eztrans_dictionary,
 };
 mod service;
 pub(crate) mod settings;
+mod tls_pin;
 pub(crate) mod worker;
 
 pub(crate) use cache_key::CacheKey;
@@ -35,7 +43,7 @@ pub use eztrans_process::EzTransBatchTranslator as BenchmarkEzTransBatchTranslat
 pub(crate) use eztrans_process::{EzTransBatchTranslator, EzTransProcessConfig};
 pub(crate) use eztrans_process::{EzTransProcessPoolRegistry, run_eztrans_worker};
 pub(crate) use job::{DeepLStrategy, PreparedEngineKind};
-pub use job::{LanguagePair, PreparedEngine, PreparedJob, resolve_configured_eztrans_path};
+pub use job::{PreparedJob, resolve_configured_eztrans_path};
 pub use language::{EnumParseError, Language, TranslationEngine, lang_utils};
 pub use llm::LlmProvider;
 pub use service::TranslationService;

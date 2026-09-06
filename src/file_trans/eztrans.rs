@@ -4,7 +4,7 @@ use std::sync::Arc;
 use quick_cache::unsync::Cache;
 
 use super::input::InputLine;
-use super::{FileTransJobData, FileTranslationError};
+use super::{FileTranslationError, FileTranslationRequest};
 use crate::translation::EzTransBatchTranslator;
 
 const EZTRANS_BATCH_MAX_LINES: usize = 256;
@@ -37,7 +37,7 @@ impl BoundedTranslationCache {
 
 pub fn translate_eztrans_window(
     lines: &[InputLine],
-    job_data: &FileTransJobData,
+    job_data: &FileTranslationRequest,
     translator: &dyn EzTransBatchTranslator,
     cache: &mut BoundedTranslationCache,
 ) -> Result<Vec<String>, FileTranslationError> {

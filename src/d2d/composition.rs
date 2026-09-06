@@ -43,8 +43,8 @@ pub struct CompositionRenderer {
     frame_latency_handle: HANDLE,
 
     // ── DirectComposition 트리 ────────────────────────
-    /// DComp 디바이스. `Commit` 메서드 보유.
-    dcomp_device: IDCompositionDevice,
+    /// DComp 디바이스. target/visual 을 살려 두려면 함께 들고 있어야 한다.
+    _dcomp_device: IDCompositionDevice,
     /// hwnd 와 visual 트리를 묶는 타겟. drop 시 윈도우에서 visual 분리.
     _dcomp_target: IDCompositionTarget,
     /// 루트 visual — 현재는 swap chain 1 개만 매단다.
@@ -80,78 +80,17 @@ impl CompositionRenderer {
     pub fn new(hwnd: HWND, d2d_factory: &ID2D1Factory1) -> Result<Self> {
         // SAFETY: 출력 포인터는 로컬이며, 호출자가 유효한 hwnd를 보장한다.
         unsafe {
-            // D2D interop용 BGRA 디바이스. 하드웨어 실패 시 WARP로 대체한다.
-            let d3d_device = match create_d3d_device(D3D_DRIVER_TYPE_HARDWARE) {
-                Ok(device) => device,
-                Err(hardware_error) => {
-                    tracing::warn!(
-                        "D3D11 hardware device creation failed ({hardware_error}); trying WARP"
-                    );
-                    match create_d3d_device(D3D_DRIVER_TYPE_WARP) {
-                        Ok(device) => {
-                            tracing::warn!("D3D11 WARP renderer is active");
-                            device
-                        }
-                        Err(warp_error) => {
-                            return Err(Error::new(
-                                warp_error.code(),
-                                format!(
-                                    "D3D11 device creation failed: hardware={hardware_error}; \
-                                     WARP={warp_error}"
-                                ),
-                            ));
-                        }
-                    }
-                }
-            };
+            // 1. D2D interop용 BGRA 디바이스. 하드웨어 실패 시 WARP로 대체한다.
+            let d3d_device = create_d3d_device_with_fallback()?;
 
-            // 2. DXGI 디바이스/팩토리 확보
+            // 2. DXGI 디바이스 확보 — swap chain과 DComp 트리가 함께 쓴다.
             let dxgi_device: IDXGIDevice = d3d_device.cast()?;
-            let dxgi_adapter: IDXGIAdapter = dxgi_device.GetAdapter()?;
-            let dxgi_factory: IDXGIFactory2 = dxgi_adapter.GetParent()?;
 
-            // 3. composition swap chain 기술 — 클라이언트 사이즈 조회
-            let mut rect = RECT::default();
-            GetClientRect(hwnd, &mut rect)?;
-            let width = (rect.right - rect.left).max(1) as u32;
-            let height = (rect.bottom - rect.top).max(1) as u32;
+            // 3~4. composition swap chain 생성 + frame-latency 대기 핸들 확보.
+            let (swap_chain, frame_latency_handle) =
+                create_composition_swap_chain(hwnd, &dxgi_device)?;
 
-            let desc = DXGI_SWAP_CHAIN_DESC1 {
-                Width: width,
-                Height: height,
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                Stereo: false.into(),
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                BufferCount: 2,
-                Scaling: DXGI_SCALING_STRETCH,
-                SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-                AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED, // 핵심: per-pixel α
-                // ResizeBuffers에도 다시 지정해야 하는 frame-latency 대기 플래그.
-                Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
-            };
-
-            // 4. composition swap chain 생성 (HWND 와 비결합)
-            let swap_chain_v1 = dxgi_factory.CreateSwapChainForComposition(
-                &dxgi_device,
-                &desc,
-                None, // 출력 제한 없음
-            )?;
-            // V1 → V2 cast (frame latency API 는 V2 에서 도입).
-            let swap_chain: IDXGISwapChain2 = swap_chain_v1.cast()?;
-            // 이벤트 기반 paint이므로 지연을 줄이도록 한 프레임만 큐잉한다.
-            swap_chain.SetMaximumFrameLatency(1)?;
-            // wait 핸들 — Drop 에서 CloseHandle 책임.
-            let frame_latency_handle = swap_chain.GetFrameLatencyWaitableObject();
-            if frame_latency_handle.is_invalid() {
-                return Err(Error::from_hresult(E_FAIL));
-            }
-            let frame_latency_handle = HandleGuard(frame_latency_handle);
-
-            // 호출자의 factory를 공유해 D2DERR_WRONG_FACTORY를 피한다.
+            // 5. 호출자의 factory를 공유해 D2DERR_WRONG_FACTORY를 피한다.
             let d2d_device = d2d_factory.CreateDevice(&dxgi_device)?;
             let d2d_context = d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
 
@@ -159,19 +98,9 @@ impl CompositionRenderer {
             let bitmap = create_bitmap_from_swapchain(&d2d_context, &swap_chain)?;
             d2d_context.SetTarget(&bitmap);
 
-            // 단일 visual 트리에는 V1 IDCompositionDevice면 충분하다.
-            let dcomp_device_v2: IDCompositionDesktopDevice =
-                DCompositionCreateDevice2(&dxgi_device)?;
-            let dcomp_device: IDCompositionDevice = dcomp_device_v2.cast()?;
-
-            let dcomp_target = dcomp_device.CreateTargetForHwnd(
-                hwnd, true, // top-most: 같은 윈도우 내 다른 redirection 보다 위
-            )?;
-
-            let dcomp_visual = dcomp_device.CreateVisual()?;
-            dcomp_visual.SetContent(&swap_chain)?;
-            dcomp_target.SetRoot(&dcomp_visual)?;
-            dcomp_device.Commit()?;
+            // 7. DComp 디바이스/타깃/visual을 만들고 swap chain을 트리에 매단다.
+            let (dcomp_device, dcomp_target, dcomp_visual) =
+                bind_composition_tree(hwnd, &dxgi_device, &swap_chain)?;
 
             Ok(Self {
                 _d3d_device: d3d_device,
@@ -179,7 +108,7 @@ impl CompositionRenderer {
                 swap_chain,
                 bitmap: Some(bitmap),
                 frame_latency_handle: frame_latency_handle.into_inner(),
-                dcomp_device,
+                _dcomp_device: dcomp_device,
                 _dcomp_target: dcomp_target,
                 _dcomp_visual: dcomp_visual,
             })
@@ -202,7 +131,8 @@ impl CompositionRenderer {
         }
     }
 
-    /// 그리기를 시작한다. 반드시 [`Self::end_draw_and_present`]로 마친다.
+    /// 그리기를 시작한다. 반드시 [`Self::end_draw`]와 [`Self::present`]로 마친다.
+    /// 둘을 묶은 [`Self::end_draw_and_present`]를 써도 된다.
     pub fn begin_draw(&self) -> &ID2D1DeviceContext {
         // SAFETY: 컨텍스트는 bitmap에 연결됐고 호출자가 EndDraw와 짝을 맞춘다.
         unsafe {
@@ -234,6 +164,10 @@ impl CompositionRenderer {
 
     /// 그리기를 끝내고 swap chain을 제출한다. `sync_interval`은 DXGI Present 값이다.
     /// Device loss는 렌더 스택을 다시 만들 수 있도록 `Err`로 반환한다.
+    ///
+    /// 앱 본체는 `end_draw`/`present`를 따로 부르고 이 래퍼는 예제
+    /// (`examples/d2d_composition_smoke.rs`)에서만 쓰기 때문에, lib 단독 빌드
+    /// 에서는 미사용으로 보인다.
     #[allow(dead_code)]
     pub fn end_draw_and_present(&self, sync_interval: u32) -> Result<()> {
         self.end_draw()?;
@@ -280,13 +214,6 @@ impl CompositionRenderer {
         }
         Ok(())
     }
-
-    /// Visual 트리가 바뀐 뒤 DComp 변경을 적용한다.
-    #[allow(dead_code)]
-    pub fn commit(&self) -> Result<()> {
-        // SAFETY: dcomp_device 는 생성자에서 만든 유효한 COM 객체.
-        unsafe { self.dcomp_device.Commit() }
-    }
 }
 
 /// 하드웨어와 WARP가 공유하는 D3D11 생성 경계.
@@ -307,6 +234,118 @@ unsafe fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device
         )?;
     }
     device.ok_or_else(|| Error::from_hresult(E_FAIL))
+}
+
+/// 하드웨어 우선, 실패하면 WARP로 재시도해 D3D11 device를 만든다.
+/// 폴백 순서와 오류 메시지 형식은 `CompositionRenderer::new`의 원래 동작과 동일하다.
+unsafe fn create_d3d_device_with_fallback() -> Result<ID3D11Device> {
+    // SAFETY: 호출자(`CompositionRenderer::new`)가 이미 unsafe 블록 안에서 호출한다.
+    unsafe {
+        match create_d3d_device(D3D_DRIVER_TYPE_HARDWARE) {
+            Ok(device) => Ok(device),
+            Err(hardware_error) => {
+                tracing::warn!(
+                    "D3D11 hardware device creation failed ({hardware_error}); trying WARP"
+                );
+                match create_d3d_device(D3D_DRIVER_TYPE_WARP) {
+                    Ok(device) => {
+                        tracing::warn!("D3D11 WARP renderer is active");
+                        Ok(device)
+                    }
+                    Err(warp_error) => Err(Error::new(
+                        warp_error.code(),
+                        format!(
+                            "D3D11 device creation failed: hardware={hardware_error}; \
+                             WARP={warp_error}"
+                        ),
+                    )),
+                }
+            }
+        }
+    }
+}
+
+/// Composition swap chain을 만들고 frame-latency 대기 핸들까지 확보한다.
+unsafe fn create_composition_swap_chain(
+    hwnd: HWND,
+    dxgi_device: &IDXGIDevice,
+) -> Result<(IDXGISwapChain2, HandleGuard)> {
+    // SAFETY: 호출자가 unsafe 블록 안에서 호출하며 hwnd/dxgi_device는 유효하다.
+    unsafe {
+        // DXGI 팩토리 확보
+        let dxgi_adapter: IDXGIAdapter = dxgi_device.GetAdapter()?;
+        let dxgi_factory: IDXGIFactory2 = dxgi_adapter.GetParent()?;
+
+        // composition swap chain 기술 — 클라이언트 사이즈 조회
+        let mut rect = RECT::default();
+        GetClientRect(hwnd, &mut rect)?;
+        let width = (rect.right - rect.left).max(1) as u32;
+        let height = (rect.bottom - rect.top).max(1) as u32;
+
+        let desc = DXGI_SWAP_CHAIN_DESC1 {
+            Width: width,
+            Height: height,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            Stereo: false.into(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            BufferCount: 2,
+            Scaling: DXGI_SCALING_STRETCH,
+            SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+            AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED, // 핵심: per-pixel α
+            // ResizeBuffers에도 다시 지정해야 하는 frame-latency 대기 플래그.
+            Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
+        };
+
+        // composition swap chain 생성 (HWND 와 비결합)
+        let swap_chain_v1 = dxgi_factory.CreateSwapChainForComposition(
+            dxgi_device,
+            &desc,
+            None, // 출력 제한 없음
+        )?;
+        // V1 → V2 cast (frame latency API 는 V2 에서 도입).
+        let swap_chain: IDXGISwapChain2 = swap_chain_v1.cast()?;
+        // 이벤트 기반 paint이므로 지연을 줄이도록 한 프레임만 큐잉한다.
+        swap_chain.SetMaximumFrameLatency(1)?;
+        // wait 핸들 — Drop 에서 CloseHandle 책임.
+        let frame_latency_handle = swap_chain.GetFrameLatencyWaitableObject();
+        if frame_latency_handle.is_invalid() {
+            return Err(Error::from_hresult(E_FAIL));
+        }
+        Ok((swap_chain, HandleGuard(frame_latency_handle)))
+    }
+}
+
+/// DComp 디바이스/타깃/visual을 만들고 swap chain을 트리에 매단다.
+unsafe fn bind_composition_tree(
+    hwnd: HWND,
+    dxgi_device: &IDXGIDevice,
+    swap_chain: &IDXGISwapChain2,
+) -> Result<(
+    IDCompositionDevice,
+    IDCompositionTarget,
+    IDCompositionVisual,
+)> {
+    // SAFETY: 호출자가 unsafe 블록 안에서 호출하며 인자들은 유효하다.
+    unsafe {
+        // 단일 visual 트리에는 V1 IDCompositionDevice면 충분하다.
+        let dcomp_device_v2: IDCompositionDesktopDevice = DCompositionCreateDevice2(dxgi_device)?;
+        let dcomp_device: IDCompositionDevice = dcomp_device_v2.cast()?;
+
+        let dcomp_target = dcomp_device.CreateTargetForHwnd(
+            hwnd, true, // top-most: 같은 윈도우 내 다른 redirection 보다 위
+        )?;
+
+        let dcomp_visual = dcomp_device.CreateVisual()?;
+        dcomp_visual.SetContent(swap_chain)?;
+        dcomp_target.SetRoot(&dcomp_visual)?;
+        dcomp_device.Commit()?;
+
+        Ok((dcomp_device, dcomp_target, dcomp_visual))
+    }
 }
 
 impl Drop for CompositionRenderer {

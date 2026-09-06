@@ -1,5 +1,6 @@
 [toolchain]
-channel = "1.97.0"
+# channel을 지정하지 않으면 rustup 기본 툴체인(stable)을 사용한다.
+# 아래 targets/components는 그 툴체인에 그대로 적용된다.
 profile = "minimal"
 targets = [
     "x86_64-pc-windows-msvc",

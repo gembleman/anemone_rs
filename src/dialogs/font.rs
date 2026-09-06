@@ -2,7 +2,7 @@
 
 use std::mem::zeroed;
 
-use windows::Win32::{
+use windows_sys::Win32::{
     Foundation::*, Graphics::Gdi::*, UI::Controls::Dialogs::*, UI::WindowsAndMessaging::*,
 };
 
@@ -115,7 +115,7 @@ impl FontDialog {
             }
 
             let mut cf: CHOOSEFONTW = zeroed();
-            cf.lStructSize = std::mem::size_of::<CHOOSEFONTW>() as u32;
+            cf.lStructSize = size_of::<CHOOSEFONTW>() as u32;
             cf.hwndOwner = hwnd;
             cf.lpLogFont = &mut lf;
             cf.iPointSize = config.initial_point_size.max(10) * 10; // 1/10 pt 단위
@@ -130,10 +130,10 @@ impl FontDialog {
                 cf.lpfnHook = Some(Self::hook_proc_noactivate);
             }
 
-            cf.rgbColors = COLORREF(0);
+            cf.rgbColors = 0;
             cf.nFontType = SCREEN_FONTTYPE;
 
-            if ChooseFontW(&mut cf).as_bool() {
+            if ChooseFontW(&mut cf) != 0 {
                 Some(FontResult::from_choosefont(&lf, &cf))
             } else {
                 None
@@ -154,18 +154,18 @@ impl FontDialog {
                 WM_INITDIALOG => {
                     // WS_EX_NOACTIVATE 스타일 추가
                     let ex_style = GetWindowLongW(hdlg, GWL_EXSTYLE);
-                    SetWindowLongW(hdlg, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE.0 as i32);
+                    SetWindowLongW(hdlg, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE as i32);
                     return 1; // TRUE
                 }
 
                 WM_MOVING | WM_SIZING => {
                     // WS_EX_NOACTIVATE 상태에서 위치/크기 변경 강제
-                    let prc = lparam.0 as *mut RECT;
+                    let prc = lparam as *mut RECT;
                     if !prc.is_null() {
                         let rc = &*prc;
                         let _ = SetWindowPos(
                             hdlg,
-                            None,
+                            std::ptr::null_mut(),
                             rc.left,
                             rc.top,
                             rc.right - rc.left,

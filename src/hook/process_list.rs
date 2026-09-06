@@ -1,17 +1,20 @@
-//! 화면에 보이는 top-level 창 목록 수집 (후킹 대상 선택용).
+//! 화면에 보이는 top-level 창 목록 수집 (후킹 관리용).
 //!
 //! 후킹 대상은 "사람이 게임이라 판단할 창"이므로, 제목 있는 보이는 창만
 //! 나열하고 자기 자신은 제외한다. 비트니스 표시는 참고용이며 권한이 없어
 //! 판별에 실패하면 `None`으로 둔다.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
+use std::path::PathBuf;
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
-use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows_sys::Win32::System::Threading::{
+    IsWow64Process, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW,
 };
-use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextW, IsWindowVisible};
-use windows::core::PWSTR;
+use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextW, IsWindowVisible};
+use windows_sys::core::BOOL;
 
 use super::Arch;
 
@@ -34,8 +37,8 @@ thread_local! {
 pub fn visible_windows() -> Vec<ProcessEntry> {
     COLLECTED.with(|slot| slot.borrow_mut().clear());
     // SAFETY: EnumWindows는 콜백에 시스템이 만든 유효한 HWND만 넘긴다.
-    let result = unsafe { EnumWindows(Some(collect_callback), LPARAM(0)) };
-    if result.is_err() {
+    let result = unsafe { EnumWindows(Some(collect_callback), 0) };
+    if result == 0 {
         return Vec::new();
     }
     let raw = COLLECTED.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
@@ -52,17 +55,23 @@ pub fn visible_windows() -> Vec<ProcessEntry> {
             arch: process_arch(pid),
         })
         .collect();
+    deduplicate_processes(&mut entries);
     entries.sort_by_key(|entry| entry.title.to_lowercase());
     entries
 }
 
-extern "system" fn collect_callback(hwnd: HWND, _lparam: LPARAM) -> windows::core::BOOL {
+fn deduplicate_processes(entries: &mut Vec<ProcessEntry>) {
+    let mut seen_pids = HashSet::new();
+    entries.retain(|entry| seen_pids.insert(entry.pid));
+}
+
+extern "system" fn collect_callback(hwnd: HWND, _lparam: LPARAM) -> BOOL {
     // SAFETY: hwnd는 EnumWindows가 제공한 유효한 핸들이다.
     let visible = unsafe { IsWindowVisible(hwnd) };
-    if visible.as_bool() {
+    if visible != 0 {
         COLLECTED.with(|slot| slot.borrow_mut().push((hwnd, window_pid(hwnd))));
     }
-    true.into()
+    1
 }
 
 fn window_pid(hwnd: HWND) -> u32 {
@@ -70,7 +79,7 @@ fn window_pid(hwnd: HWND) -> u32 {
     // SAFETY: 유효한 HWND와 출력 버퍼다.
     unsafe {
         let _ =
-            windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, &mut pid);
     }
     pid
 }
@@ -78,68 +87,57 @@ fn window_pid(hwnd: HWND) -> u32 {
 fn window_title(hwnd: HWND) -> Option<String> {
     let mut buffer = [0u16; 512];
     // SAFETY: buffer는 쓰기 가능 버퍼다.
-    let len = unsafe { GetWindowTextW(hwnd, &mut buffer) };
+    let len = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
     (len > 0).then(|| String::from_utf16_lossy(&buffer[..len as usize]))
 }
 
 fn process_image_name(pid: u32) -> String {
+    process_image_full_path(pid)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// 프로세스 실행 파일의 전체 경로. 권한 부족 등으로 실패하면 `None`.
+pub(crate) fn process_image_full_path(pid: u32) -> Option<PathBuf> {
     // SAFETY: OpenProcess~CloseHandle까지 같은 스레드에서 핸들을 소유한다.
     unsafe {
-        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
-            return String::new();
-        };
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
         let mut buffer = [0u16; 1024];
         let mut len = buffer.len() as u32;
-        let result = QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            PWSTR(buffer.as_mut_ptr()),
-            &mut len,
-        )
-        .map(|_| len);
+        let result =
+            QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut len);
+        let succeeded = result != 0;
         let _ = CloseHandle(process);
-        match result {
-            Ok(len) => {
-                let full = String::from_utf16_lossy(&buffer[..len as usize]);
-                full.rsplit(['\\', '/'])
-                    .next()
-                    .unwrap_or_default()
-                    .to_string()
-            }
-            Err(_) => String::new(),
+        if !succeeded {
+            return None;
         }
+        Some(PathBuf::from(String::from_utf16_lossy(
+            &buffer[..len as usize],
+        )))
     }
 }
 
 fn process_arch(pid: u32) -> Option<Arch> {
-    use windows::Win32::System::Threading::IsWow64Process;
     // SAFETY: OpenProcess~CloseHandle까지 같은 스레드에서 핸들을 소유한다.
     unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut wow64 = windows::core::BOOL::default();
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let mut wow64 = BOOL::default();
         let ok = IsWow64Process(process, &mut wow64);
         let _ = CloseHandle(process);
-        ok.ok().map(|_| {
-            if wow64.as_bool() {
-                Arch::X86
-            } else {
-                Arch::X64
-            }
-        })
+        (ok != 0).then_some(if wow64 != 0 { Arch::X86 } else { Arch::X64 })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn lists_at_least_console_window_or_empty_without_panic() {
-        // 환경에 따라 결과 크기가 다르지만 패닉/크래시가 없어야 한다.
-        let _ = super::visible_windows();
-    }
-
-    #[test]
-    fn self_process_is_excluded() {
-        let list = super::visible_windows();
-        assert!(list.iter().all(|entry| entry.pid != std::process::id()));
-    }
-}
+#[path = "../../tests/unit/hook/process_list.rs"]
+mod tests;

@@ -60,7 +60,7 @@ fn main() -> Result<()> {
         let hinstance = GetModuleHandleW(None)?;
 
         let wnd_class = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wnd_proc),
             hInstance: hinstance.into(),

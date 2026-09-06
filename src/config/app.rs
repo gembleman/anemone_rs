@@ -21,12 +21,35 @@ pub struct Config {
     pub window_topmost: bool,
     pub click_through: bool,
 
+    /// 마지막으로 사용자가 옮긴 오버레이 창의 좌상단 (물리 pixel, 화면 좌표).
+    /// `None`이면 기본 위치에서 시작한다. 저장된 좌표가 어떤 모니터에도
+    /// 걸치지 않으면 무시된다.
+    #[serde(default)]
+    pub window_x: Option<i32>,
+    #[serde(default)]
+    pub window_y: Option<i32>,
+
+    /// 마지막으로 사용자가 조절한 오버레이 창의 크기 (물리 pixel, 창 전체 기준).
+    /// `None`이면 기본 크기를 그 모니터 DPI로 확장해 쓴다. 저장된 값이
+    /// 최소 크기보다 작으면 최소 크기로 올린다.
+    #[serde(default)]
+    pub window_width: Option<i32>,
+    #[serde(default)]
+    pub window_height: Option<i32>,
+
     // 클립보드
     pub clipboard_watch: bool,
     pub clipboard_max_length: u32,
     /// 동일 원문 재번역 시 API 호출을 건너뛰고 sqlite 캐시를 사용할지 여부.
     #[serde(default = "default_clipboard_cache_enabled")]
     pub clipboard_cache_enabled: bool,
+    /// 소스 언어의 문자 체계로 쓰이지 않은 클립보드 텍스트를 번역 엔진에 보내지
+    /// 않고 원문 그대로 표시할지 여부.
+    ///
+    /// 판정은 `lang_utils::text_matches_script`가 하며, 문자 체계를 공유하는
+    /// 언어끼리는(영어/프랑스어, 일본어/중국어 등) 구분하지 않는다.
+    #[serde(default = "default_clipboard_source_language_guard")]
+    pub clipboard_source_language_guard: bool,
 
     // 배경
     pub background_visible: bool,
@@ -92,10 +115,15 @@ impl Default for Config {
             window_visible: true,
             window_topmost: true,
             click_through: false,
+            window_x: None,
+            window_y: None,
+            window_width: None,
+            window_height: None,
 
             clipboard_watch: true,
             clipboard_max_length: 300,
             clipboard_cache_enabled: true,
+            clipboard_source_language_guard: true,
 
             background_visible: true,
             background_color: 0xC8282828, // 반투명 어두운 배경
@@ -149,6 +177,10 @@ fn default_clipboard_cache_enabled() -> bool {
     true
 }
 
+fn default_clipboard_source_language_guard() -> bool {
+    true
+}
+
 fn default_update_check_enabled() -> bool {
     true
 }
@@ -177,6 +209,7 @@ impl Config {
         }
 
         self.translation.llm.normalize();
+        self.hook.normalize();
     }
 
     fn migrate(&mut self) -> Result<(), ConfigDecodeError> {
@@ -260,26 +293,12 @@ impl Config {
 
     /// 설정 파일에 저장 (TOML 형식)
     pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-        self.save_to_file_impl(path, true)
-    }
-
-    fn save_to_file_impl(
-        &self,
-        path: &std::path::Path,
-        preserve_previous: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut normalized = self.clone();
         normalized.migrate()?;
         normalized.normalize();
         let content = toml::to_string_pretty(&normalized)?;
         let _: Config = Self::from_toml_str(&content)?;
 
-        // 교체 전에 정상본을 보존하며 손상된 파일로 backup을 덮지 않는다.
-        if preserve_previous && path.is_file() && Self::load_from_file(path).is_ok() {
-            let backup_path = path.with_extension("toml.backup");
-            let previous = std::fs::read(path)?;
-            crate::fs_util::atomic_write(&backup_path, &previous)?;
-        }
         crate::fs_util::atomic_write(path, content.as_bytes())?;
         Ok(())
     }
@@ -289,6 +308,23 @@ impl Config {
         use std::sync::OnceLock;
         static CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
         CONFIG_PATH.get_or_init(|| crate::runtime::paths().config_file())
+    }
+
+    /// `[hook] debug_log`만 미리 읽는다.
+    ///
+    /// 로그 subscriber는 설정을 온전히 읽기 전에 세워야 한다 — 설정 로드 자체가
+    /// 로그를 남기기 때문이다. 그래서 이 값만 파일에서 따로 꺼낸다. 파일이
+    /// 없거나 깨졌으면 꺼짐으로 본다. 파일을 만들지 않는다.
+    pub fn peek_hook_debug_log() -> bool {
+        Self::peek_hook_debug_log_from(Self::default_config_path())
+    }
+
+    fn peek_hook_debug_log_from(path: &std::path::Path) -> bool {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|content| content.parse::<toml::Table>().ok())
+            .and_then(|table| table.get("hook")?.as_table()?.get("debug_log")?.as_bool())
+            .unwrap_or(false)
     }
 
     /// 기본 경로에서 설정 로드 (없거나 파싱 에러 시 기본값 사용)
@@ -326,7 +362,7 @@ impl Config {
                 tracing::error!("설정 파일을 파싱할 수 없습니다");
                 tracing::warn!("기본 설정으로 시작합니다.");
 
-                // 손상본을 격리해 원문이나 `.backup`에서 복구할 수 있게 한다.
+                // 손상본을 격리해 원문에서 복구할 수 있게 한다.
                 match quarantine_corrupt_file(path) {
                     Ok(quarantine) => tracing::warn!(
                         "손상된 설정을 격리했습니다. 복구 파일: {}",
@@ -448,5 +484,17 @@ fn quarantine_corrupt_file(path: &std::path::Path) -> std::io::Result<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/config/app.rs"]
-mod tests;
+#[path = "../../tests/unit/config/app/defaults.rs"]
+mod defaults_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/config/app/migration.rs"]
+mod migration_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/config/app/translation.rs"]
+mod translation_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/config/app/persistence.rs"]
+mod persistence_tests;

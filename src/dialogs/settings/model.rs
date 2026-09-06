@@ -16,6 +16,7 @@ pub enum BoolSetting {
     MagneticMinimize,
     ClipboardWatch,
     ClipboardCacheEnabled,
+    ClipboardSourceLanguageGuard,
     ClickThrough,
     UpdateCheckEnabled,
 }
@@ -127,6 +128,7 @@ fn toggle(config: &mut Config, setting: BoolSetting) -> bool {
         BoolSetting::MagneticMinimize => &mut config.magnetic_minimize,
         BoolSetting::ClipboardWatch => &mut config.clipboard_watch,
         BoolSetting::ClipboardCacheEnabled => &mut config.clipboard_cache_enabled,
+        BoolSetting::ClipboardSourceLanguageGuard => &mut config.clipboard_source_language_guard,
         BoolSetting::ClickThrough => &mut config.click_through,
         BoolSetting::UpdateCheckEnabled => &mut config.update_check_enabled,
     };

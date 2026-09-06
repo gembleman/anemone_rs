@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+#[cfg(any(test, feature = "benchmark"))]
+use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -18,6 +20,8 @@ impl CancelHandle {
         self.0.store(true, Ordering::SeqCst);
     }
 
+    /// 취소가 실제로 전파됐는지 확인하는 테스트만 쓴다.
+    #[cfg(test)]
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
@@ -38,6 +42,9 @@ impl FileTranslationTask {
         self.events.try_iter().collect()
     }
 
+    /// UI는 메시지 루프에서 `drain_events`로 훑는다. 이벤트가 올 때까지 막고
+    /// 기다리는 이 경로는 테스트·벤치 하네스 전용이다.
+    #[cfg(any(test, feature = "benchmark"))]
     pub fn recv_event_timeout(
         &self,
         timeout: Duration,
@@ -45,6 +52,8 @@ impl FileTranslationTask {
         self.events.recv_timeout(timeout)
     }
 
+    /// 취소 전파를 확인하는 테스트만 쓴다.
+    #[cfg(test)]
     pub fn cancel_handle(&self) -> CancelHandle {
         self.cancel.clone()
     }
@@ -60,6 +69,18 @@ impl Drop for FileTranslationTask {
 struct WorkerEntry {
     cancel: CancelHandle,
     handle: JoinHandle<()>,
+}
+
+/// 잠금을 얻는다. 잠금을 쥔 스레드가 panic해 poison됐더라도 worker 목록 자체는
+/// (HashMap insert/remove 같은 panic-safe 연산만 하므로) 여전히 유효하다.
+/// 여기서 다시 panic하면 poison이 연쇄돼 이후 모든 supervisor 호출이 죽으므로,
+/// 이전 상태를 그대로 복구해 계속 진행한다.
+fn lock_workers(
+    workers: &Mutex<HashMap<u64, WorkerEntry>>,
+) -> std::sync::MutexGuard<'_, HashMap<u64, WorkerEntry>> {
+    workers
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// 종료 시 회수한 작업과 유예 시간 뒤 분리한 작업 수.
@@ -105,7 +126,7 @@ impl FileTranslationSupervisor {
         mut job: FileTranslationRequest,
     ) -> Result<FileTranslationTask, FileTranslationError> {
         self.reap_finished();
-        let mut workers = self.workers.lock().expect("file supervisor poisoned");
+        let mut workers = lock_workers(&self.workers);
         if !self.accepting.load(Ordering::Acquire) {
             return Err(FileTranslationError::Runtime(
                 "파일 번역 서비스가 종료 중입니다".into(),
@@ -135,6 +156,8 @@ impl FileTranslationSupervisor {
         Ok(FileTranslationTask { cancel, events })
     }
 
+    /// 끝난 worker가 회수됐는지 확인하는 테스트만 쓴다.
+    #[cfg(test)]
     pub fn active_tasks(&self) -> usize {
         self.reap_finished()
     }
@@ -147,7 +170,7 @@ impl FileTranslationSupervisor {
 
         loop {
             let finished = {
-                let mut workers = self.workers.lock().expect("file supervisor poisoned");
+                let mut workers = lock_workers(&self.workers);
                 for entry in workers.values() {
                     entry.cancel.cancel();
                 }
@@ -164,12 +187,12 @@ impl FileTranslationSupervisor {
                 report.joined += 1;
             }
 
-            let remaining = self.workers.lock().expect("file supervisor poisoned").len();
+            let remaining = lock_workers(&self.workers).len();
             if remaining == 0 {
                 return report;
             }
             if Instant::now() >= deadline {
-                let mut workers = self.workers.lock().expect("file supervisor poisoned");
+                let mut workers = lock_workers(&self.workers);
                 report.detached += workers.len();
                 workers.clear();
                 return report;
@@ -180,7 +203,7 @@ impl FileTranslationSupervisor {
 
     fn reap_finished(&self) -> usize {
         let finished = {
-            let mut workers = self.workers.lock().expect("file supervisor poisoned");
+            let mut workers = lock_workers(&self.workers);
             let ids = workers
                 .iter()
                 .filter_map(|(&id, entry)| entry.handle.is_finished().then_some(id))
@@ -192,7 +215,7 @@ impl FileTranslationSupervisor {
         for entry in finished {
             let _ = entry.handle.join();
         }
-        self.workers.lock().expect("file supervisor poisoned").len()
+        lock_workers(&self.workers).len()
     }
 }
 

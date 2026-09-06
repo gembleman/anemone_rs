@@ -58,8 +58,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 
 fn track_alloc(size: usize) {
     ALLOC_TOTAL.fetch_add(size as u64, Ordering::Relaxed);
-    let current =
-        ALLOC_CURRENT.fetch_add(size as u64, Ordering::Relaxed) + size as u64;
+    let current = ALLOC_CURRENT.fetch_add(size as u64, Ordering::Relaxed) + size as u64;
     ALLOC_PEAK.fetch_max(current, Ordering::Relaxed);
 }
 

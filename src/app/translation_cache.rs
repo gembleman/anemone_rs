@@ -97,7 +97,10 @@ impl TranslationCacheStore {
         };
         let conn = conn.borrow();
         let cutoff = now - CACHE_TTL_SECS;
-        match conn.execute("DELETE FROM translation_cache WHERE updated_at < ?1", [cutoff]) {
+        match conn.execute(
+            "DELETE FROM translation_cache WHERE updated_at < ?1",
+            [cutoff],
+        ) {
             Ok(removed) if removed > 0 => {
                 tracing::debug!(removed, "translation cache TTL prune");
             }
@@ -135,7 +138,8 @@ impl TranslationCacheStore {
         let conn = Connection::open(path).map_err(CacheError::Open)?;
         // 백그라운드 VACUUM이 write lock을 쥔 짧은 구간 동안 UI 스레드의 get/put이
         // 즉시 SQLITE_BUSY로 실패해 캐시 미스로 위장되지 않도록 대기 시간을 둔다.
-        conn.busy_timeout(UI_BUSY_TIMEOUT).map_err(CacheError::Query)?;
+        conn.busy_timeout(UI_BUSY_TIMEOUT)
+            .map_err(CacheError::Query)?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(CacheError::Query)?;
         // WAL에서 fsync를 checkpoint 시점으로 미룬다. 번역 캐시는 재생성 가능
@@ -164,6 +168,9 @@ impl TranslationCacheStore {
             [],
         )
         .map_err(CacheError::Query)?;
+        // 번역 서버 사용량도 같은 DB 파일을 공유한다. 캐시를 한 번도 쓰지 않은 상태에서
+        // 설정창을 먼저 열어도 스키마가 준비되어 있도록 앱 시작 연결에서 생성한다.
+        crate::translation::mys_usage::initialize_schema(&conn).map_err(CacheError::Query)?;
         Ok(conn)
     }
 

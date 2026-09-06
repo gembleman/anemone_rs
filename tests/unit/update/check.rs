@@ -1,5 +1,8 @@
+use std::io::{Read, Write};
+use std::net::TcpListener;
+
 use super::super::{CHECKSUM_ASSET_NAME, UPDATE_ASSET_NAME, UpdateError, Version};
-use super::{UpdateCheck, parse_releases};
+use super::{UpdateCheck, parse_releases, read_limited};
 
 fn v(text: &str) -> Version {
     text.parse().expect("유효한 버전이어야 한다")
@@ -231,4 +234,110 @@ fn unknown_fields_do_not_break_parsing() {
         parse_releases(&body, &v("0.1.0")).unwrap(),
         UpdateCheck::Available(_)
     ));
+}
+
+// --- read_limited: 네트워크와 분리된 본문 상한 로직 --------------------------
+//
+// `read_limited`는 `ensure_trusted_url`을 호출하지 않는다 — 이미 검증된 응답의
+// 본문만 다룬다. 그래서 로컬 스텁 서버로 상한/인코딩 오류 분기를 직접 재현할
+// 수 있다 (신뢰 검사 자체는 `tests/unit/update/mod.rs`가 담당).
+
+fn serve_once(response: Vec<u8>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4096];
+        let _ = stream.read(&mut request);
+        let _ = stream.write_all(&response);
+    });
+    format!("http://{address}/")
+}
+
+async fn get_response(url: String) -> reqwest::Response {
+    reqwest::Client::builder()
+        .build()
+        .unwrap()
+        .get(url)
+        .send()
+        .await
+        .expect("로컬 서버 응답을 받아야 한다")
+}
+
+#[tokio::test]
+async fn read_limited_returns_the_body_when_within_the_limit() {
+    let body = r#"[{"tag_name":"v1.0.0"}]"#;
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes();
+    let url = serve_once(response);
+    let response = get_response(url).await;
+
+    let text = read_limited(response, 4096)
+        .await
+        .expect("본문을 읽어야 한다");
+    assert_eq!(text, body);
+}
+
+#[tokio::test]
+async fn read_limited_rejects_a_content_length_header_over_the_limit() {
+    let body = [b'x'; 200];
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    let url = serve_once(response);
+    let response = get_response(url).await;
+
+    let result = read_limited(response, 100).await;
+    assert!(matches!(result, Err(UpdateError::TooLarge { limit: 100 })));
+}
+
+#[tokio::test]
+async fn read_limited_rejects_actual_bytes_over_the_limit_even_without_content_length() {
+    // chunked라 Content-Length 헤더 자체가 없다 — 사전 검사를 통과해도
+    // 실제로 받은 바이트 총량으로 다시 걸러야 한다.
+    let body = vec![b'y'; 200];
+    let mut response =
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+    response.extend_from_slice(format!("{:X}\r\n", body.len()).as_bytes());
+    response.extend_from_slice(&body);
+    response.extend_from_slice(b"\r\n0\r\n\r\n");
+    let url = serve_once(response);
+    let response = get_response(url).await;
+
+    let result = read_limited(response, 100).await;
+    assert!(matches!(result, Err(UpdateError::TooLarge { limit: 100 })));
+}
+
+#[tokio::test]
+async fn read_limited_reports_non_utf8_bodies_as_parse_errors() {
+    let body: &[u8] = &[0xff, 0xfe, 0xfd];
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    let mut response = response;
+    response.extend_from_slice(body);
+    let url = serve_once(response);
+    let response = get_response(url).await;
+
+    let result = read_limited(response, 4096).await;
+    assert!(matches!(result, Err(UpdateError::Parse(_))));
+}
+
+#[tokio::test]
+async fn read_limited_accepts_an_empty_body() {
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
+    let url = serve_once(response);
+    let response = get_response(url).await;
+
+    let text = read_limited(response, 4096)
+        .await
+        .expect("빈 본문도 허용해야 한다");
+    assert_eq!(text, "");
 }

@@ -15,14 +15,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anemone_rs::{
-    BenchmarkConfig as Config, BenchmarkCustomApiConfig as CustomApiConfig,
-};
 use anemone_rs::file_trans::{
-    FileTranslationProgress as ProgressEvent, FileTranslationSupervisor, FileTranslationTask,
-    WriteType,
+    FileTranslationProgress, FileTranslationSupervisor, FileTranslationTask, WriteType,
 };
 use anemone_rs::translation::PreparedJob;
+use anemone_rs::{BenchmarkConfig as Config, BenchmarkCustomApiConfig as CustomApiConfig};
 
 /// 요청마다 즉시 JSON을 돌려주는 로컬 HTTP mock 서버.
 /// 요청 수를 카운트해 번역 대상 줄 수를 확인한다.
@@ -71,10 +68,7 @@ fn serve_one(stream: &mut TcpStream) -> std::io::Result<()> {
         if reader.read_line(&mut line)? == 0 {
             break;
         }
-        if let Some(value) = line
-            .to_ascii_lowercase()
-            .strip_prefix("content-length:")
-        {
+        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
             content_length = value.trim().parse().unwrap_or(0);
         }
         if line == "\r\n" {
@@ -94,7 +88,11 @@ fn serve_one(stream: &mut TcpStream) -> std::io::Result<()> {
     Ok(())
 }
 
-fn custom_job(server: &MockServer, input_files: Vec<PathBuf>, output_files: Vec<PathBuf>) -> anemone_rs::file_trans::FileTranslationRequest {
+fn custom_job(
+    server: &MockServer,
+    input_files: Vec<PathBuf>,
+    output_files: Vec<PathBuf>,
+) -> anemone_rs::file_trans::FileTranslationRequest {
     use anemone_rs::file_trans::FileTranslationRequest;
     let mut config = Config::default();
     config.translation.engine = "custom".to_string();
@@ -123,7 +121,7 @@ fn custom_job(server: &MockServer, input_files: Vec<PathBuf>, output_files: Vec<
     }
 }
 
-fn receive_through_terminal(task: &FileTranslationTask) -> Vec<ProgressEvent> {
+fn receive_through_terminal(task: &FileTranslationTask) -> Vec<FileTranslationProgress> {
     let mut events = Vec::new();
     loop {
         let event = task
@@ -153,10 +151,7 @@ fn measures_per_line_round_trip_workload() {
     let input = project_root
         .join("benchmark")
         .join("unique_japanese_translation_sample.txt");
-    let output = std::env::temp_dir().join(format!(
-        "anemone-rt-bench-{}.txt",
-        std::process::id()
-    ));
+    let output = std::env::temp_dir().join(format!("anemone-rt-bench-{}.txt", std::process::id()));
 
     let job = custom_job(&server, vec![input.clone()], vec![output.clone()]);
     let started = Instant::now();
@@ -169,9 +164,12 @@ fn measures_per_line_round_trip_workload() {
 
     assert!(matches!(
         events.last(),
-        Some(ProgressEvent::Finished(Ok(_)))
+        Some(FileTranslationProgress::Finished(Ok(_)))
     ));
-    assert_eq!(requests, 10_000, "10,000줄 고유 샘플은 전부 번역 대상이어야 한다");
+    assert_eq!(
+        requests, 10_000,
+        "10,000줄 고유 샘플은 전부 번역 대상이어야 한다"
+    );
     eprintln!(
         "[bench file-trans-workload] total_lines=10000 translated_requests={requests} elapsed={:.3}s per_line={:.1}us",
         elapsed.as_secs_f64(),

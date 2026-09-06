@@ -2,6 +2,11 @@ use super::*;
 
 use crate::update::download::DownloadProgress;
 
+#[test]
+fn startup_update_checks_are_disabled_in_test_builds() {
+    assert!(auto_update_disabled_for_test());
+}
+
 fn progress(received: u64, total: Option<u64>) -> DownloadProgress {
     DownloadProgress { received, total }
 }

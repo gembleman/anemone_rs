@@ -17,22 +17,18 @@ fn physical_client_size_converts_to_dips() {
 
 #[test]
 fn dip_hit_rect_expands_outward_when_scaled_to_pixels() {
-    let rect = RECT {
+    let rect = windows::Win32::Foundation::RECT {
         left: -1,
         top: 1,
         right: 3,
         bottom: 5,
     };
 
-    assert_eq!(
-        dip_rect_to_pixels(&rect, 144),
-        RECT {
-            left: -2,
-            top: 1,
-            right: 5,
-            bottom: 8,
-        }
-    );
+    let actual = dip_rect_to_pixels(&rect, 144);
+    assert_eq!(actual.left, -2);
+    assert_eq!(actual.top, 1);
+    assert_eq!(actual.right, 5);
+    assert_eq!(actual.bottom, 8);
 }
 
 #[test]

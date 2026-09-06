@@ -1,6 +1,10 @@
 use super::*;
 use crate::translation::TranslationError;
 
+#[cfg(mys_private)]
+#[path = "job_mys.rs"]
+mod mys;
+
 #[test]
 fn rejects_missing_credentials_without_exposing_values() {
     let mut config = TranslationConfig {
@@ -158,7 +162,6 @@ fn runtime_llm_params_redact_api_key_from_debug_output() {
 fn prepared_engine_exposes_capabilities_without_credentials() {
     let google = PreparedJob::google(Language::Jpn, Language::Kor).unwrap();
     assert!(!google.engine().is_blocking());
-    assert!(!google.engine().supports_batch());
     assert_eq!(
         google.languages(),
         LanguagePair::new(Language::Jpn, Language::Kor)
@@ -173,7 +176,6 @@ fn prepared_engine_exposes_capabilities_without_credentials() {
     )
     .unwrap();
     assert!(eztrans.engine().is_blocking());
-    assert!(eztrans.engine().supports_batch());
     assert_eq!(
         eztrans.engine().eztrans_process().unwrap().process_count,
         16

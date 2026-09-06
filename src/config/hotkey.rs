@@ -4,7 +4,7 @@
 //! 실제 등록 시점에 Windows 가상 키 코드/`HOT_KEY_MODIFIERS`로 변환한다.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VIRTUAL_KEY, VK_0, VK_1, VK_2,
     VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_B, VK_C, VK_D, VK_DOWN, VK_E, VK_F, VK_F1,
     VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12, VK_G, VK_H,
@@ -36,7 +36,7 @@ impl HotkeySpec {
 
     /// `RegisterHotKey`에 전달할 `HOT_KEY_MODIFIERS` 비트 조합.
     pub fn modifiers(&self) -> HOT_KEY_MODIFIERS {
-        let mut modifiers = HOT_KEY_MODIFIERS(0);
+        let mut modifiers: HOT_KEY_MODIFIERS = 0;
         if self.ctrl {
             modifiers |= MOD_CONTROL;
         }
@@ -143,71 +143,71 @@ impl<'de> Deserialize<'de> for HotkeySpec {
 
 /// 키 이름 <-> 가상 키 코드 테이블. A-Z, 0-9, 화살표, F1-F12, 자주 쓰는 OEM 키를 지원한다.
 const KEY_TABLE: &[(&str, u32)] = &[
-    ("A", VK_A.0 as u32),
-    ("B", VK_B.0 as u32),
-    ("C", VK_C.0 as u32),
-    ("D", VK_D.0 as u32),
-    ("E", VK_E.0 as u32),
-    ("F", VK_F.0 as u32),
-    ("G", VK_G.0 as u32),
-    ("H", VK_H.0 as u32),
-    ("I", VK_I.0 as u32),
-    ("J", VK_J.0 as u32),
-    ("K", VK_K.0 as u32),
-    ("L", VK_L.0 as u32),
-    ("M", VK_M.0 as u32),
-    ("N", VK_N.0 as u32),
-    ("O", VK_O.0 as u32),
-    ("P", VK_P.0 as u32),
-    ("Q", VK_Q.0 as u32),
-    ("R", VK_R.0 as u32),
-    ("S", VK_S.0 as u32),
-    ("T", VK_T.0 as u32),
-    ("U", VK_U.0 as u32),
-    ("V", VK_V.0 as u32),
-    ("W", VK_W.0 as u32),
-    ("X", VK_X.0 as u32),
-    ("Y", VK_Y.0 as u32),
-    ("Z", VK_Z.0 as u32),
-    ("0", VK_0.0 as u32),
-    ("1", VK_1.0 as u32),
-    ("2", VK_2.0 as u32),
-    ("3", VK_3.0 as u32),
-    ("4", VK_4.0 as u32),
-    ("5", VK_5.0 as u32),
-    ("6", VK_6.0 as u32),
-    ("7", VK_7.0 as u32),
-    ("8", VK_8.0 as u32),
-    ("9", VK_9.0 as u32),
-    ("Up", VK_UP.0 as u32),
-    ("Down", VK_DOWN.0 as u32),
-    ("Left", VK_LEFT.0 as u32),
-    ("Right", VK_RIGHT.0 as u32),
-    ("Space", VK_SPACE.0 as u32),
-    ("Tab", VK_TAB.0 as u32),
-    ("F1", VK_F1.0 as u32),
-    ("F2", VK_F2.0 as u32),
-    ("F3", VK_F3.0 as u32),
-    ("F4", VK_F4.0 as u32),
-    ("F5", VK_F5.0 as u32),
-    ("F6", VK_F6.0 as u32),
-    ("F7", VK_F7.0 as u32),
-    ("F8", VK_F8.0 as u32),
-    ("F9", VK_F9.0 as u32),
-    ("F10", VK_F10.0 as u32),
-    ("F11", VK_F11.0 as u32),
-    ("F12", VK_F12.0 as u32),
-    (";", VK_OEM_1.0 as u32),
-    ("/", VK_OEM_2.0 as u32),
-    ("`", VK_OEM_3.0 as u32),
-    ("[", VK_OEM_4.0 as u32),
-    ("\\", VK_OEM_5.0 as u32),
-    ("]", VK_OEM_6.0 as u32),
-    ("'", VK_OEM_7.0 as u32),
-    (",", VK_OEM_COMMA.0 as u32),
-    ("-", VK_OEM_MINUS.0 as u32),
-    (".", VK_OEM_PERIOD.0 as u32),
-    ("=", VK_OEM_PLUS.0 as u32),
+    ("A", VK_A as u32),
+    ("B", VK_B as u32),
+    ("C", VK_C as u32),
+    ("D", VK_D as u32),
+    ("E", VK_E as u32),
+    ("F", VK_F as u32),
+    ("G", VK_G as u32),
+    ("H", VK_H as u32),
+    ("I", VK_I as u32),
+    ("J", VK_J as u32),
+    ("K", VK_K as u32),
+    ("L", VK_L as u32),
+    ("M", VK_M as u32),
+    ("N", VK_N as u32),
+    ("O", VK_O as u32),
+    ("P", VK_P as u32),
+    ("Q", VK_Q as u32),
+    ("R", VK_R as u32),
+    ("S", VK_S as u32),
+    ("T", VK_T as u32),
+    ("U", VK_U as u32),
+    ("V", VK_V as u32),
+    ("W", VK_W as u32),
+    ("X", VK_X as u32),
+    ("Y", VK_Y as u32),
+    ("Z", VK_Z as u32),
+    ("0", VK_0 as u32),
+    ("1", VK_1 as u32),
+    ("2", VK_2 as u32),
+    ("3", VK_3 as u32),
+    ("4", VK_4 as u32),
+    ("5", VK_5 as u32),
+    ("6", VK_6 as u32),
+    ("7", VK_7 as u32),
+    ("8", VK_8 as u32),
+    ("9", VK_9 as u32),
+    ("Up", VK_UP as u32),
+    ("Down", VK_DOWN as u32),
+    ("Left", VK_LEFT as u32),
+    ("Right", VK_RIGHT as u32),
+    ("Space", VK_SPACE as u32),
+    ("Tab", VK_TAB as u32),
+    ("F1", VK_F1 as u32),
+    ("F2", VK_F2 as u32),
+    ("F3", VK_F3 as u32),
+    ("F4", VK_F4 as u32),
+    ("F5", VK_F5 as u32),
+    ("F6", VK_F6 as u32),
+    ("F7", VK_F7 as u32),
+    ("F8", VK_F8 as u32),
+    ("F9", VK_F9 as u32),
+    ("F10", VK_F10 as u32),
+    ("F11", VK_F11 as u32),
+    ("F12", VK_F12 as u32),
+    (";", VK_OEM_1 as u32),
+    ("/", VK_OEM_2 as u32),
+    ("`", VK_OEM_3 as u32),
+    ("[", VK_OEM_4 as u32),
+    ("\\", VK_OEM_5 as u32),
+    ("]", VK_OEM_6 as u32),
+    ("'", VK_OEM_7 as u32),
+    (",", VK_OEM_COMMA as u32),
+    ("-", VK_OEM_MINUS as u32),
+    (".", VK_OEM_PERIOD as u32),
+    ("=", VK_OEM_PLUS as u32),
 ];
 
 fn vk_from_key_name(name: &str) -> Option<u32> {
@@ -241,10 +241,10 @@ pub struct HotkeyConfig {
 impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
-            toggle_window: HotkeySpec::new(true, true, false, false, VK_A.0 as u32),
-            text_size_up: HotkeySpec::new(true, true, false, false, VK_UP.0 as u32),
-            text_size_down: HotkeySpec::new(true, true, false, false, VK_DOWN.0 as u32),
-            clipboard_watch: HotkeySpec::new(true, true, false, false, VK_C.0 as u32),
+            toggle_window: HotkeySpec::new(true, true, false, false, VK_A as u32),
+            text_size_up: HotkeySpec::new(true, true, false, false, VK_UP as u32),
+            text_size_down: HotkeySpec::new(true, true, false, false, VK_DOWN as u32),
+            clipboard_watch: HotkeySpec::new(true, true, false, false, VK_C as u32),
         }
     }
 }
@@ -313,7 +313,7 @@ impl HotkeySlot {
 }
 
 // VIRTUAL_KEY 캐스팅 확인용 (u32 <-> VIRTUAL_KEY 변환은 hotkey.rs와 일관되게 u32로 통일한다).
-const _: fn(VIRTUAL_KEY) -> u32 = |vk| vk.0 as u32;
+const _: fn(VIRTUAL_KEY) -> u32 = |vk| vk as u32;
 
 #[cfg(test)]
 #[path = "../../tests/unit/config/hotkey.rs"]

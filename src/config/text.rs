@@ -97,3 +97,7 @@ pub enum TextAlign {
     Center = 1,
     Right = 2,
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/config/text.rs"]
+mod tests;

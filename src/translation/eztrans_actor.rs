@@ -69,7 +69,7 @@ struct EzTransActor {
 }
 
 impl EzTransActor {
-    fn spawn() -> Self {
+    fn spawn() -> Result<Self, String> {
         let (sender, receiver) = mpsc::channel();
         std::thread::Builder::new()
             .name("anemone-eztrans".into())
@@ -100,8 +100,8 @@ impl EzTransActor {
                     }
                 }
             })
-            .expect("EzTrans actor thread spawn failed");
-        Self { sender }
+            .map_err(|error| format!("EzTrans 전용 스레드 시작 실패: {error}"))?;
+        Ok(Self { sender })
     }
 
     fn init(&self, dictionary_path: &str, ehnd_path: &str) -> Result<(), String> {
@@ -134,17 +134,28 @@ impl EzTransActor {
     }
 }
 
-static EZTRANS_ACTOR: OnceLock<EzTransActor> = OnceLock::new();
+static EZTRANS_ACTOR: OnceLock<Result<EzTransActor, String>> = OnceLock::new();
 
-fn eztrans_actor() -> &'static EzTransActor {
-    EZTRANS_ACTOR.get_or_init(EzTransActor::spawn)
+/// 전용 스레드 시작에 실패하면(자원 고갈 등) 매 호출마다 같은 오류를 반환한다.
+fn eztrans_actor() -> Result<&'static EzTransActor, String> {
+    EZTRANS_ACTOR
+        .get_or_init(EzTransActor::spawn)
+        .as_ref()
+        .map_err(String::clone)
 }
 
 pub fn prepare_eztrans(dictionary_path: &str, ehnd_path: &str) -> Result<(), String> {
-    eztrans_actor().init(dictionary_path, ehnd_path)
+    eztrans_actor()?.init(dictionary_path, ehnd_path)
 }
 
 /// 전역 EzTrans 인스턴스로 번역하며 미초기화 시 `EngineNotInitialized`를 반환한다.
 pub fn translate_with_eztrans(text: &str, source: Language, target: Language) -> TranslationResult {
-    eztrans_actor().translate(text, source, target)
+    match eztrans_actor() {
+        Ok(actor) => actor.translate(text, source, target),
+        Err(error) => Err(TranslationError::Engine(error)),
+    }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/translation/eztrans_actor.rs"]
+mod tests;

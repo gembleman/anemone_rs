@@ -1,5 +1,8 @@
 use super::mem::MemSnapshot;
-use super::{FileTransJobData, FileTransTask, FileTranslationSupervisor, ProgressEvent, WriteType};
+use super::{
+    FileTranslationProgress, FileTranslationRequest, FileTranslationSupervisor,
+    FileTranslationTask, WriteType,
+};
 use crate::translation::{Language, PreparedJob};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,8 +31,8 @@ impl Drop for BenchDirectory {
     }
 }
 
-fn job(input_files: Vec<PathBuf>, output_files: Vec<PathBuf>) -> FileTransJobData {
-    FileTransJobData {
+fn job(input_files: Vec<PathBuf>, output_files: Vec<PathBuf>) -> FileTranslationRequest {
+    FileTranslationRequest {
         input_files,
         output_files,
         write_type: WriteType::TranslationOnly,
@@ -39,7 +42,7 @@ fn job(input_files: Vec<PathBuf>, output_files: Vec<PathBuf>) -> FileTransJobDat
     }
 }
 
-fn receive_through_terminal(task: &FileTransTask) -> Vec<ProgressEvent> {
+fn receive_through_terminal(task: &FileTranslationTask) -> Vec<FileTranslationProgress> {
     let mut events = Vec::new();
     loop {
         let event = task
@@ -87,17 +90,17 @@ fn translates_japanese_translation_sample_with_eztrans() {
     let events = receive_through_terminal(&task);
     assert!(matches!(
         events.last(),
-        Some(ProgressEvent::Finished(Ok(_)))
+        Some(FileTranslationProgress::Finished(Ok(_)))
     ));
     assert!(
         !events
             .iter()
-            .any(|event| matches!(event, ProgressEvent::Finished(Err(_))))
+            .any(|event| matches!(event, FileTranslationProgress::Finished(Err(_))))
     );
-    assert!(events.contains(&ProgressEvent::TotalFiles(1)));
-    assert!(events.contains(&ProgressEvent::TotalLines(expected_lines)));
-    assert!(events.contains(&ProgressEvent::FileProgress(expected_lines)));
-    assert!(events.contains(&ProgressEvent::TotalProgress(expected_lines)));
+    assert!(events.contains(&FileTranslationProgress::TotalFiles(1)));
+    assert!(events.contains(&FileTranslationProgress::TotalLines(expected_lines)));
+    assert!(events.contains(&FileTranslationProgress::FileProgress(expected_lines)));
+    assert!(events.contains(&FileTranslationProgress::TotalProgress(expected_lines)));
 
     let output_bytes = std::fs::read(output).unwrap();
     let translated = output_bytes
@@ -163,12 +166,12 @@ fn measures_repeated_and_unique_sample_translation_performance() {
 
         assert!(matches!(
             events.last(),
-            Some(ProgressEvent::Finished(Ok(_)))
+            Some(FileTranslationProgress::Finished(Ok(_)))
         ));
         assert!(
             !events
                 .iter()
-                .any(|event| matches!(event, ProgressEvent::Finished(Err(_))))
+                .any(|event| matches!(event, FileTranslationProgress::Finished(Err(_))))
         );
         let translated = std::fs::read_to_string(output).unwrap();
         let translated = translated.strip_prefix('\u{feff}').unwrap_or(&translated);

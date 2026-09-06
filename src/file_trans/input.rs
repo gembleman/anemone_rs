@@ -241,3 +241,7 @@ pub fn read_input_line<R: BufRead>(
     })?;
     Ok(Some(InputLine { text, ending }))
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/file_trans/input.rs"]
+mod tests;

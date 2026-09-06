@@ -188,7 +188,10 @@ fn llm_provider_change_restores_each_providers_settings() {
     assert!(result.changed);
     assert_eq!(config.llm.model, "");
     assert_eq!(config.llm.api_key, "");
-    assert_eq!(config.llm.temperature, 0.3);
+    assert_eq!(
+        config.llm.temperature,
+        crate::config::limits::LLM_TEMPERATURE_DEFAULT
+    );
 
     config.llm.model = "anthropic-model".into();
     config.llm.api_key = "anthropic-key".into();
@@ -481,3 +484,6 @@ fn a_file_is_not_accepted_as_the_ehnd_folder() {
 
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+// 이 파일에 이어지는 필드 setter / 언어 정규화 오류 / sync_runtime 테스트는
+// 500줄 제한을 지키기 위해 `settings_extra.rs`로 옮겼다.

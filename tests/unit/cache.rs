@@ -150,7 +150,11 @@ fn prune_removes_expired_entries() {
 
     store.prune();
 
-    assert_eq!(store.get(&expired), None, "TTL 초과 항목은 제거되어야 합니다");
+    assert_eq!(
+        store.get(&expired),
+        None,
+        "TTL 초과 항목은 제거되어야 합니다"
+    );
     assert_eq!(store.get(&fresh).as_deref(), Some("새 항목"));
 
     let _ = std::fs::remove_file(&path);
@@ -177,10 +181,13 @@ fn prune_caps_row_count_to_most_recent() {
     store.prune();
 
     let count: i64 = raw
-        .query_row("SELECT COUNT(*) FROM translation_cache", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM translation_cache", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(
-        count, super::CACHE_MAX_ROWS,
+        count,
+        super::CACHE_MAX_ROWS,
         "상한 초과분은 오래된 순으로 삭제되어야 합니다"
     );
     // 최신 상한 내 행은 남는다.
@@ -204,7 +211,11 @@ fn ui_connection_has_busy_timeout_configured() {
     let path = temp_db_path();
     let store = TranslationCacheStore::open(&path);
 
-    let conn = store.conn.as_ref().expect("연결이 열려 있어야 합니다").borrow();
+    let conn = store
+        .conn
+        .as_ref()
+        .expect("연결이 열려 있어야 합니다")
+        .borrow();
     let timeout_ms: i64 = conn
         .pragma_query_value(None, "busy_timeout", |row| row.get(0))
         .unwrap();
@@ -221,7 +232,11 @@ fn updated_at_index_exists() {
     let path = temp_db_path();
     let store = TranslationCacheStore::open(&path);
 
-    let conn = store.conn.as_ref().expect("연결이 열려 있어야 합니다").borrow();
+    let conn = store
+        .conn
+        .as_ref()
+        .expect("연결이 열려 있어야 합니다")
+        .borrow();
     let index_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master

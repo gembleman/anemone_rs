@@ -1,14 +1,14 @@
-use super::{ProgressEvent, ProgressState};
+use super::{FileTranslationProgress, ProgressState};
 
 #[test]
 fn progress_events_update_model_state() {
     let mut state = ProgressState::default();
     for event in [
-        ProgressEvent::TotalFiles(3),
-        ProgressEvent::TotalLines(120),
-        ProgressEvent::FileIndex(2),
-        ProgressEvent::FileLines(40),
-        ProgressEvent::TotalProgress(75),
+        FileTranslationProgress::TotalFiles(3),
+        FileTranslationProgress::TotalLines(120),
+        FileTranslationProgress::FileIndex(2),
+        FileTranslationProgress::FileLines(40),
+        FileTranslationProgress::TotalProgress(75),
     ] {
         state.apply(&event);
     }
@@ -29,22 +29,22 @@ fn progress_events_update_model_state() {
 #[test]
 fn terminal_event_prevents_later_state_updates() {
     let mut completed = ProgressState::default();
-    completed.apply(&ProgressEvent::TotalProgress(3));
-    completed.apply(&ProgressEvent::Finished(Ok(
+    completed.apply(&FileTranslationProgress::TotalProgress(3));
+    completed.apply(&FileTranslationProgress::Finished(Ok(
         crate::file_trans::FileTranslationSummary {
             total_files: 1,
             total_lines: 3,
         },
     )));
-    completed.apply(&ProgressEvent::TotalProgress(99));
+    completed.apply(&FileTranslationProgress::TotalProgress(99));
     assert_eq!(completed.current_line, 3);
     assert!(completed.terminal);
 
     let mut failed = ProgressState::default();
-    failed.apply(&ProgressEvent::Finished(Err(
+    failed.apply(&FileTranslationProgress::Finished(Err(
         crate::file_trans::FileTranslationError::Runtime("failed".into()),
     )));
-    failed.apply(&ProgressEvent::TotalFiles(99));
+    failed.apply(&FileTranslationProgress::TotalFiles(99));
     assert_eq!(failed.total_files, 0);
     assert!(failed.terminal);
 }
@@ -53,20 +53,19 @@ fn terminal_event_prevents_later_state_updates() {
 #[ignore = "requires a Win32 desktop and embedded dialog resources"]
 fn win32_cancel_and_close_request_task_cancellation() {
     use super::{FileTransProgressDialog, ctrl_id};
-    use crate::file_trans::{FileTransJobData, FileTranslationSupervisor, WriteType};
+    use crate::file_trans::{FileTranslationRequest, FileTranslationSupervisor, WriteType};
     use crate::translation::{Language, PreparedJob};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
-    use windows::Win32::Foundation::{LPARAM, WPARAM};
-    use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
-    use windows::Win32::UI::WindowsAndMessaging::{
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
         DestroyWindow, GetDesktopWindow, GetDlgItem, SW_HIDE, SendMessageW, ShowWindow, WM_CLOSE,
         WM_COMMAND,
     };
 
-    fn failing_job() -> FileTransJobData {
-        FileTransJobData {
+    fn failing_job() -> FileTranslationRequest {
+        FileTranslationRequest {
             input_files: vec![PathBuf::from("input.txt")],
             output_files: Vec::new(),
             write_type: WriteType::TranslationOnly,
@@ -84,11 +83,11 @@ fn win32_cancel_and_close_request_task_cancellation() {
     let close_dialog = FileTransProgressDialog::show(parent, close_task).unwrap();
     unsafe {
         let _ = ShowWindow(close_dialog, SW_HIDE);
-        let _ = SendMessageW(close_dialog, WM_CLOSE, None, None);
+        let _ = SendMessageW(close_dialog, WM_CLOSE, 0, 0);
     }
     assert!(close_cancel.is_cancelled());
     unsafe {
-        DestroyWindow(close_dialog).unwrap();
+        DestroyWindow(close_dialog);
     }
 
     let button_supervisor = FileTranslationSupervisor::new();
@@ -97,20 +96,15 @@ fn win32_cancel_and_close_request_task_cancellation() {
     let button_dialog = FileTransProgressDialog::show(parent, button_task).unwrap();
     let cancel_button = unsafe {
         let _ = ShowWindow(button_dialog, SW_HIDE);
-        GetDlgItem(Some(button_dialog), ctrl_id::BTN_CANCEL as i32).unwrap()
+        GetDlgItem(button_dialog, ctrl_id::BTN_CANCEL as i32)
     };
     unsafe {
-        let command = WPARAM(usize::from(ctrl_id::BTN_CANCEL));
-        let _ = SendMessageW(
-            button_dialog,
-            WM_COMMAND,
-            Some(command),
-            Some(LPARAM(cancel_button.0 as isize)),
-        );
+        let command = usize::from(ctrl_id::BTN_CANCEL);
+        let _ = SendMessageW(button_dialog, WM_COMMAND, command, cancel_button as isize);
     }
     assert!(button_cancel.is_cancelled());
-    assert!(!unsafe { IsWindowEnabled(cancel_button).as_bool() });
+    assert_eq!(unsafe { IsWindowEnabled(cancel_button) }, 0);
     unsafe {
-        DestroyWindow(button_dialog).unwrap();
+        DestroyWindow(button_dialog);
     }
 }

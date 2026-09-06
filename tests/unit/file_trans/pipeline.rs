@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::config::{LlmConfig, TranslationConfig};
-use crate::file_trans::FileTransJobData;
+use crate::file_trans::FileTranslationRequest;
 use crate::translation::PreparedJob;
 
 fn input_line(text: &str) -> InputLine {
@@ -15,8 +15,8 @@ fn input_line(text: &str) -> InputLine {
     }
 }
 
-fn llm_job(base_url: &str) -> FileTransJobData {
-    FileTransJobData {
+fn llm_job(base_url: &str) -> FileTranslationRequest {
+    FileTranslationRequest {
         input_files: Vec::new(),
         output_files: Vec::new(),
         write_type: crate::file_trans::WriteType::TranslationOnly,
@@ -96,17 +96,29 @@ fn translate_lines_runs_concurrently_and_preserves_input_order() {
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    // accept 순서(=발신 순서) 역순으로 지연해 늦게 보낸 줄이 먼저 완료되게 만든다.
-    // 결과가 입력 순서로 재조립되지 않으면 여기서 드러난다. 연결별로 스레드를
-    // 두어 서버 측이 병렬 처리한다 — 클라이언트 동시성을 검증하려면 서버 지연이
-    // 직렬로 쌓이면 안 된다.
+    // 동시성이 실제로 일어났는지는 벽시계 시간이 아니라 서버가 관측한 동시
+    // in-flight 요청 수의 최댓값으로 판정한다. 시간 임계값은 테스트를 병렬
+    // 실행할 때의 CPU 경합만으로도 흔들려 flaky해진다(단독 실행은 통과, 전체
+    // 실행 중 간헐적 실패). accept 순서(=발신 순서) 역순으로 지연해 늦게 보낸
+    // 줄이 먼저 완료되게 만든다 — 결과가 입력 순서로 재조립되지 않으면 여기서
+    // 드러난다. 연결별로 스레드를 두어 서버 측이 병렬 처리한다.
+    let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let max_in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let server_in_flight = Arc::clone(&in_flight);
+    let server_max = Arc::clone(&max_in_flight);
     std::thread::spawn(move || {
         for index in 0..LINE_COUNT {
             let (mut stream, _) = listener.accept().unwrap();
+            let in_flight = Arc::clone(&server_in_flight);
+            let max_in_flight = Arc::clone(&server_max);
             std::thread::spawn(move || {
                 let body = read_request_body(&mut stream);
                 let line = extract_user_text(&body);
+                // 본문을 다 읽은 시점부터가 진짜 in-flight 구간이다.
+                let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                max_in_flight.fetch_max(current, Ordering::SeqCst);
                 std::thread::sleep(Duration::from_millis(400 - index as u64 * 100));
+                in_flight.fetch_sub(1, Ordering::SeqCst);
                 write_llm_response(&mut stream, &line);
             });
         }
@@ -123,14 +135,15 @@ fn translate_lines_runs_concurrently_and_preserves_input_order() {
         .map(|index| input_line(&format!("line {index}")))
         .collect::<Vec<_>>();
 
-    let started = Instant::now();
     let results = translate_lines(&lines, &job, &context).unwrap();
-    let elapsed = started.elapsed();
 
-    // 지연 400+300+200+100ms가 직렬이면 1초, 동시성이면 최대 400ms.
-    assert!(
-        elapsed < Duration::from_millis(600),
-        "concurrent batch should beat sequential completion: {elapsed:?}"
+    // 요청이 순차적으로만 나갔다면(동시성이 깨졌다면) 관측 최댓값은 1을
+    // 넘지 못한다. LINE_COUNT(4)는 FILE_HTTP_CONCURRENCY(8) 이하이므로
+    // 세마포어에 걸리지 않고 전부 동시에 in-flight가 되어야 한다.
+    assert_eq!(
+        max_in_flight.load(Ordering::SeqCst),
+        LINE_COUNT,
+        "translate_lines should run requests concurrently"
     );
     assert_eq!(results, vec!["line 0", "line 1", "line 2", "line 3"]);
 }
@@ -199,7 +212,7 @@ fn pipeline_batches_non_blocking_lines_and_overlaps_requests() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::Finished(Ok(_))))
+            .filter(|event| matches!(event, FileTranslationProgress::Finished(Ok(_))))
             .count(),
         1,
         "pipeline should finish successfully exactly once: {events:?}"

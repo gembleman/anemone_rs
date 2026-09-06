@@ -1,7 +1,8 @@
 use super::{
     AppAction, AppCommand, AppModel, AppState, ClientSize, ClipboardDebounce, Effect,
-    MagneticAction, OverlayNotice, PendingTranslation, clipboard_capture_is_paused,
-    correlate_translation, magnetic_action, should_watch_clipboard,
+    HookSessionInfo, MagneticAction, OverlayNotice, PendingTranslation,
+    clipboard_capture_is_paused, correlate_translation, magnetic_action, should_watch_clipboard,
+    waits_for_pending_translation,
 };
 use crate::app::backlog::{BacklogFilter, BacklogStore, LogEntry};
 use crate::app::commands::{command_from_hotkey_id, command_from_menu_id};
@@ -53,15 +54,24 @@ fn manual_translation_dialog_temporarily_suspends_clipboard_capture() {
 #[test]
 fn all_non_idle_ui_states_pause_clipboard_capture() {
     assert!(!clipboard_capture_is_paused(
-        false, false, false, false, false
+        false, false, false, false, false, false
     ));
-    for active_reason in 0..5 {
-        let mut reasons = [false; 5];
+    for active_reason in 0..6 {
+        let mut reasons = [false; 6];
         reasons[active_reason] = true;
         assert!(clipboard_capture_is_paused(
-            reasons[0], reasons[1], reasons[2], reasons[3], reasons[4]
+            reasons[0], reasons[1], reasons[2], reasons[3], reasons[4], reasons[5]
         ));
     }
+}
+
+#[test]
+fn an_active_hook_session_pauses_clipboard_capture() {
+    // 후킹 중에는 게임 텍스트만 번역 경로를 쓴다 — 다른 창에서 복사한 텍스트가
+    // 후킹 문장을 덮어쓰거나 그 게임 신원으로 유료 엔진에 나가면 안 된다.
+    assert!(clipboard_capture_is_paused(
+        false, false, false, false, false, true
+    ));
 }
 
 #[test]
@@ -211,6 +221,7 @@ fn app_model() -> AppModel {
             clipboard_debounce: ClipboardDebounce::default(),
             hook_session: None,
             hook_merger: crate::hook::text_bridge::TextMerger::default(),
+            hook_text_queue: std::collections::VecDeque::new(),
         },
     }
 }
@@ -270,10 +281,157 @@ fn previewing_settings_keeps_the_update_check_timestamp() {
 }
 
 #[test]
+fn applying_settings_keeps_the_overlay_placement_changed_while_the_window_was_open() {
+    for action in [
+        AppAction::PreviewSettings as fn(SettingsDraft) -> AppAction,
+        AppAction::CommitSettings,
+    ] {
+        let mut model = app_model();
+        let draft = SettingsDraft::new(model.config.clone());
+
+        // 설정 창이 열려 있는 동안 사용자가 오버레이를 끌어 옮기고 크기도 바꿨다.
+        model.config.window_x = Some(640);
+        model.config.window_y = Some(480);
+        model.config.window_width = Some(720);
+        model.config.window_height = Some(360);
+
+        model.update(action(draft));
+        assert_eq!(model.config.window_x, Some(640));
+        assert_eq!(model.config.window_y, Some(480));
+        assert_eq!(model.config.window_width, Some(720));
+        assert_eq!(model.config.window_height, Some(360));
+    }
+}
+
+#[test]
+fn previewing_settings_does_not_consume_hotkey_change_before_commit() {
+    let mut model = app_model();
+    let mut changed = model.config.clone();
+    changed.hotkeys.toggle_window.vk = b'B' as u32;
+    let draft = SettingsDraft::new(changed.clone());
+
+    // Live preview must leave the registered/configured hotkeys untouched until
+    // the user presses Apply, even though visual settings are previewed at once.
+    model.update(AppAction::PreviewSettings(draft.clone()));
+    assert_ne!(model.config.hotkeys, changed.hotkeys);
+
+    let effects = model.update(AppAction::CommitSettings(draft));
+    assert!(effects.contains(&Effect::ReregisterHotkeys));
+    assert_eq!(model.config.hotkeys, changed.hotkeys);
+}
+
+#[test]
 fn clear_backlog_action_mutates_the_app_owned_store() {
     let mut model = app_model();
     model.backlog.push(LogEntry::new("line".into()));
 
     assert!(model.update(AppAction::ClearBacklog).is_empty());
     assert!(model.backlog.render(BacklogFilter::All, true).is_empty());
+}
+
+#[test]
+fn hook_session_ignores_the_clipboard_watch_toggle_instead_of_flipping_it_silently() {
+    let mut model = app_model();
+    let configured = model.config.clipboard_watch;
+    model.runtime.hook_session = Some(HookSessionInfo {
+        pid: 42,
+        process_name: "game.exe".into(),
+        exe_sha256: None,
+        arch_label: "x64".into(),
+        detected_engines: Vec::new(),
+    });
+
+    // 단축키와 메뉴가 같은 명령으로 수렴하므로, 회색 처리한 메뉴 항목과 동작이
+    // 어긋나지 않도록 명령 단계에서 막는다.
+    assert!(
+        model
+            .update(AppAction::Command(AppCommand::ClipboardWatch))
+            .is_empty()
+    );
+    assert_eq!(model.config.clipboard_watch, configured);
+
+    // 세션이 끝나면 다시 평소대로 토글된다.
+    model.runtime.hook_session = None;
+    assert_eq!(
+        model.update(AppAction::Command(AppCommand::ClipboardWatch)),
+        vec![Effect::SetClipboardWatch(!configured)]
+    );
+    assert_eq!(model.config.clipboard_watch, !configured);
+}
+
+#[test]
+fn selecting_a_hook_stream_saves_a_game_profile() {
+    let mut model = app_model();
+    model.runtime.hook_session = Some(HookSessionInfo {
+        pid: 42,
+        process_name: "game.exe".into(),
+        exe_sha256: Some("digest".into()),
+        arch_label: "x64".into(),
+        detected_engines: Vec::new(),
+    });
+
+    let effects = model.update(AppAction::SaveHookProfile {
+        hook_name: "UserUI".into(),
+        hook_code: Some("HQ0@1000:game.exe".into()),
+    });
+
+    assert_eq!(effects, vec![Effect::SaveConfig]);
+    let saved = model
+        .config
+        .hook
+        .saved_profile("game.exe", Some("digest"))
+        .unwrap();
+    assert_eq!(saved.hook_name, "UserUI");
+    assert_eq!(saved.hook_code.as_deref(), Some("HQ0@1000:game.exe"));
+}
+
+/// 후킹 관리 창에서 바꾼 병합 창은 config와 실행 중인 merger에 함께 간다.
+/// 원본 LunaHost도 설정 창에서 `flushDelay`를 바로 바꾼다.
+#[test]
+fn changing_the_merge_window_updates_the_config_and_the_live_merger() {
+    let mut model = app_model();
+    let effects = model.update(AppAction::SetHookMergeWindow(400));
+
+    assert_eq!(effects, vec![Effect::SaveConfig]);
+    assert_eq!(model.config.hook.merge_window_ms, 400);
+    assert_eq!(model.runtime.hook_merger.window_ms(), 400);
+}
+
+/// 범위 밖의 값은 잘라서 받는다. 같은 값이면 저장하지 않는다.
+#[test]
+fn the_merge_window_is_clamped_and_a_repeat_is_ignored() {
+    let mut model = app_model();
+
+    assert_eq!(
+        model.update(AppAction::SetHookMergeWindow(1)),
+        Vec::<Effect>::new(),
+        "하한이 기본값과 같아 바뀌는 것이 없다"
+    );
+    assert_eq!(model.config.hook.merge_window_ms, 100);
+
+    model.update(AppAction::SetHookMergeWindow(u32::MAX));
+    assert_eq!(model.config.hook.merge_window_ms, 5_000);
+
+    assert_eq!(
+        model.update(AppAction::SetHookMergeWindow(5_000)),
+        Vec::<Effect>::new()
+    );
+}
+
+/// 진행 중인 요청이 있으면 후킹 문장은 기다린다. 그대로 보내면 워커가 앞
+/// 요청을 취소해 앞 문장이 번역되지 않는다.
+#[test]
+fn a_hook_sentence_waits_for_the_request_in_flight() {
+    assert!(!waits_for_pending_translation(None));
+    assert!(waits_for_pending_translation(Some(
+        std::time::Duration::from_secs(1)
+    )));
+}
+
+/// 응답이 유실돼도 후킹 번역이 영영 멈추지는 않는다.
+#[test]
+fn a_lost_response_stops_blocking_the_queue() {
+    assert!(!waits_for_pending_translation(Some(
+        std::time::Duration::from_secs(60)
+    )));
 }

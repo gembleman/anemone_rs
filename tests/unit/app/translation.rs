@@ -23,7 +23,29 @@ fn debounce_covers_paid_engines_and_llm() {
         debounce_delay_ms(TranslationEngine::Custom, 300),
         PAID_ENGINE_DEBOUNCE_MS
     );
+    assert_eq!(
+        debounce_delay_ms(TranslationEngine::MysTranslater, 300),
+        PAID_ENGINE_DEBOUNCE_MS
+    );
     assert_eq!(debounce_delay_ms(TranslationEngine::EzTrans, 300), 0);
+}
+
+#[test]
+fn source_language_guard_only_skips_text_without_the_source_script() {
+    use crate::translation::Language;
+
+    // 소스가 일본어면 일본어 문자가 없는 원문만 번역을 건너뛴다.
+    assert!(bypasses_translation(true, Language::Jpn, "안녕하세요"));
+    assert!(bypasses_translation(true, Language::Jpn, "Save / Load"));
+    assert!(!bypasses_translation(true, Language::Jpn, "こんにちは"));
+    assert!(!bypasses_translation(true, Language::Jpn, "選択肢"));
+
+    // 옵션이 꺼져 있으면 어떤 원문도 거르지 않는다.
+    assert!(!bypasses_translation(false, Language::Jpn, "안녕하세요"));
+
+    // 소스가 영어면 반대 방향으로 걸린다.
+    assert!(bypasses_translation(true, Language::Eng, "こんにちは"));
+    assert!(!bypasses_translation(true, Language::Eng, "Save / Load"));
 }
 
 #[derive(Clone)]

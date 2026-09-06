@@ -24,12 +24,7 @@ pub(crate) use eztrans::split_eztrans_batch;
 pub(crate) use input::read_utf8_preview;
 pub(crate) use pipeline::run;
 pub use progress::{FileTranslationProgress, FileTranslationSummary};
-pub use supervisor::{
-    CancelHandle, FileTranslationSupervisor, FileTranslationTask, ShutdownReport,
-};
-
-pub(crate) type ProgressEvent = FileTranslationProgress;
-pub(crate) type FileTransTask = FileTranslationTask;
+pub use supervisor::{FileTranslationSupervisor, FileTranslationTask};
 
 #[cfg(feature = "benchmark")]
 pub mod benchmark_support {
@@ -39,6 +34,7 @@ pub mod benchmark_support {
 
 /// 출력 형식.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(test, derive(Debug))]
 pub enum WriteType {
     /// 번역만 기록한다.
     #[default]
@@ -58,8 +54,6 @@ pub struct FileTranslationRequest {
     pub cancel_token: Arc<AtomicBool>,
     pub translation: PreparedJob,
 }
-
-pub(crate) type FileTransJobData = FileTranslationRequest;
 
 /// Windows 파일 시스템의 대소문자 비구분 규칙에 맞춰 비교할 절대 경로 키를 만든다.
 fn normalized_path_key(path: &Path) -> Result<String, FileTranslationError> {

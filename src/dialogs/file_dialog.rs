@@ -1,201 +1,200 @@
-//! 긴 Unicode 경로를 지원하는 Vista+ Common Item Dialog helper.
-
-use std::path::PathBuf;
-
-use windows::Win32::Foundation::{ERROR_CANCELLED, HWND};
-use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree};
-use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
-use windows::Win32::UI::Shell::{
-    FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
-    FOS_PICKFOLDERS, FileOpenDialog, FileSaveDialog, IFileOpenDialog, IFileSaveDialog, IShellItem,
-    SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
-};
-use windows::core::{HRESULT, HSTRING, PCWSTR, Result};
+//! Raw Win32 file dialog helpers.
 
 use crate::win32::to_wide;
+use std::path::{Path, PathBuf};
+use windows_core::{Error, HRESULT};
+use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::System::Com::CoTaskMemFree;
+use windows_sys::Win32::UI::Controls::Dialogs::{
+    CommDlgExtendedError, GetOpenFileNameW, GetSaveFileNameW, OFN_ALLOWMULTISELECT, OFN_EXPLORER,
+    OFN_FILEMUSTEXIST, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+};
+use windows_sys::Win32::UI::Shell::{
+    BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW, GPFIDL_DEFAULT, SHBrowseForFolderW,
+    SHGetPathFromIDListEx,
+};
 
-/// 파일 filter 한 항목. 여러 확장자는 `;`로 구분한다.
 pub struct FileFilter<'a> {
     pub name: &'a str,
     pub spec: &'a str,
 }
 
-/// 필터 문자열들을 NUL-종료 와이드 버퍼로 변환하면서 수명을 유지하는 헬퍼.
-struct FilterStorage {
-    _wide: Vec<Vec<u16>>,
-    specs: Vec<COMDLG_FILTERSPEC>,
+fn error(message: &str) -> Error {
+    Error::new(HRESULT(0x80004005u32 as i32), message)
 }
 
-fn build_filters(filters: &[FileFilter]) -> FilterStorage {
-    let mut wide: Vec<Vec<u16>> = Vec::with_capacity(filters.len() * 2);
-    let mut specs: Vec<COMDLG_FILTERSPEC> = Vec::with_capacity(filters.len());
-
-    for f in filters {
-        let name_w = to_wide(f.name);
-        let spec_w = to_wide(f.spec);
-        let name_ptr = PCWSTR(name_w.as_ptr());
-        let spec_ptr = PCWSTR(spec_w.as_ptr());
-        wide.push(name_w);
-        wide.push(spec_w);
-        specs.push(COMDLG_FILTERSPEC {
-            pszName: name_ptr,
-            pszSpec: spec_ptr,
-        });
-    }
-
-    FilterStorage { _wide: wide, specs }
+/// Common-dialog APIs return zero for both cancellation and failure. The
+/// extended error code is zero only for user cancellation, so retain it in the
+/// returned HRESULT for callers that need to distinguish the two cases.
+fn common_dialog_error(api: &str, code: u32) -> Error {
+    let hresult = HRESULT((0x8007_0000u32 | code) as i32);
+    Error::new(
+        hresult,
+        format!("{api} failed (CommDlgExtendedError={code})"),
+    )
 }
 
-/// 유효한 `IShellItem`에서 파일 system 경로를 추출한다.
-unsafe fn shell_item_to_path(item: &IShellItem) -> Result<PathBuf> {
-    // SAFETY: 반환된 display-name pointer를 CoTaskMemFree로 해제한다.
-    unsafe {
-        let path_ptr = item.GetDisplayName(SIGDN_FILESYSPATH)?;
-        let path = path_ptr.to_string().map(PathBuf::from);
-        CoTaskMemFree(Some(path_ptr.0 as *const _));
-        Ok(path?)
+/// `GetOpenFileNameW`/`GetSaveFileNameW` return zero for both cancel and error.
+/// A zero extended code is the documented cancellation case.
+fn classify_common_dialog_result(api: &str, extended_error: u32) -> windows_core::Result<()> {
+    if extended_error == 0 {
+        Ok(())
+    } else {
+        Err(common_dialog_error(api, extended_error))
     }
 }
 
-fn show_was_accepted(result: Result<()>) -> Result<bool> {
-    match result {
-        Ok(()) => Ok(true),
-        Err(error) if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => Ok(false),
-        Err(error) => Err(error),
+fn filter_wide(filters: &[FileFilter<'_>]) -> Vec<u16> {
+    let mut out = Vec::new();
+    for filter in filters {
+        out.extend(filter.name.encode_utf16());
+        out.push(0);
+        out.extend(filter.spec.encode_utf16());
+        out.push(0);
     }
+    out.push(0);
+    out
 }
 
-/// "열기" 다이얼로그 (단일 선택).
-///
-/// `title`/`filters`는 비어 있어도 된다. `Ok(None)`은 사용자 취소다.
-pub fn open_file(hwnd: HWND, title: &str, filters: &[FileFilter]) -> Result<Option<PathBuf>> {
-    // SAFETY: UI thread는 STA이며 COM interface는 이 scope 안에서만 쓴다.
-    unsafe {
-        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
-
-        if !title.is_empty() {
-            dialog.SetTitle(&HSTRING::from(title))?;
+fn parse_selection(buffer: &[u16], multi: bool) -> Vec<PathBuf> {
+    let mut fields = Vec::new();
+    let mut start = 0;
+    for (index, value) in buffer.iter().enumerate() {
+        if *value == 0 {
+            if index == start {
+                break;
+            }
+            fields.push(String::from_utf16_lossy(&buffer[start..index]));
+            start = index + 1;
         }
-
-        let storage = build_filters(filters);
-        if !storage.specs.is_empty() {
-            dialog.SetFileTypes(&storage.specs)?;
-        }
-
-        dialog.SetOptions(FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST)?;
-
-        if !show_was_accepted(dialog.Show(Some(hwnd)))? {
-            return Ok(None);
-        }
-
-        let item: IShellItem = dialog.GetResult()?;
-        shell_item_to_path(&item).map(Some)
     }
+    if fields.is_empty() {
+        return Vec::new();
+    }
+    if !multi || fields.len() == 1 {
+        return vec![PathBuf::from(&fields[0])];
+    }
+    let dir = PathBuf::from(&fields[0]);
+    fields[1..].iter().map(|name| dir.join(name)).collect()
 }
 
-/// 다중 선택 열기 dialog. `Ok(None)`은 사용자 취소다.
+fn open_raw(
+    hwnd: HWND,
+    title: &str,
+    filters: &[FileFilter<'_>],
+    multi: bool,
+) -> windows_core::Result<Option<Vec<PathBuf>>> {
+    let mut file = vec![0u16; 32 * 1024];
+    let title_w = to_wide(title);
+    let filter = filter_wide(filters);
+    let mut dialog = OPENFILENAMEW {
+        lStructSize: size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: hwnd,
+        lpstrFilter: filter.as_ptr(),
+        lpstrFile: file.as_mut_ptr(),
+        nMaxFile: file.len() as u32,
+        lpstrTitle: title_w.as_ptr(),
+        Flags: OFN_EXPLORER
+            | OFN_PATHMUSTEXIST
+            | OFN_FILEMUSTEXIST
+            | if multi { OFN_ALLOWMULTISELECT } else { 0 },
+        ..Default::default()
+    };
+    if unsafe { GetOpenFileNameW(&mut dialog) } == 0 {
+        let code = unsafe { CommDlgExtendedError() };
+        classify_common_dialog_result("GetOpenFileNameW", code)?;
+        return Ok(None);
+    }
+    Ok(Some(parse_selection(&file, multi)))
+}
+
+pub fn open_file(
+    hwnd: HWND,
+    title: &str,
+    filters: &[FileFilter<'_>],
+) -> windows_core::Result<Option<PathBuf>> {
+    Ok(open_raw(hwnd, title, filters, false)?.and_then(|mut paths| paths.pop()))
+}
 pub fn open_files_multi(
     hwnd: HWND,
     title: &str,
-    filters: &[FileFilter],
-) -> Result<Option<Vec<PathBuf>>> {
-    // SAFETY: UI 스레드는 main()에서 STA 로 1회 초기화되어 있다.
-    unsafe {
-        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
-
-        if !title.is_empty() {
-            dialog.SetTitle(&HSTRING::from(title))?;
-        }
-
-        let storage = build_filters(filters);
-        if !storage.specs.is_empty() {
-            dialog.SetFileTypes(&storage.specs)?;
-        }
-
-        dialog.SetOptions(FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST | FOS_ALLOWMULTISELECT)?;
-
-        if !show_was_accepted(dialog.Show(Some(hwnd)))? {
-            return Ok(None);
-        }
-
-        let items = dialog.GetResults()?;
-
-        let count = items.GetCount()?;
-        let mut paths = Vec::with_capacity(count as usize);
-        for i in 0..count {
-            paths.push(shell_item_to_path(&items.GetItemAt(i)?)?);
-        }
-        Ok(Some(paths))
-    }
+    filters: &[FileFilter<'_>],
+) -> windows_core::Result<Option<Vec<PathBuf>>> {
+    open_raw(hwnd, title, filters, true)
 }
+pub fn pick_folder(hwnd: HWND, title: &str) -> windows_core::Result<Option<PathBuf>> {
+    let title_w = to_wide(title);
+    // BROWSEINFO's display buffer is only a visual hint; SHGetPathFromIDListEx
+    // writes the selected filesystem path into the separate output buffer.
+    let mut display_name = vec![0u16; 260];
+    let mut path = vec![0u16; 32 * 1024];
+    let browse = BROWSEINFOW {
+        hwndOwner: hwnd,
+        pszDisplayName: display_name.as_mut_ptr(),
+        lpszTitle: title_w.as_ptr(),
+        ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
+        ..Default::default()
+    };
 
-/// 폴더 선택 다이얼로그.
-pub fn pick_folder(hwnd: HWND, title: &str) -> Result<Option<PathBuf>> {
-    // SAFETY: UI 스레드는 main()에서 STA 로 1회 초기화되어 있다.
-    unsafe {
-        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
-
-        dialog.SetOptions(FOS_PICKFOLDERS)?;
-
-        if !title.is_empty() {
-            dialog.SetTitle(&HSTRING::from(title))?;
-        }
-
-        if !show_was_accepted(dialog.Show(Some(hwnd)))? {
-            return Ok(None);
-        }
-
-        let item: IShellItem = dialog.GetResult()?;
-        shell_item_to_path(&item).map(Some)
+    // SHBrowseForFolderW returns null when the user cancels. The PIDL is
+    // allocated by the shell task allocator and must be released regardless of
+    // whether converting it to a filesystem path succeeds.
+    let pidl = unsafe { SHBrowseForFolderW(&browse) };
+    if pidl.is_null() {
+        return Ok(None);
     }
-}
+    let converted = unsafe {
+        SHGetPathFromIDListEx(pidl, path.as_mut_ptr(), path.len() as u32, GPFIDL_DEFAULT)
+    } != 0;
+    unsafe { CoTaskMemFree(pidl.cast()) };
+    if !converted {
+        return Err(error("선택한 폴더의 경로를 읽지 못했습니다"));
+    }
 
-/// 저장 dialog. `default_ext`는 점 없이 전달하며 `initial`은 초기 경로다.
+    let length = path
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(path.len());
+    if length == 0 {
+        return Err(error("선택한 폴더의 경로가 비어 있습니다"));
+    }
+    Ok(Some(PathBuf::from(String::from_utf16_lossy(
+        &path[..length],
+    ))))
+}
 pub fn save_file(
     hwnd: HWND,
     title: &str,
-    filters: &[FileFilter],
+    filters: &[FileFilter<'_>],
     default_ext: Option<&str>,
-    initial: Option<&std::path::Path>,
-) -> Result<Option<PathBuf>> {
-    // SAFETY: UI 스레드는 main()에서 STA 로 1회 초기화되어 있다.
-    unsafe {
-        let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_ALL)?;
-
-        if !title.is_empty() {
-            dialog.SetTitle(&HSTRING::from(title))?;
-        }
-
-        let storage = build_filters(filters);
-        if !storage.specs.is_empty() {
-            dialog.SetFileTypes(&storage.specs)?;
-        }
-
-        if let Some(ext) = default_ext {
-            dialog.SetDefaultExtension(&HSTRING::from(ext))?;
-        }
-
-        if let Some(path) = initial {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                dialog.SetFileName(&HSTRING::from(name))?;
-            }
-            if let Some(folder) = path.parent().and_then(|s| s.to_str())
-                && !folder.is_empty()
-            {
-                let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(folder), None)?;
-                dialog.SetFolder(&item)?;
-            }
-        }
-
-        dialog.SetOptions(FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT)?;
-
-        if !show_was_accepted(dialog.Show(Some(hwnd)))? {
-            return Ok(None);
-        }
-
-        let item: IShellItem = dialog.GetResult()?;
-        shell_item_to_path(&item).map(Some)
+    initial: Option<&Path>,
+) -> windows_core::Result<Option<PathBuf>> {
+    let mut file = vec![0u16; 32 * 1024];
+    if let Some(path) = initial {
+        let wide = to_wide(&path.to_string_lossy());
+        let n = wide.len().min(file.len());
+        file[..n].copy_from_slice(&wide[..n]);
     }
+    let title_w = to_wide(title);
+    let filter = filter_wide(filters);
+    let ext = default_ext.map(to_wide);
+    let mut dialog = OPENFILENAMEW {
+        lStructSize: size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: hwnd,
+        lpstrFilter: filter.as_ptr(),
+        lpstrFile: file.as_mut_ptr(),
+        nMaxFile: file.len() as u32,
+        lpstrTitle: title_w.as_ptr(),
+        lpstrDefExt: ext.as_ref().map_or(std::ptr::null(), std::vec::Vec::as_ptr),
+        Flags: OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT,
+        ..Default::default()
+    };
+    if unsafe { GetSaveFileNameW(&mut dialog) } == 0 {
+        let code = unsafe { CommDlgExtendedError() };
+        classify_common_dialog_result("GetSaveFileNameW", code)?;
+        return Ok(None);
+    }
+    Ok(parse_selection(&file, false).pop())
 }
 
 #[cfg(test)]

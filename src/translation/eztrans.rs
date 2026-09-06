@@ -26,7 +26,7 @@ impl EzTransTranslator {
                 ehnd_dir.display()
             ));
         }
-        let session = TranslationSession::load_from_paths(&flat_bin, Some(ehnd_dir), None::<&Path>)
+        let session = TranslationSession::load_from_paths(flat_bin, Some(ehnd_dir), None::<&Path>)
             .map_err(|error| format!("eztrans_core 세션 로드 실패: {error}"))?;
         let context = session.context();
         Ok(Self { session, context })

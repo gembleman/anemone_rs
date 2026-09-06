@@ -47,9 +47,7 @@ fn report(label: &str, samples: &[Duration], units: usize) {
     let mut sorted = samples.to_vec();
     sorted.sort_unstable();
     let n = sorted.len();
-    let avg = sorted.iter().map(Duration::as_secs_f64).sum::<f64>()
-        / n as f64
-        * 1_000_000.0;
+    let avg = sorted.iter().map(Duration::as_secs_f64).sum::<f64>() / n as f64 * 1_000_000.0;
     let p50 = sorted[n / 2].as_secs_f64() * 1_000_000.0;
     let p99 = sorted[(n * 99 / 100).min(n - 1)].as_secs_f64() * 1_000_000.0;
     let min = sorted[0].as_secs_f64() * 1_000_000.0;

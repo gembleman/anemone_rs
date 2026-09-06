@@ -26,18 +26,15 @@ pub(super) struct Args {
 }
 
 pub(super) fn run(args: Args) -> Result<(), String> {
-    let text = if args.stdin {
-        read_stdin_to_string()?
-    } else {
-        args.text
-            .expect("clap이 텍스트 또는 --stdin 중 하나를 보장해야 함")
-    };
-    let text = text.trim_end_matches(['\r', '\n']).to_string();
-    if text.is_empty() {
-        return Err("빈 텍스트는 번역할 수 없습니다.".to_string());
-    }
+    run_with_config(args, Config::load_or_default())
+}
 
-    let config = Config::load_or_default();
+/// `run`에서 설정 로드를 분리해, 테스트가 실제 사용자 설정 파일을 건드리지
+/// 않고 인자 파싱 이후의 번역 실행 경로(엔진/언어 결정, 실제 번역 호출)를
+/// 검증할 수 있게 한다.
+pub(super) fn run_with_config(args: Args, config: Config) -> Result<(), String> {
+    let text = resolve_text(args.text, args.stdin, read_stdin_to_string)?;
+
     let engine = resolve_engine(args.engine, &config)?;
     let (source_lang, target_lang) = resolve_languages(&args.source, &args.target, &config)?;
 
@@ -61,6 +58,27 @@ fn run_translation(job: PreparedJob, text: &str) -> Result<String, String> {
     let service = TranslationService::new();
     rt.block_on(service.translate(job, Arc::from(text)))
         .map_err(|e| format!("번역 실패: {e}"))
+}
+
+/// `--stdin`/텍스트 인자 분기와 개행 trim, 빈 텍스트 거부를 모아 처리한다.
+/// 실제 stdin 읽기는 `read_stdin`으로 주입해 테스트에서 대체할 수 있게 한다.
+pub(super) fn resolve_text(
+    text: Option<String>,
+    use_stdin: bool,
+    read_stdin: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    let raw = if use_stdin {
+        read_stdin()?
+    } else {
+        text.ok_or_else(|| {
+            "번역할 텍스트가 없습니다. 텍스트를 인자로 주거나 --stdin을 사용하세요.".to_string()
+        })?
+    };
+    let trimmed = raw.trim_end_matches(['\r', '\n']).to_string();
+    if trimmed.is_empty() {
+        return Err("빈 텍스트는 번역할 수 없습니다.".to_string());
+    }
+    Ok(trimmed)
 }
 
 pub(super) fn resolve_engine(
@@ -109,3 +127,7 @@ fn read_stdin_to_string() -> Result<String, String> {
         .map_err(|e| format!("stdin 읽기 실패: {e}"))?;
     Ok(buf)
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/cli/translate.rs"]
+mod tests;

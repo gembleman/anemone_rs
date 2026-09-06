@@ -1,7 +1,7 @@
+use super::mem::MemSnapshot;
 use super::{
     BoundedTranslationCache, read_input_line, translate_eztrans_window, validate_and_count_reader,
 };
-use super::mem::MemSnapshot;
 use crate::translation::BenchmarkEzTransBatchTranslator as EzTransBatchTranslator;
 use std::fs::File;
 use std::io::BufReader;
@@ -99,10 +99,9 @@ fn large_fixture_streams_in_bounded_windows_and_translates_each_unique_line_once
         assert_eq!(translated[0], format!("번역:{}", window[0].text));
         processed += translated.len();
     }
-    MemSnapshot::now().delta(mem_before).report_per(
-        "window-200k (read+translate+cache)",
-        200_000,
-    );
+    MemSnapshot::now()
+        .delta(mem_before)
+        .report_per("window-200k (read+translate+cache)", 200_000);
 
     assert_eq!(processed, 200_000);
     assert_eq!(translator.translated_lines.load(Ordering::Relaxed), 10_000);

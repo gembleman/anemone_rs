@@ -2,10 +2,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use windows::{
-    Win32::Foundation::{HWND, RECT},
-    core::{PCWSTR, w},
-};
+use windows_sys::Win32::Foundation::{HWND, RECT};
 
 use crate::clipboard::ClipboardWatcher;
 use crate::d2d::{CompositionRenderer, D2DRenderer};
@@ -27,6 +24,7 @@ mod commands;
 pub(crate) mod hook_text;
 mod lifecycle;
 pub(crate) mod messages;
+mod paint;
 mod rendering;
 pub(crate) mod services;
 mod state;
@@ -34,12 +32,13 @@ mod translation;
 pub(crate) mod translation_cache;
 mod update;
 mod window_proc;
+mod window_proc_handlers;
 
 pub(crate) use update::{open_release_page, restart_after_update_if_requested};
 
-const CLASS_NAME: PCWSTR = w!("AnemoneWindowClass");
-const PARENT_CLASS_NAME: PCWSTR = w!("AnemoneParentClass");
-const WINDOW_TITLE: PCWSTR = w!("아네모네");
+pub(super) const CLASS_NAME: *const u16 = windows_sys::core::w!("AnemoneWindowClass");
+pub(super) const PARENT_CLASS_NAME: *const u16 = windows_sys::core::w!("AnemoneParentClass");
+pub(super) const WINDOW_TITLE: *const u16 = windows_sys::core::w!("아네모네");
 pub(super) const COMPOSITION_RETRY_TIMER: usize = 0xD2D0;
 pub(super) const CLIPBOARD_DEBOUNCE_TIMER: usize = 0xD2D1;
 pub(super) const CLIPBOARD_READ_RETRY_TIMER: usize = 0xD2D2;
@@ -76,6 +75,15 @@ pub struct App {
     /// 반복하지 않도록 timer 기반 backoff를 적용한다.
     composition_init_failures: u32,
     composition_retry_scheduled: bool,
+    /// 후킹 병합 타이머가 지금 돌고 있는지.
+    ///
+    /// `SetTimer`를 이벤트마다 다시 부르면 같은 ID의 countdown이 매번 리셋되어,
+    /// 글자 단위 훅처럼 쉬지 않고 오는 출처가 있으면 타이머가 영영 안 터진다.
+    /// 그렇다고 "merger가 비어 있을 때만 건다"로 두면, 그 글자 훅이 merger를
+    /// 계속 채우고 있어 시나리오 문장이 타이머 없이 갇힌다. 그래서 merger의
+    /// 상태와 무관하게 타이머의 수명만 여기서 따로 추적한다.
+    hook_merge_timer_active: bool,
+    last_render_diagnostic: Option<String>,
     /// 투명 배경에서 `WM_NCHITTEST`가 사용하는 client 좌표 text 사각형.
     hit_region: Vec<RECT>,
     /// 배경/테두리가 있어 text 사각형과 무관하게 전체 창을 조작할 수 있는지 여부.
