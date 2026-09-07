@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::{env, fs};
 
 fn main() {
@@ -40,7 +41,43 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/hook_find.rc");
 
     detect_mys_private();
+    build_release_hooks();
     copy_eztrans_assets();
+}
+
+/// x64 release 실행 파일과 함께 쓰는 x64/x86 후킹 바이너리를 빌드하고 배치한다.
+fn build_release_hooks() {
+    println!("cargo:rerun-if-changed=scripts/run_with_hooks.ps1");
+    println!("cargo:rerun-if-changed=scripts/build_hooks.ps1");
+
+    if env::var("PROFILE").as_deref() != Ok("release")
+        || env::var("TARGET").as_deref() != Ok("x86_64-pc-windows-msvc")
+    {
+        return;
+    }
+
+    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let hook_dir = manifest_dir.join("../eztrans_scratch/lunahook_rs");
+    println!(
+        "cargo:rerun-if-changed={}",
+        hook_dir.join("Cargo.toml").display()
+    );
+    println!("cargo:rerun-if-changed={}", hook_dir.join("src").display());
+    println!("cargo:rerun-if-changed=tools/inject32/Cargo.toml");
+    println!("cargo:rerun-if-changed=tools/inject32/src");
+
+    let script = manifest_dir.join("scripts/run_with_hooks.ps1");
+    let status = Command::new("pwsh")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .args(["-BuildOnly", "-Profile", "release"])
+        .status()
+        .unwrap_or_else(|error| panic!("후킹 빌드 스크립트를 실행할 수 없습니다: {error}"));
+
+    assert!(
+        status.success(),
+        "release 후킹 바이너리 빌드에 실패했습니다"
+    );
 }
 
 /// 아래 파일들이 모두 있으면 `mys_private` cfg를 켠다. 없으면 같은 폴더의

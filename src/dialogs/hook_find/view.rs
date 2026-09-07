@@ -196,7 +196,7 @@ pub(super) fn set_log_text(control: HWND, text: &str) {
 pub(super) fn append_log_text(control: HWND, text: &str) {
     let mut wide = crate::win32::to_wide(text);
     unsafe {
-        let _ = SendMessageW(control, EM_SETSEL, 0, -1);
+        let _ = SendMessageW(control, EM_SETSEL, usize::MAX, -1);
         let _ = SendMessageW(control, EM_REPLACESEL, 0, wide.as_mut_ptr() as isize);
         let _ = SendMessageW(control, EM_SCROLLCARET, 0, 0);
     }
