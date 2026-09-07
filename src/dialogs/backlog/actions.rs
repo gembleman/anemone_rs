@@ -1,9 +1,10 @@
 //! 컨트롤 초기화, 명령 처리, 폰트/저장 대화상자, 크기 재배치.
 
+use std::thread;
 use windows_core::{Error, HRESULT};
 use windows_sys::Win32::{Foundation::*, UI::Controls::*, UI::WindowsAndMessaging::*};
 
-use super::{BacklogDialog, Result, ctrl_id};
+use super::{BacklogDialog, NEXT_SAVE_TOKEN, Result, SaveResult, WM_BACKLOG_SAVE_RESULT, ctrl_id};
 use crate::app::backlog::{BacklogFilter, MAX_BACKLOG_ENTRIES, MAX_BACKLOG_TEXT_BYTES};
 use crate::dialogs::file_dialog::{FileFilter, save_file};
 use crate::dialogs::font::{FontDialog, FontDialogConfig, FontStyle};
@@ -105,7 +106,10 @@ impl BacklogDialog {
     }
 
     /// 파일로 저장
-    fn save_to_file(&self) {
+    fn save_to_file(&mut self) {
+        if self.save_in_progress {
+            return;
+        }
         let filters = [
             FileFilter {
                 name: "텍스트 파일 (*.txt)",
@@ -134,12 +138,34 @@ impl BacklogDialog {
             }
         };
 
-        if let Err(error) = self.store.export_utf8(&path) {
-            tracing::error!("backlog save failed: {error}");
+        let store = self.store.clone();
+        let result_slot = std::sync::Arc::clone(&self.save_result);
+        let hwnd = self.hwnd as usize;
+        let token = NEXT_SAVE_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.save_token = token;
+        self.save_in_progress = true;
+        self.save_worker = thread::Builder::new()
+            .name("anemone-backlog-save".into())
+            .spawn(move || {
+                let result = store.export_utf8(&path);
+                *result_slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(SaveResult { result });
+                // SAFETY: hwnd is the live backlog dialog while the worker result is pending.
+                if unsafe { PostMessageW(hwnd as HWND, WM_BACKLOG_SAVE_RESULT, token as usize, 0) }
+                    == 0
+                {
+                    tracing::debug!("백로그 저장 결과 알림 실패");
+                }
+            })
+            .ok();
+        if self.save_worker.is_none() {
+            self.save_in_progress = false;
             crate::dialogs::helpers::show_error_message(
                 self.hwnd,
                 "백로그 저장 오류",
-                &format!("백로그를 파일에 저장하지 못했습니다.\n\n{error}"),
+                "저장 워커를 시작하지 못했습니다.",
             );
         }
     }

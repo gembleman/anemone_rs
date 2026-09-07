@@ -15,13 +15,14 @@ use windows_sys::Win32::{
 };
 
 use super::messages::{
-    WM_APP_ACTION, WM_APP_HOOK_STATE, WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH,
-    WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT, WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE,
-    WM_TRAY_ICON, WM_UPDATE_PROGRESS, WM_UPDATE_RESULT,
+    WM_APP_ACTION, WM_APP_DRAIN_DEFERRED, WM_APP_HOOK_STATE, WM_APP_MAGNETIC_REPOSITION,
+    WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
+    WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON, WM_UPDATE_PROGRESS,
+    WM_UPDATE_RESULT,
 };
 use super::{
     App, CLIPBOARD_DEBOUNCE_TIMER, CLIPBOARD_READ_RETRY_TIMER, COMPOSITION_RETRY_TIMER,
-    HOOK_MERGE_TIMER, MAGNETIC_NOTICE_TIMER,
+    FRAME_RETRY_TIMER, HOOK_MERGE_TIMER, MAGNETIC_NOTICE_TIMER,
 };
 
 impl App {
@@ -193,6 +194,15 @@ impl App {
                     Some(0)
                 }
 
+                WM_TIMER if wparam == FRAME_RETRY_TIMER => {
+                    let _ = KillTimer(hwnd, FRAME_RETRY_TIMER);
+                    self.frame_retry_scheduled = false;
+                    if let Err(e) = self.paint() {
+                        tracing::warn!("frame retry paint failed: {e}");
+                    }
+                    Some(0)
+                }
+
                 WM_TIMER if wparam == CLIPBOARD_DEBOUNCE_TIMER => {
                     self.handle_clipboard_debounce_timer();
                     Some(0)
@@ -249,6 +259,9 @@ impl App {
                 Some(0)
             }
 
+            // 실제 drain은 outer wndproc가 App borrow를 놓은 뒤 공통 경로에서 한다.
+            _ if msg == WM_APP_DRAIN_DEFERRED => Some(0),
+
             _ if msg == WM_APP_SET_MAGNETIC => {
                 self.apply_magnetic_request(wparam != 0);
                 Some(0)
@@ -256,6 +269,13 @@ impl App {
 
             _ if msg == WM_APP_MAGNETIC_TARGET_SELECTED => {
                 self.handle_magnetic_target_selected(wparam as HWND);
+                Some(0)
+            }
+
+            _ if msg == WM_APP_MAGNETIC_REPOSITION => {
+                if let Some(magnetic) = self.magnetic.as_mut() {
+                    magnetic.apply_pending_reposition();
+                }
                 Some(0)
             }
 

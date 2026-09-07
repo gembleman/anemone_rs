@@ -161,7 +161,21 @@ impl TranslationDispatch {
                 let source = languages.source();
                 let target = languages.target();
 
+                let process = match req.job.engine().eztrans_process() {
+                    Some(process) => process.clone(),
+                    None => {
+                        return Err(TranslationError::Engine(
+                            "EzTrans 실행 설정을 찾을 수 없습니다".into(),
+                        ));
+                    }
+                };
+
+                // 평면 사전/Ehnd 로드는 수백 ms 이상 걸릴 수 있다. 준비를 UI의
+                // 요청 경로에서 하지 않고 번역과 같은 blocking pool에서 수행해
+                // 첫 클립보드 번역도 UI 메시지 루프를 막지 않게 한다.
                 match tokio::task::spawn_blocking(move || {
+                    super::super::prepare_eztrans(&process.dictionary_path, &process.ehnd_path)
+                        .map_err(TranslationError::Engine)?;
                     super::super::translate_with_eztrans(&text, source, target)
                 })
                 .await

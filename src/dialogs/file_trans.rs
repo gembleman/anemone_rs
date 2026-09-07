@@ -3,7 +3,7 @@
 //! 다중 파일 선택 및 배치 번역 기능.
 //! Common Item Dialog (IFileOpenDialog / IFileSaveDialog) 사용.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use windows_core::{Error, HRESULT};
@@ -15,6 +15,7 @@ use windows_sys::Win32::{
 };
 
 use super::file_dialog::{FileFilter, open_files_multi, save_file};
+use super::file_trans_preview::{PreviewWorker, WM_FILE_TRANS_PREVIEW};
 use super::file_trans_progress::FileTransProgressDialog;
 use super::helpers::set_window_text;
 use super::host::{DialogHost, DialogResult, HostedDialog};
@@ -23,7 +24,6 @@ use crate::app::action::AppActionSender;
 use crate::config::Config;
 use crate::file_trans::{
     FileTranslationRequest, FileTranslationSupervisor, WriteType, default_output_paths,
-    validate_job_paths,
 };
 type Result<T> = windows_core::Result<T>;
 use crate::translation::{PreparedJob, TranslationEngine};
@@ -70,6 +70,9 @@ pub struct FileTransDialog {
     no_trans_linefeed: bool,
     actions: AppActionSender,
     session: u64,
+    preview_worker: Option<PreviewWorker>,
+    preview_generation: u64,
+    preview_token: u64,
 }
 
 pub(crate) struct FileTransInit {
@@ -96,6 +99,10 @@ impl HostedDialog for FileTransDialog {
     }
 
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> DialogResult {
+        if msg == WM_FILE_TRANS_PREVIEW && wparam as u64 == self.preview_token {
+            self.handle_preview_result();
+            return DialogResult::Handled(1);
+        }
         if msg != WM_COMMAND {
             return DialogResult::Unhandled;
         }
@@ -113,11 +120,15 @@ impl HostedDialog for FileTransDialog {
     }
 
     fn destroy(&mut self) {
+        if let Some(worker) = self.preview_worker.take() {
+            self.preview_token = 0;
+            worker.shutdown();
+        }
         self.actions.file_trans_dialog_closed(self.session);
     }
 
     fn can_defer(msg: u32) -> bool {
-        msg == WM_COMMAND
+        msg == WM_COMMAND || msg == WM_FILE_TRANS_PREVIEW
     }
 }
 
@@ -151,6 +162,9 @@ impl FileTransDialog {
             no_trans_linefeed: false,
             actions,
             session,
+            preview_worker: None,
+            preview_generation: 0,
+            preview_token: 0,
         }
     }
 
@@ -538,7 +552,7 @@ impl FileTransDialog {
         }
 
         if let Some(first_file) = self.input_files.first() {
-            self.show_preview(first_file);
+            self.request_preview(first_file.clone());
         }
     }
 
@@ -574,15 +588,37 @@ impl FileTransDialog {
         let _ = set_window_text(self.save_edit, &path_str);
     }
 
-    /// 파일 미리보기 (처음 7줄). 입력은 UTF-8 / UTF-8 BOM 만 허용한다.
-    fn show_preview(&self, path: &Path) {
-        const PREVIEW_BYTE_LIMIT: u64 = 64 * 1024;
-        let content = match crate::file_trans::read_utf8_preview(path, 7, PREVIEW_BYTE_LIMIT) {
-            Ok(content) => content,
-            Err(msg) => format!("! {msg}"),
-        };
+    /// 파일 미리보기 읽기를 작업 스레드에 보낸다.
+    fn request_preview(&mut self, path: PathBuf) {
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        let generation = self.preview_generation;
+        if self.preview_worker.is_none() {
+            self.preview_worker = PreviewWorker::spawn(self.hwnd);
+            self.preview_token = self
+                .preview_worker
+                .as_ref()
+                .map_or(0, |worker| worker.token);
+        }
+        if self
+            .preview_worker
+            .as_ref()
+            .is_some_and(|worker| worker.request(generation, path))
+        {
+            let _ = set_window_text(self.preview_edit, "미리보기 읽는 중...");
+        }
+    }
 
-        let _ = set_window_text(self.preview_edit, &content);
+    fn handle_preview_result(&mut self) {
+        let Some(worker) = self.preview_worker.as_ref() else {
+            return;
+        };
+        let result = worker
+            .drain()
+            .into_iter()
+            .rfind(|result| result.generation == self.preview_generation);
+        if let Some(result) = result {
+            let _ = set_window_text(self.preview_edit, &result.content);
+        }
     }
 
     fn show_file_dialog_error(&self, error: &windows_core::Error) {
@@ -631,19 +667,6 @@ impl FileTransDialog {
                     crate::win32::to_wide("파일을 먼저 선택해주세요.").as_ptr(),
                     crate::win32::to_wide("알림").as_ptr(),
                     MB_ICONINFORMATION,
-                );
-            }
-            return;
-        }
-
-        if let Err(error) = validate_job_paths(&self.input_files, &self.output_files) {
-            unsafe {
-                let message = crate::win32::to_wide(&error.to_string());
-                let _ = MessageBoxW(
-                    self.hwnd,
-                    message.as_ptr(),
-                    crate::win32::to_wide("경로 오류").as_ptr(),
-                    MB_ICONERROR,
                 );
             }
             return;

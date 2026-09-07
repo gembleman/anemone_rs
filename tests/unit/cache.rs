@@ -35,6 +35,33 @@ fn miss_then_hit_after_put() {
 }
 
 #[test]
+fn put_is_flushed_by_the_cache_writer_before_test_put_returns() {
+    let path = temp_db_path();
+    let store = TranslationCacheStore::open(&path);
+    let key = sample_key("writer flush");
+
+    store.put(&key, "번역");
+
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    let stored: String = raw
+        .query_row(
+            "SELECT translation FROM translation_cache
+             WHERE engine_id = ?1 AND source_lang = ?2 AND target_lang = ?3 AND original = ?4",
+            params![
+                key.engine_id,
+                key.source_lang,
+                key.target_lang,
+                key.original
+            ],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, "번역");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn put_overwrites_existing_translation() {
     let path = temp_db_path();
     let store = TranslationCacheStore::open(&path);

@@ -8,17 +8,18 @@ use windows_sys::Win32::{
     Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT},
     UI::WindowsAndMessaging::{
         DefWindowProcW, GetClientRect, GetWindowRect, HTCAPTION, HTTRANSPARENT, MINMAXINFO,
-        PostQuitMessage, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_CLIPBOARDUPDATE, WM_CLOSE,
-        WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
-        WM_GETMINMAXINFO, WM_HOTKEY, WM_NCHITTEST, WM_NCRBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SIZE,
-        WM_TIMER,
+        PostMessageW, PostQuitMessage, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
+        WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+        WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_HOTKEY, WM_NCHITTEST,
+        WM_NCRBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
     },
 };
 
 use super::messages::{
-    WM_APP_ACTION, WM_APP_HOOK_STATE, WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH,
-    WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT, WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE,
-    WM_TRAY_ICON, WM_UPDATE_PROGRESS, WM_UPDATE_RESULT,
+    WM_APP_ACTION, WM_APP_DRAIN_DEFERRED, WM_APP_HOOK_STATE, WM_APP_MAGNETIC_REPOSITION,
+    WM_APP_MAGNETIC_TARGET_SELECTED, WM_APP_REFRESH, WM_APP_SET_MAGNETIC, WM_DEFERRED_PAINT,
+    WM_DEFERRED_RESIZE, WM_TRANSLATION_COMPLETE, WM_TRAY_ICON, WM_UPDATE_PROGRESS,
+    WM_UPDATE_RESULT,
 };
 use super::{APP, App};
 use crate::window;
@@ -65,6 +66,8 @@ fn reentry_policy(msg: u32, taskbar_created_msg: u32) -> ReentryPolicy {
             msg,
             WM_APP_REFRESH
                 | WM_APP_ACTION
+                | WM_APP_DRAIN_DEFERRED
+                | WM_APP_MAGNETIC_REPOSITION
                 | WM_APP_MAGNETIC_TARGET_SELECTED
                 | WM_APP_SET_MAGNETIC
                 | WM_APP_HOOK_STATE
@@ -204,10 +207,15 @@ impl App {
 
     /// `RefMut<App>` 해제 후, 임시 system pointer를 포함하지 않은 message만 처리한다.
     pub(super) fn drain_deferred_messages(app: &Rc<RefCell<App>>) {
-        while let Some(message) = DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().pop_front()) {
+        const DEFERRED_BATCH_SIZE: usize = 32;
+        for _ in 0..DEFERRED_BATCH_SIZE {
+            let Some(message) = DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().pop_front())
+            else {
+                return;
+            };
             let Ok(mut app_ref) = app.try_borrow_mut() else {
                 DEFERRED_MESSAGES.with(|queue| queue.borrow_mut().push_front(message));
-                break;
+                return;
             };
             let result = unsafe {
                 app_ref.dispatch_message(message.hwnd, message.msg, message.wparam, message.lparam)
@@ -218,6 +226,13 @@ impl App {
                 unsafe {
                     DefWindowProcW(message.hwnd, message.msg, message.wparam, message.lparam);
                 }
+            }
+        }
+        let has_more = DEFERRED_MESSAGES.with(|queue| !queue.borrow().is_empty());
+        if has_more {
+            let hwnd = app.borrow().hwnd;
+            if unsafe { PostMessageW(hwnd, WM_APP_DRAIN_DEFERRED, 0, 0) } == 0 {
+                tracing::warn!("보류 메시지의 다음 배치를 게시하지 못했습니다");
             }
         }
     }

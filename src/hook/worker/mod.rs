@@ -39,7 +39,10 @@ pub enum HookRequest {
     NewHook(Box<RawHookParam>),
     RemoveHook(u64),
     /// 자동 탐색(`text` 비움) 또는 텍스트 검색. wire 구조체가 크다(~1.6KB).
-    FindHook(Box<SearchParam>),
+    FindHook {
+        search: Box<SearchParam>,
+        generation: u64,
+    },
 }
 
 /// 워커 → UI 이벤트. 공유 슬롯에 쌓였다가 WM_APP 메시지로 깨어난
@@ -67,7 +70,10 @@ pub enum HookEvent {
         received_at: std::time::Instant,
     },
     EngineDetected(String),
-    FoundHook(Box<FoundHook>),
+    FoundHook {
+        found: Box<FoundHook>,
+        generation: u64,
+    },
     HookInserted {
         address: u64,
         hook_code: String,
@@ -76,12 +82,35 @@ pub enum HookEvent {
     Info(String),
 }
 
-pub(super) type EventSlot = Arc<Mutex<Vec<HookEvent>>>;
+pub(super) type EventSlot = Arc<EventQueue>;
+
+pub(super) struct EventQueue {
+    queue: Mutex<Vec<HookEvent>>,
+    notification_pending: AtomicBool,
+}
+
+impl EventQueue {
+    fn new() -> Self {
+        Self {
+            queue: Mutex::new(Vec::new()),
+            notification_pending: AtomicBool::new(false),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<HookEvent>> {
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
 
 pub(super) struct SessionShared {
     server: Mutex<Option<Arc<PipeServer>>>,
     stop: AtomicBool,
     connected: AtomicBool,
+    /// FIND_HOOK 결과를 현재 검색 세대에 귀속한다. wire 알림에는 세대가
+    /// 없으므로 세션이 명령을 받는 순간 갱신하고, 읽기 스레드가 이를 붙인다.
+    search_generation: std::sync::atomic::AtomicU64,
 }
 
 impl SessionShared {
@@ -90,6 +119,7 @@ impl SessionShared {
             server: Mutex::new(None),
             stop: AtomicBool::new(false),
             connected: AtomicBool::new(false),
+            search_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -125,7 +155,7 @@ impl HookWorker {
     /// 메시지다(HWND는 !Send라 usize로 경계를 넘는다 — update 워커와 동일).
     pub fn spawn(hwnd: HWND, message: u32) -> Self {
         let (tx, rx) = mpsc::channel::<HookRequest>();
-        let events: EventSlot = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new(EventQueue::new());
         let worker_events = Arc::clone(&events);
         let hwnd_raw = hwnd as usize;
 
@@ -155,12 +185,48 @@ impl HookWorker {
     }
 
     /// 도착한 이벤트를 모두 꺼낸다. 도착 순서를 보존한다.
+    #[allow(dead_code)]
     pub fn drain_events(&self) -> Vec<HookEvent> {
-        let mut events = self
-            .events
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        std::mem::take(&mut *events)
+        self.drain_events_batch(usize::MAX)
+    }
+
+    /// 도착 순서를 유지한 채 최대 `limit`개만 꺼낸다. UI가 호출하는 경로는
+    /// 반드시 유한한 limit을 사용해 워커 이벤트가 paint/input을 독점하지
+    /// 않게 한다.
+    pub fn drain_events_batch(&self, limit: usize) -> Vec<HookEvent> {
+        let mut events = self.events.lock();
+        if limit >= events.len() {
+            let drained = std::mem::take(&mut *events);
+            self.events
+                .notification_pending
+                .store(false, Ordering::Release);
+            return drained;
+        }
+        events.drain(..limit).collect()
+    }
+
+    pub fn has_pending_events(&self) -> bool {
+        !self.events.lock().is_empty()
+    }
+
+    /// 잔여 이벤트를 위한 알림을 다시 게시한다. 큐 잠금을 잡은 채 상태를
+    /// 바꾸고 게시하므로 push와의 경쟁에서 알림 상태가 영구히 고착되지 않는다.
+    pub(crate) fn notify_pending_events(&self, hwnd_raw: usize, message: u32) {
+        let queue = self.events.lock();
+        if queue.is_empty() {
+            self.events
+                .notification_pending
+                .store(false, Ordering::Release);
+            return;
+        }
+        self.events
+            .notification_pending
+            .store(true, Ordering::Release);
+        if notify(hwnd_raw, message).is_err() {
+            self.events
+                .notification_pending
+                .store(false, Ordering::Release);
+        }
     }
 
     /// 채널을 닫고 세션·워커를 제한 시간 안에 join한다. 못 끝내면 detach하고
@@ -266,8 +332,14 @@ impl HookWorker {
                 HookRequest::RemoveHook(address) => {
                     send_command(&session, pipe_client::build_remove_hook(address));
                 }
-                HookRequest::FindHook(sp) => {
-                    send_command(&session, pipe_client::build_find_hook(&sp));
+                HookRequest::FindHook { search, generation } => {
+                    if let Some(active) = session.as_ref() {
+                        active
+                            .shared
+                            .search_generation
+                            .store(generation, Ordering::Release);
+                    }
+                    send_command(&session, pipe_client::build_find_hook(&search));
                 }
             }
         }
@@ -280,11 +352,20 @@ impl HookWorker {
 
 /// 이벤트를 슬롯에 쌓고 UI 스레드를 깨운다.
 pub(super) fn push_event(events: &EventSlot, hwnd_raw: usize, message: u32, event: HookEvent) {
-    events
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(event);
-    notify(hwnd_raw, message);
+    let mut queue = events.lock();
+    // 빈 큐에서 비어 있지 않은 큐로 바뀔 때만 깨운다. UI가 한 번에
+    // 제한된 수만 꺼내도 남은 이벤트가 다시 알림을 만들므로, 이벤트마다
+    // PostMessageW를 호출해 메시지 큐를 폭발시키지 않는다.
+    if !events.notification_pending.swap(true, Ordering::AcqRel) {
+        queue.push(event);
+        if notify(hwnd_raw, message).is_err() {
+            // 게시 실패를 소비하지 않고 되돌린다. 다음 push가 다시 게시하고,
+            // UI가 잔여 큐를 확인하는 경로도 재시도할 수 있다.
+            events.notification_pending.store(false, Ordering::Release);
+        }
+    } else {
+        queue.push(event);
+    }
 }
 
 /// 세션을 안전하게 끝낸다: stop 플래그 → DETACH/CancelIoEx로 대기 중인
@@ -330,12 +411,15 @@ fn send_command(session: &Option<ActiveSession>, bytes: Vec<u8>) {
 }
 
 /// 이벤트가 준비됐음을 UI 스레드에 알린다.
-fn notify(hwnd_raw: usize, message: u32) {
+fn notify(hwnd_raw: usize, message: u32) -> Result<(), ()> {
     // SAFETY: UI 스레드가 소유한 창은 App이 종료될 때까지 유효하다. shutdown은
     // App 소멸 경로에서 호출되므로 그 뒤에는 새 알림이 없다.
     let result = unsafe { PostMessageW(hwnd_raw as HWND, message, 0, 0) };
     if result == 0 {
         tracing::warn!("후킹 이벤트 알림을 게시하지 못했습니다");
+        Err(())
+    } else {
+        Ok(())
     }
 }
 

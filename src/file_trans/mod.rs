@@ -73,6 +73,33 @@ fn normalized_path_key(path: &Path) -> Result<String, FileTranslationError> {
     Ok(text.to_lowercase())
 }
 
+/// 아직 존재하지 않는 출력 경로를 비교할 때 쓰는 빠른 키다.
+///
+/// 기본 출력 이름을 만드는 UI 경로에서는 파일 시스템 조회를 하지 않는다.
+/// 실제 입력/출력 충돌 검사는 작업 워커의 `validate_job_paths`에서 수행한다.
+fn lexical_path_key(path: &Path) -> Result<String, FileTranslationError> {
+    let absolute = std::path::absolute(path).map_err(|e| {
+        FileTranslationError::path(format!(
+            "경로를 절대 경로로 변환할 수 없습니다: {}\n{e}",
+            path.display()
+        ))
+    })?;
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    Ok(normalized
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase())
+}
+
 /// 입력과 출력 경로가 서로 겹치거나 출력 경로끼리 중복되는지 검사한다.
 pub(crate) fn validate_job_paths(
     inputs: &[PathBuf],
@@ -116,7 +143,7 @@ pub(crate) fn default_output_paths(
 ) -> Result<Vec<PathBuf>, FileTranslationError> {
     let input_keys = inputs
         .iter()
-        .map(|path| normalized_path_key(path))
+        .map(|path| lexical_path_key(path))
         .collect::<Result<HashSet<_>, _>>()?;
     let mut output_keys = HashSet::with_capacity(inputs.len());
     let mut outputs = Vec::with_capacity(inputs.len());
@@ -132,7 +159,7 @@ pub(crate) fn default_output_paths(
                 format!("{stem}_번역_{suffix}.txt")
             };
             let candidate = parent.join(filename);
-            let key = normalized_path_key(&candidate)?;
+            let key = lexical_path_key(&candidate)?;
             if !input_keys.contains(&key) && output_keys.insert(key) {
                 outputs.push(candidate);
                 break;

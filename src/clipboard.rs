@@ -48,6 +48,14 @@ impl Drop for ClipboardGuard {
 
 pub(crate) struct OwnedGlobalMemory(Option<HGLOBAL>);
 
+fn utf16_scan_limit(max_len: usize, max_words: usize) -> usize {
+    if max_len == 0 {
+        max_words
+    } else {
+        max_len.saturating_mul(2).saturating_add(1).min(max_words)
+    }
+}
+
 impl OwnedGlobalMemory {
     pub(crate) fn allocate(bytes: usize) -> io::Result<Self> {
         let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes) };
@@ -276,10 +284,14 @@ impl ClipboardWatcher {
             }
 
             // null-terminated UTF-16 문자열 길이 계산 — max_words 로 상한.
+            // max_len이 있으면 초과 여부가 확정되는 지점까지만 읽는다. 이전에는
+            // null 종결자를 찾을 때까지 전체 버퍼를 훑었으므로, 종결자가 없거나
+            // 매우 큰 텍스트를 복사하면 UI 스레드가 불필요하게 오래 점유됐다.
+            let scan_limit = utf16_scan_limit(max_len, max_words);
             let mut len = 0;
             // SAFETY: the buffer is locked and `len < max_words` keeps every read inside
             // the byte range GlobalSize reported.
-            while len < max_words && unsafe { *ptr.add(len) } != 0 {
+            while len < scan_limit && unsafe { *ptr.add(len) } != 0 {
                 len += 1;
             }
 
@@ -312,5 +324,21 @@ impl Drop for ClipboardWatcher {
         if let Err(error) = self.stop() {
             tracing::warn!("RemoveClipboardFormatListener failed during drop: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::utf16_scan_limit;
+
+    #[test]
+    fn bounded_scan_stops_at_the_first_definitely_too_long_word() {
+        assert_eq!(utf16_scan_limit(3, 100), 7);
+        assert_eq!(utf16_scan_limit(3, 6), 6);
+    }
+
+    #[test]
+    fn zero_max_length_keeps_the_unlimited_scan() {
+        assert_eq!(utf16_scan_limit(0, usize::MAX), usize::MAX);
     }
 }

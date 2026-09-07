@@ -126,3 +126,9 @@ fn the_selected_stream_is_visible_from_another_thread() {
         .expect("worker-thread view must not panic");
     assert!(!after_reset);
 }
+
+#[test]
+fn candidate_from_an_older_search_generation_is_ignored() {
+    assert!(search::candidate_generation_matches(7, 7));
+    assert!(!search::candidate_generation_matches(8, 7));
+}

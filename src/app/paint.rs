@@ -12,7 +12,7 @@ use super::rendering::{
     RenderBlock, build_notice_render_blocks, build_render_blocks, composition_retry_delay_ms,
     dip_rect_to_pixels, pixels_to_dips,
 };
-use super::{App, COMPOSITION_RETRY_TIMER, state};
+use super::{App, COMPOSITION_RETRY_TIMER, FRAME_RETRY_TIMER, state};
 use crate::d2d::MeasureSlot;
 use crate::d2d::{CompositionRenderer, WaitOutcome};
 
@@ -35,7 +35,7 @@ struct FramePlan {
 }
 
 impl App {
-    const FRAME_WAIT_TIMEOUT_MS: u32 = 16;
+    const FRAME_RETRY_DELAY_MS: u32 = 16;
 
     fn text_layout_extent(size: f32, margin: i32) -> f32 {
         (size - margin.saturating_mul(2) as f32).max(1.0)
@@ -249,7 +249,7 @@ impl App {
         #[cfg(feature = "benchmark")]
         let t = phase_now();
 
-        if !self.ensure_composition_ready()? {
+        if self.frame_retry_scheduled || !self.ensure_composition_ready()? {
             return Ok(());
         }
         #[cfg(feature = "benchmark")]
@@ -268,14 +268,28 @@ impl App {
             return Ok(());
         };
 
-        // 한 프레임만 기다린다. Timeout은 재예약하고 API 오류는 스택을 재생성한다.
-        match composition.wait_for_back_buffer(Self::FRAME_WAIT_TIMEOUT_MS) {
+        // UI 스레드에서는 기다리지 않는다. 준비되지 않았으면 timer로 한 프레임 뒤에
+        // 다시 시도한다. GPU back pressure가 있어도 입력 message를 처리할 수 있다.
+        match composition.wait_for_back_buffer(0) {
             WaitOutcome::Ready => {}
             WaitOutcome::Timeout => {
-                tracing::debug!("DComp back buffer wait timed out; retrying next paint");
-                // SAFETY: hwnd는 App이 소유한 유효한 top-level window handle.
-                unsafe {
-                    let _ = InvalidateRect(self.hwnd, std::ptr::null(), 0);
+                if !self.frame_retry_scheduled {
+                    let timer = unsafe {
+                        SetTimer(
+                            self.hwnd,
+                            FRAME_RETRY_TIMER,
+                            Self::FRAME_RETRY_DELAY_MS,
+                            None,
+                        )
+                    };
+                    self.frame_retry_scheduled = timer != 0;
+                    if timer == 0 {
+                        tracing::warn!("DComp frame retry timer could not be created");
+                        // 타이머 생성 실패 때도 다음 system paint 기회를 남긴다.
+                        unsafe {
+                            let _ = InvalidateRect(self.hwnd, std::ptr::null(), 0);
+                        }
+                    }
                 }
                 return Ok(());
             }

@@ -22,16 +22,25 @@ use super::*;
 use crate::hook::pipe_client::FoundHook;
 
 fn events_slot() -> EventSlot {
-    Arc::new(std::sync::Mutex::new(Vec::new()))
+    Arc::new(super::super::EventQueue::new())
 }
 
 fn drain(events: &EventSlot) -> Vec<HookEvent> {
-    std::mem::take(&mut *events.lock().unwrap())
+    std::mem::take(&mut *events.lock())
 }
 
 /// 텍스트가 아닌 알림은 선행 바이트를 물지 않으므로 매번 새 상태로 부른다.
 fn notify(notification: Notification, events: &EventSlot) {
-    handle_notification(1, notification, &mut LeadBytes::default(), events, 0, 0);
+    let shared = SessionShared::new();
+    handle_notification(
+        1,
+        notification,
+        &mut LeadBytes::default(),
+        &shared,
+        events,
+        0,
+        0,
+    );
 }
 
 // --- handle_notification: 알림 종류별 분기 ----------------------------------
@@ -64,7 +73,10 @@ fn found_hook_notification_is_forwarded_as_an_event() {
     let drained = drain(&events);
     assert_eq!(drained.len(), 1);
     match &drained[0] {
-        HookEvent::FoundHook(found) => assert_eq!(found.text, "candidate"),
+        HookEvent::FoundHook { found, generation } => {
+            assert_eq!(found.text, "candidate");
+            assert_eq!(*generation, 0);
+        }
         other => panic!("expected FoundHook, got {other:?}"),
     }
 }

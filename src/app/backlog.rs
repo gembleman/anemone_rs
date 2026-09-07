@@ -109,6 +109,26 @@ impl BacklogStore {
         format_entry(entry, filter, add_linefeed)
     }
 
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// 현재 필터로 각 항목이 차지하는 UTF-16 문자 수를 반환한다.
+    ///
+    /// RichEdit에서 오래된 항목의 앞부분만 제거할 때 사용한다. 항목 전체를
+    /// 다시 만들지 않아도 되도록 모델이 표시 길이 계산을 한 곳에서 담당한다.
+    pub fn render_entry_lengths(&self, filter: BacklogFilter, add_linefeed: bool) -> Vec<usize> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                format_entry(entry, filter, add_linefeed)
+                    .iter()
+                    .map(|segment| segment.text.encode_utf16().count())
+                    .sum()
+            })
+            .collect()
+    }
+
     /// UTF-8 BOM이 있는 텍스트 파일로 전체 백로그를 내보낸다.
     pub fn export_utf8(&self, path: &Path) -> Result<(), BacklogExportError> {
         let mut file =

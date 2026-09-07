@@ -2,13 +2,20 @@
 //!
 //! Win32 UI와 독립적이며, 동일 (엔진, 언어쌍, 원문) 조합의 조회 결과를 재사용한다.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+#[cfg(test)]
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, params};
+#[cfg(test)]
+use rusqlite::OptionalExtension;
+use rusqlite::{Connection, params};
 
 use crate::translation::CacheKey;
 
@@ -28,6 +35,42 @@ const VACUUM_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 /// UI 체감 지연을 과하게 늘리지 않도록 VACUUM_BUSY_TIMEOUT(30초)보다 짧게 잡는다.
 const UI_BUSY_TIMEOUT: Duration = Duration::from_millis(100);
 
+/// UI 스레드가 직접 SQLite를 읽지 않도록 유지하는 메모리 키.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MemoryKey {
+    engine_id: String,
+    source_lang: String,
+    target_lang: String,
+    original: String,
+}
+
+impl From<&CacheKey> for MemoryKey {
+    fn from(key: &CacheKey) -> Self {
+        Self {
+            engine_id: key.engine_id.clone(),
+            source_lang: key.source_lang.to_string(),
+            target_lang: key.target_lang.to_string(),
+            original: key.original.clone(),
+        }
+    }
+}
+
+enum CacheWrite {
+    Put {
+        key: CacheKey,
+        translation: String,
+        updated_at: i64,
+        ack: Option<Sender<()>>,
+    },
+    Clear {
+        ack: Option<Sender<()>>,
+    },
+    Prune {
+        now: i64,
+        ack: Option<Sender<()>>,
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
     #[error("캐시 데이터베이스를 열 수 없습니다: {0}")]
@@ -38,15 +81,19 @@ pub enum CacheError {
 
 /// 클립보드 번역 이력을 영속 저장하고, 동일 요청에 대해 캐시 히트를 제공한다.
 ///
-/// `Connection`은 UI 스레드에서만 접근하므로 `RefCell`로 감싸고,
-/// `prepare_cached`로 get/put 문장을 재사용한다. 수 초가 걸릴 수 있는
-/// VACUUM만 별도 연결의 백그라운드 스레드로 격리한다.
+/// 앱의 get/put은 메모리 표를 사용한다. SQLite 쓰기는 전용 백그라운드 스레드가
+/// 순서대로 처리하므로 번역 완료를 처리하는 UI 스레드를 기다리게 하지 않는다.
+/// 테스트 빌드만 기존 연결을 사용해 저장소 동작을 직접 검증한다.
 pub struct TranslationCacheStore {
+    #[cfg(test)]
     conn: Option<RefCell<Connection>>,
     db_path: Option<PathBuf>,
+    /// 번역 요청의 hot path는 이 표만 조회한다. SQLite 연결은 호환성과 테스트용으로
+    /// 보관하지만 실제 앱의 get/put에서는 사용하지 않는다.
+    memory: Arc<RwLock<HashMap<MemoryKey, String>>>,
+    writer: Option<Sender<CacheWrite>>,
     puts_since_prune: Cell<u64>,
     clear_in_progress: Arc<AtomicBool>,
-    #[cfg(not(test))]
     prune_in_progress: Arc<AtomicBool>,
 }
 
@@ -56,13 +103,24 @@ impl TranslationCacheStore {
     pub fn open(path: &Path) -> Self {
         match Self::open_inner(path) {
             Ok(conn) => {
+                let memory = Arc::new(RwLock::new(Self::load_memory(&conn)));
+                let clear_in_progress = Arc::new(AtomicBool::new(false));
+                let prune_in_progress = Arc::new(AtomicBool::new(false));
+                let writer = Some(Self::spawn_writer(
+                    path,
+                    Arc::clone(&memory),
+                    Arc::clone(&clear_in_progress),
+                    Arc::clone(&prune_in_progress),
+                ));
                 let store = Self {
+                    #[cfg(test)]
                     conn: Some(RefCell::new(conn)),
                     db_path: Some(path.to_path_buf()),
+                    memory,
+                    writer,
                     puts_since_prune: Cell::new(0),
-                    clear_in_progress: Arc::new(AtomicBool::new(false)),
-                    #[cfg(not(test))]
-                    prune_in_progress: Arc::new(AtomicBool::new(false)),
+                    clear_in_progress,
+                    prune_in_progress,
                 };
                 store.schedule_prune();
                 store
@@ -70,11 +128,13 @@ impl TranslationCacheStore {
             Err(error) => {
                 tracing::warn!("번역 캐시를 열 수 없어 캐싱 없이 진행합니다: {error}");
                 Self {
+                    #[cfg(test)]
                     conn: None,
                     db_path: None,
+                    memory: Arc::new(RwLock::new(HashMap::new())),
+                    writer: None,
                     puts_since_prune: Cell::new(0),
                     clear_in_progress: Arc::new(AtomicBool::new(false)),
-                    #[cfg(not(test))]
                     prune_in_progress: Arc::new(AtomicBool::new(false)),
                 }
             }
@@ -186,32 +246,42 @@ impl TranslationCacheStore {
         if self.clear_in_progress.load(Ordering::Acquire) {
             return None;
         }
-        let conn = self.conn.as_ref()?;
-        // prepare_cached는 &self지만 내부 StatementCache를 쓰므로 RefCell이 필요하다.
-        // CachedStatement는 클로저 안에서 즉시 소비돼 borrow를 넘기지 않는다.
-        let conn = conn.borrow();
-        let result = conn
-            .prepare_cached(
-                "SELECT translation FROM translation_cache
-                 WHERE engine_id = ?1 AND source_lang = ?2 AND target_lang = ?3 AND original = ?4",
-            )
-            .and_then(|mut stmt| {
-                stmt.query_row(
-                    params![
-                        key.engine_id,
-                        key.source_lang,
-                        key.target_lang,
-                        key.original
-                    ],
-                    |row| row.get::<_, String>(0),
+        #[cfg(not(test))]
+        {
+            self.memory
+                .read()
+                .ok()
+                .and_then(|memory| memory.get(&MemoryKey::from(key)).cloned())
+        }
+        #[cfg(test)]
+        {
+            let conn = self.conn.as_ref()?;
+            // prepare_cached는 &self지만 내부 StatementCache를 쓰므로 RefCell이 필요하다.
+            // CachedStatement는 클로저 안에서 즉시 소비돼 borrow를 넘기지 않는다.
+            let conn = conn.borrow();
+            let result = conn
+                .prepare_cached(
+                    "SELECT translation FROM translation_cache
+                     WHERE engine_id = ?1 AND source_lang = ?2 AND target_lang = ?3 AND original = ?4",
                 )
-            })
-            .optional();
-        match result {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::warn!("번역 캐시 조회 실패: {error}");
-                None
+                .and_then(|mut stmt| {
+                    stmt.query_row(
+                        params![
+                            key.engine_id,
+                            key.source_lang,
+                            key.target_lang,
+                            key.original
+                        ],
+                        |row| row.get::<_, String>(0),
+                    )
+                })
+                .optional();
+            match result {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!("번역 캐시 조회 실패: {error}");
+                    None
+                }
             }
         }
     }
@@ -221,38 +291,37 @@ impl TranslationCacheStore {
         if self.clear_in_progress.load(Ordering::Acquire) {
             return;
         }
-        #[cfg(not(test))]
         if self.prune_in_progress.load(Ordering::Acquire) {
             return;
         }
-        let Some(conn) = self.conn.as_ref() else {
+        let now = Self::now_secs();
+        if let Ok(mut memory) = self.memory.write() {
+            memory.insert(MemoryKey::from(key), translation.to_string());
+        }
+        let Some(writer) = self.writer.as_ref() else {
             return;
         };
-        let now = Self::now_secs();
-        // borrow는 이 블록으로 한정한다 — 이후 실행되는 prune()이 같은 RefCell에
-        // 다시 접근해도 안전하도록 CachedStatement가 블록을 넘지 않게 한다.
-        let result = {
-            let conn = conn.borrow();
-            conn.prepare_cached(
-                "INSERT INTO translation_cache (engine_id, source_lang, target_lang, original, translation, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(engine_id, source_lang, target_lang, original)
-                 DO UPDATE SET translation = excluded.translation, updated_at = excluded.updated_at",
-            ).and_then(|mut stmt| {
-                stmt.execute(params![
-                    key.engine_id,
-                    key.source_lang,
-                    key.target_lang,
-                    key.original,
-                    translation,
-                    now
-                ])
+        #[cfg(test)]
+        let (ack_sender, ack_receiver) = mpsc::channel();
+        #[cfg(not(test))]
+        let ack_sender = None;
+        #[cfg(test)]
+        let ack_sender = Some(ack_sender);
+        if writer
+            .send(CacheWrite::Put {
+                key: key.clone(),
+                translation: translation.to_string(),
+                updated_at: now,
+                ack: ack_sender,
             })
-        };
-        if let Err(error) = result {
-            tracing::warn!("번역 캐시 저장 실패: {error}");
+            .is_err()
+        {
+            tracing::warn!("번역 캐시 백그라운드 저장 큐가 닫혔습니다");
             return;
         }
+        #[cfg(test)]
+        let _ = ack_receiver.recv();
+
         // put 경로마다 prune하지 않고 N회마다 한 번만 실행한다.
         let puts = self.puts_since_prune.get() + 1;
         if puts >= PUTS_PER_PRUNE {
@@ -266,7 +335,7 @@ impl TranslationCacheStore {
     /// 캐시 삭제와 파일 정리를 백그라운드에서 실행한다.
     pub fn clear(&self) {
         self.puts_since_prune.set(0);
-        let Some(path) = self.db_path.as_ref() else {
+        let Some(_path) = self.db_path.as_ref() else {
             return;
         };
         if self
@@ -276,34 +345,141 @@ impl TranslationCacheStore {
         {
             return;
         }
-        let path = path.to_path_buf();
-        let in_progress = Arc::clone(&self.clear_in_progress);
-        let spawn = std::thread::Builder::new()
-            .name("anemone-cache-clear".to_string())
-            .spawn(move || {
-                let result = Connection::open(&path).and_then(|conn| {
-                    conn.busy_timeout(VACUUM_BUSY_TIMEOUT)?;
-                    conn.execute("DELETE FROM translation_cache", [])?;
-                    conn.execute("VACUUM", [])?;
-                    Ok(())
-                });
-                in_progress.store(false, Ordering::Release);
-                match result {
-                    Ok(()) => tracing::debug!("translation cache clear complete"),
-                    Err(error) => tracing::warn!("번역 캐시 비우기 실패: {error}"),
-                }
-            });
-        if let Err(error) = spawn {
+        if let Ok(mut memory) = self.memory.write() {
+            memory.clear();
+        }
+        let Some(writer) = self.writer.as_ref() else {
             self.clear_in_progress.store(false, Ordering::Release);
-            tracing::warn!("번역 캐시 정리 스레드를 시작하지 못했습니다: {error}");
+            return;
+        };
+        #[cfg(test)]
+        let (ack_sender, ack_receiver) = mpsc::channel();
+        #[cfg(not(test))]
+        let ack_sender = None;
+        #[cfg(test)]
+        let ack_sender = Some(ack_sender);
+        if writer.send(CacheWrite::Clear { ack: ack_sender }).is_err() {
+            self.clear_in_progress.store(false, Ordering::Release);
+            tracing::warn!("번역 캐시 비우기 큐가 닫혔습니다");
+        } else {
+            #[cfg(test)]
+            let _ = ack_receiver.recv();
         }
     }
 
-    #[cfg(not(test))]
-    fn prune_in_background(&self) {
-        let Some(path) = self.db_path.as_ref() else {
-            return;
+    fn load_memory(conn: &Connection) -> HashMap<MemoryKey, String> {
+        let mut memory = HashMap::new();
+        let Ok(mut statement) = conn.prepare(
+            "SELECT engine_id, source_lang, target_lang, original, translation
+             FROM translation_cache",
+        ) else {
+            return memory;
         };
+        let Ok(rows) = statement.query_map([], |row| {
+            Ok((
+                MemoryKey {
+                    engine_id: row.get(0)?,
+                    source_lang: row.get(1)?,
+                    target_lang: row.get(2)?,
+                    original: row.get(3)?,
+                },
+                row.get::<_, String>(4)?,
+            ))
+        }) else {
+            return memory;
+        };
+        for row in rows.flatten() {
+            memory.insert(row.0, row.1);
+        }
+        memory
+    }
+
+    fn spawn_writer(
+        path: &Path,
+        memory: Arc<RwLock<HashMap<MemoryKey, String>>>,
+        clear_in_progress: Arc<AtomicBool>,
+        prune_in_progress: Arc<AtomicBool>,
+    ) -> Sender<CacheWrite> {
+        let (sender, receiver) = mpsc::channel();
+        let path = path.to_path_buf();
+        let _ = std::thread::Builder::new()
+            .name("anemone-cache-writer".to_string())
+            .spawn(move || {
+                let Ok(conn) = Connection::open(&path) else {
+                    tracing::warn!("번역 캐시 백그라운드 연결을 열 수 없습니다");
+                    return;
+                };
+                if let Err(error) = conn.busy_timeout(VACUUM_BUSY_TIMEOUT) {
+                    tracing::warn!("번역 캐시 백그라운드 busy_timeout 설정 실패: {error}");
+                    return;
+                }
+                for command in receiver {
+                    match command {
+                        CacheWrite::Put {
+                            key,
+                            translation,
+                            updated_at,
+                            ack,
+                        } => {
+                            let result = conn.execute(
+                                "INSERT INTO translation_cache
+                                 (engine_id, source_lang, target_lang, original, translation, updated_at)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                                 ON CONFLICT(engine_id, source_lang, target_lang, original)
+                                 DO UPDATE SET translation = excluded.translation,
+                                               updated_at = excluded.updated_at",
+                                params![
+                                    key.engine_id,
+                                    key.source_lang,
+                                    key.target_lang,
+                                    key.original,
+                                    translation,
+                                    updated_at
+                                ],
+                            );
+                            if let Err(error) = result {
+                                tracing::warn!("번역 캐시 백그라운드 저장 실패: {error}");
+                            }
+                            if let Some(ack) = ack {
+                                let _ = ack.send(());
+                            }
+                        }
+                        CacheWrite::Clear { ack } => {
+                            let result = conn
+                                .execute("DELETE FROM translation_cache", [])
+                                .and_then(|_| conn.execute("VACUUM", []).map(|_| ()));
+                            if let Ok(mut current) = memory.write() {
+                                current.clear();
+                            }
+                            clear_in_progress.store(false, Ordering::Release);
+                            if let Err(error) = result {
+                                tracing::warn!("번역 캐시 비우기 실패: {error}");
+                            }
+                            if let Some(ack) = ack {
+                                let _ = ack.send(());
+                            }
+                        }
+                        CacheWrite::Prune { now, ack } => {
+                            Self::prune_connection(&conn, now);
+                            // Put과 prune은 같은 큐에서 직렬화된다. 따라서 이 시점의
+                            // DB 스냅샷으로 교체해도 뒤늦은 put을 잃지 않는다.
+                            if let Ok(mut current) = memory.write() {
+                                *current = Self::load_memory(&conn);
+                            }
+                            prune_in_progress.store(false, Ordering::Release);
+                            if let Some(ack) = ack {
+                                let _ = ack.send(());
+                            }
+                        }
+                    }
+                }
+                // 채널 종료 시에도 마지막 메모리 상태는 호출자 소유다.
+                drop(memory);
+            });
+        sender
+    }
+
+    fn schedule_prune(&self) {
         if self
             .prune_in_progress
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -311,36 +487,30 @@ impl TranslationCacheStore {
         {
             return;
         }
-        let path = path.to_path_buf();
-        let in_progress = Arc::clone(&self.prune_in_progress);
-        let now = Self::now_secs();
-        let spawn = std::thread::Builder::new()
-            .name("anemone-cache-prune".to_string())
-            .spawn(move || {
-                let result = Connection::open(&path).and_then(|conn| {
-                    conn.busy_timeout(VACUUM_BUSY_TIMEOUT)?;
-                    Self::prune_connection(&conn, now);
-                    Ok(())
-                });
-                in_progress.store(false, Ordering::Release);
-                if let Err(error) = result {
-                    tracing::warn!("번역 캐시 백그라운드 정리 실패: {error}");
-                }
-            });
-        if let Err(error) = spawn {
+        let Some(writer) = self.writer.as_ref() else {
             self.prune_in_progress.store(false, Ordering::Release);
-            tracing::warn!("번역 캐시 정리 스레드를 시작하지 못했습니다: {error}");
+            return;
+        };
+        #[cfg(test)]
+        let (ack_sender, ack_receiver) = mpsc::channel();
+        #[cfg(not(test))]
+        let ack_sender = None;
+        #[cfg(test)]
+        let ack_sender = Some(ack_sender);
+        if writer
+            .send(CacheWrite::Prune {
+                now: Self::now_secs(),
+                ack: ack_sender,
+            })
+            .is_err()
+        {
+            self.prune_in_progress.store(false, Ordering::Release);
+        } else {
+            #[cfg(test)]
+            let _ = ack_receiver.recv();
         }
     }
 
-    fn schedule_prune(&self) {
-        #[cfg(test)]
-        self.prune();
-        #[cfg(not(test))]
-        self.prune_in_background();
-    }
-
-    #[cfg(not(test))]
     fn prune_connection(conn: &Connection, now: i64) {
         let cutoff = now - CACHE_TTL_SECS;
         match conn.execute(

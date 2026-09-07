@@ -5,6 +5,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use windows_core::{Error, HRESULT};
 use windows_sys::Win32::{
@@ -38,6 +41,13 @@ mod ctrl_id {
 
 use crate::app::backlog::{BacklogFilter, BacklogStore, LogEntry};
 
+pub(super) const WM_BACKLOG_SAVE_RESULT: u32 = WM_APP + 0x36;
+static NEXT_SAVE_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+struct SaveResult {
+    result: std::result::Result<(), crate::app::backlog::BacklogExportError>,
+}
+
 /// 백로그 대화상자
 pub struct BacklogDialog {
     hwnd: HWND,
@@ -57,6 +67,12 @@ pub struct BacklogDialog {
     font_point_size: i32,
     /// 본문 italic 여부 (bold 는 [name] 강조 용도라 별도 유지)
     font_italic: bool,
+    /// 현재 RichEdit에 표시한 항목별 UTF-16 길이.
+    rendered_lengths: VecDeque<usize>,
+    save_in_progress: bool,
+    save_result: Arc<Mutex<Option<SaveResult>>>,
+    save_worker: Option<JoinHandle<()>>,
+    save_token: u64,
 }
 
 thread_local! {
@@ -89,6 +105,10 @@ impl HostedDialog for BacklogDialog {
 
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> DialogResult {
         match msg {
+            WM_BACKLOG_SAVE_RESULT if wparam as u64 == self.save_token => {
+                self.handle_save_result();
+                DialogResult::Handled(1)
+            }
             WM_SIZE => {
                 self.on_size((lparam & 0xFFFF) as i32, ((lparam >> 16) & 0xFFFF) as i32);
                 DialogResult::Handled(1)
@@ -109,8 +129,23 @@ impl HostedDialog for BacklogDialog {
         Some(&mut self.applied_dpi)
     }
 
+    fn destroy(&mut self) {
+        // 저장 중인 파일은 백그라운드에서 끝내도록 두고, 이미 끝난 스레드만
+        // 회수한다. 창이 사라진 뒤 결과 알림은 운영체제가 버린다.
+        self.save_token = 0;
+        if let Some(worker) = self.save_worker.take() {
+            if worker.is_finished() {
+                let _ = worker.join();
+            } else {
+                // 활성 저장 워커는 파일 쓰기를 끝내도록 JoinHandle을 의도적으로
+                // 버린다. UI 종료에서 파일 I/O를 기다리지 않는다.
+                drop(worker);
+            }
+        }
+    }
+
     fn can_defer(msg: u32) -> bool {
-        matches!(msg, WM_SIZE | WM_COMMAND)
+        matches!(msg, WM_SIZE | WM_COMMAND | WM_BACKLOG_SAVE_RESULT)
     }
 }
 
@@ -129,6 +164,11 @@ impl BacklogDialog {
             font_face: None,
             font_point_size: 10,
             font_italic: false,
+            rendered_lengths: VecDeque::new(),
+            save_in_progress: false,
+            save_result: Arc::new(Mutex::new(None)),
+            save_worker: None,
+            save_token: 0,
         }
     }
 
@@ -156,6 +196,27 @@ impl BacklogDialog {
 
         DialogHost::<Self>::show(parent, BacklogInit { store, actions })
     }
+
+    fn handle_save_result(&mut self) {
+        let result = self
+            .save_result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let Some(result) = result else { return };
+        if let Some(worker) = self.save_worker.take() {
+            let _ = worker.join();
+        }
+        self.save_in_progress = false;
+        if let Err(error) = result.result {
+            tracing::error!("backlog save failed: {error}");
+            crate::dialogs::helpers::show_error_message(
+                self.hwnd,
+                "백로그 저장 오류",
+                &format!("백로그를 파일에 저장하지 못했습니다.\n\n{error}"),
+            );
+        }
+    }
 }
 
 /// AppModel이 소유한 저장소와 별개인 열린 view snapshot에 새 항목을 반영한다.
@@ -167,18 +228,46 @@ pub(crate) fn append_entry(entry: LogEntry, model_evicted: bool) {
     let applied = DialogHost::<BacklogDialog>::with_state_mut(|dialog| {
         let had_pending = drain_pending_entries(&mut dialog.store);
         let view_evicted = dialog.store.push(entry);
-        if model_evicted
-            || view_evicted
-            || had_pending
-            || BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false))
-        {
-            dialog.refresh_richedit();
+        let dirty = BACKLOG_VIEW_DIRTY.with(|dirty| dirty.replace(false));
+        if model_evicted || view_evicted || had_pending || dirty {
+            // 보류 항목이나 필터 변경이 있으면 길이 정보가 맞지 않으므로
+            // 전체를 한 번만 다시 만든다. 일반적인 상한 퇴출은 앞부분만 지운다.
+            if !had_pending && !dirty {
+                let mut removed_chars = 0usize;
+                while dialog.rendered_lengths.len() > dialog.store.len() {
+                    if let Some(chars) = dialog.rendered_lengths.pop_front() {
+                        removed_chars = removed_chars.saturating_add(chars);
+                    }
+                }
+                dialog.remove_prefix_from_richedit(removed_chars);
+                let rendered = BacklogStore::render_entry(
+                    &entry_for_render,
+                    dialog.filter,
+                    dialog.add_linefeed,
+                );
+                let chars = rendered
+                    .iter()
+                    .map(|part| part.text.encode_utf16().count())
+                    .sum();
+                dialog.append_styled_texts_to_richedit(rendered);
+                dialog.rendered_lengths.push_back(chars);
+            } else {
+                dialog.refresh_richedit();
+                dialog.rendered_lengths = dialog
+                    .store
+                    .render_entry_lengths(dialog.filter, dialog.add_linefeed)
+                    .into_iter()
+                    .collect();
+            }
         } else {
-            dialog.append_styled_texts_to_richedit(BacklogStore::render_entry(
-                &entry_for_render,
-                dialog.filter,
-                dialog.add_linefeed,
-            ));
+            let rendered =
+                BacklogStore::render_entry(&entry_for_render, dialog.filter, dialog.add_linefeed);
+            let chars = rendered
+                .iter()
+                .map(|part| part.text.encode_utf16().count())
+                .sum();
+            dialog.append_styled_texts_to_richedit(rendered);
+            dialog.rendered_lengths.push_back(chars);
         }
     });
     // 재진입으로 state를 빌리지 못했다. 항목 자체를 보존한 뒤 바깥 handler가

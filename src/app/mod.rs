@@ -47,6 +47,8 @@ pub(super) const MAGNETIC_NOTICE_TIMER: usize = 0xD2D3;
 pub(super) const MAGNETIC_NOTICE_DURATION_MS: u32 = 2_000;
 /// 후킹 텍스트 병합 창 타이머.
 pub(super) const HOOK_MERGE_TIMER: usize = 0xD2D4;
+/// DComp back buffer가 아직 준비되지 않았을 때 paint를 다시 시도하는 타이머.
+pub(super) const FRAME_RETRY_TIMER: usize = 0xD2D5;
 
 fn config_hook_merge_ms(config: &crate::config::Config) -> u64 {
     u64::from(config.hook.merge_window_ms).max(1)
@@ -76,6 +78,8 @@ pub struct App {
     /// 반복하지 않도록 timer 기반 backoff를 적용한다.
     composition_init_failures: u32,
     composition_retry_scheduled: bool,
+    /// GPU back pressure 중 UI 스레드의 동기 대기와 paint 폭주를 막는다.
+    frame_retry_scheduled: bool,
     /// 후킹 병합 타이머가 지금 돌고 있는지.
     ///
     /// `SetTimer`를 이벤트마다 다시 부르면 같은 ID의 countdown이 매번 리셋되어,

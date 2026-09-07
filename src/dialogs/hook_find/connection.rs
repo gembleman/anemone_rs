@@ -153,6 +153,8 @@ impl HookFindDialog {
 
     pub(super) fn clear_session_view(&mut self) {
         self.streams.clear();
+        self.stream_indices.clear();
+        self.search_in_flight_until = None;
         self.candidates.clear();
         self.installed_candidate = None;
         self.installed_manual = None;

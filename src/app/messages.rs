@@ -10,6 +10,10 @@ pub(crate) const WM_DEFERRED_RESIZE: u32 = WM_APP + 3;
 pub(crate) const WM_DEFERRED_PAINT: u32 = WM_APP + 4;
 pub(crate) const WM_APP_ACTION: u32 = WM_APP + 5;
 pub(crate) const WM_APP_MAGNETIC_TARGET_SELECTED: u32 = WM_APP + 6;
+/// 대상 창 위치 변경을 한 UI turn에 한 번만 반영한다.
+pub(crate) const WM_APP_MAGNETIC_REPOSITION: u32 = WM_APP + 8;
+/// 재진입 중 보류한 메시지를 제한된 다음 배치에서 처리한다.
+pub(crate) const WM_APP_DRAIN_DEFERRED: u32 = WM_APP + 9;
 /// 업데이트 워커가 확인·다운로드 결과를 다 채운 뒤 게시하는 알림.
 pub(crate) const WM_UPDATE_RESULT: u32 = WM_APP + 40;
 /// 다운로드 진행도가 갱신됐을 때 게시하는 알림. 결과와 분리해, 진행도만 다시

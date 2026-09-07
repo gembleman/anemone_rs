@@ -15,11 +15,14 @@ use crate::hook::{HookEvent, text_bridge::HookText};
 /// 10ms다. `flushDelay`와 무관하게 고정이다 — 창 길이는 방출 조건이 쓰고,
 /// 타이머는 그 조건을 얼마나 자주 확인할지만 정한다.
 const MERGE_TIMER_PERIOD_MS: u32 = 10;
+/// 한 번의 UI 메시지가 처리하는 최대 워커 이벤트 수. 남은 이벤트는 한 번
+/// 더 WM_APP_HOOK_STATE로 처리해 paint/input 메시지가 굶지 않게 한다.
+const HOOK_EVENT_BATCH_SIZE: usize = 64;
 
 impl App {
-    /// WM_APP_HOOK_STATE — 후킹 워커의 이벤트를 모두 소비한다.
+    /// WM_APP_HOOK_STATE — 후킹 워커 이벤트를 제한된 배치로 소비한다.
     pub(super) fn handle_hook_state(&mut self) {
-        for event in self.services.hook.drain_events() {
+        for event in self.services.hook.drain_events_batch(HOOK_EVENT_BATCH_SIZE) {
             match event {
                 HookEvent::Attached {
                     pid,
@@ -54,9 +57,9 @@ impl App {
                 HookEvent::EngineDetected(engine_name) => {
                     self.handle_engine_detected(engine_name);
                 }
-                HookEvent::FoundHook(found) => {
+                HookEvent::FoundHook { found, generation } => {
                     // 후보 목록이 열려 있으면 후킹 관리 창에 전달한다.
-                    crate::dialogs::hook_find::add_candidate(*found);
+                    crate::dialogs::hook_find::add_candidate(generation, *found);
                 }
                 HookEvent::HookInserted { address, hook_code } => {
                     crate::dialogs::hook_find::note_hook_inserted(address, hook_code);
@@ -65,6 +68,13 @@ impl App {
                     tracing::info!(target: "hook_dll", "{message}");
                 }
             }
+        }
+        // 생산자가 배치를 꺼내는 도중에도 추가할 수 있으므로 마지막에 다시
+        // 확인한다. 중복 알림은 다음 호출에서 빈 큐를 보고 즉시 끝난다.
+        if self.services.hook.has_pending_events() {
+            self.services
+                .hook
+                .notify_pending_events(self.hwnd as usize, super::messages::WM_APP_HOOK_STATE);
         }
     }
 
@@ -220,6 +230,13 @@ impl App {
     pub(super) fn handle_hook_merge_timer(&mut self) {
         let ready = self.model.runtime.hook_merger.flush_expired();
         self.dispatch_hook_texts(ready);
+        // 최초 PostMessageW 실패처럼 이벤트가 남았는데 UI 알림만 사라진
+        // 경우에도 10ms 병합 tick이 다음 알림을 복구한다.
+        if self.services.hook.has_pending_events() {
+            self.services
+                .hook
+                .notify_pending_events(self.hwnd as usize, super::messages::WM_APP_HOOK_STATE);
+        }
     }
 
     fn dispatch_hook_texts(&mut self, mut ready: Vec<HookText>) {

@@ -13,6 +13,23 @@ use super::TranslationConfigError;
 pub(super) fn config_fingerprint(
     config: &TranslationConfig,
 ) -> Result<u64, TranslationConfigError> {
+    hash_config(config, true)
+}
+
+/// 요청마다 전체 후처리 사전을 읽지 않는 빠른 설정 표식.
+///
+/// 사전은 Vec를 통째로 해시하지 않고 할당 주소·크기·용량과 양 끝 항목만
+/// 확인한다. 앱 설정은 변경 시 새 draft를 통째로 적용하므로 이 표식은 일반적인
+/// 설정 변경을 모두 구분하고, 같은 설정으로 반복 요청할 때의 hot path를 일정한
+/// 비용으로 유지한다. 실제 사전 해시는 표식이 바뀐 경우에만 계산한다.
+pub(super) fn config_stamp(config: &TranslationConfig) -> Result<u64, TranslationConfigError> {
+    hash_config(config, false)
+}
+
+fn hash_config(
+    config: &TranslationConfig,
+    include_dictionary_contents: bool,
+) -> Result<u64, TranslationConfigError> {
     use std::hash::{Hash, Hasher};
 
     let engine = config
@@ -33,7 +50,30 @@ pub(super) fn config_fingerprint(
             config.eztrans_dictionary_path.hash(&mut hasher);
             config.eztrans_ehnd_path.hash(&mut hasher);
             config.eztrans_process_count.hash(&mut hasher);
-            config.eztrans_postprocess_dictionary.hash(&mut hasher);
+            if include_dictionary_contents {
+                config.eztrans_postprocess_dictionary.hash(&mut hasher);
+            } else {
+                config
+                    .eztrans_postprocess_dictionary
+                    .as_ptr()
+                    .hash(&mut hasher);
+                config
+                    .eztrans_postprocess_dictionary
+                    .len()
+                    .hash(&mut hasher);
+                config
+                    .eztrans_postprocess_dictionary
+                    .capacity()
+                    .hash(&mut hasher);
+                config
+                    .eztrans_postprocess_dictionary
+                    .first()
+                    .hash(&mut hasher);
+                config
+                    .eztrans_postprocess_dictionary
+                    .last()
+                    .hash(&mut hasher);
+            }
         }
         TranslationEngine::Google => {}
         TranslationEngine::DeepL => {

@@ -1,5 +1,6 @@
 //! RichEdit 본문 갱신: 항목 추가, 스타일 적용, 필터 변경 시 다시 그리기.
 
+use windows_sys::Win32::Graphics::Gdi::InvalidateRect;
 use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -11,6 +12,7 @@ use crate::win32::to_wide;
 // RichEdit messages not exported by windows-sys' Controls module.
 const EM_SETCHARFORMAT: u32 = 0x0444;
 const SCF_SELECTION: usize = 0x0001;
+const EM_SETREDRAW: u32 = 0x000B;
 
 impl BacklogDialog {
     /// RichEdit에 항목 추가
@@ -21,6 +23,7 @@ impl BacklogDialog {
         // SAFETY: self.richedit is a valid RichEdit control handle from create_controls.
         // SendMessageW and append_styled_text use valid control handles.
         unsafe {
+            let _ = SendMessageW(self.richedit, EM_SETREDRAW, 0, 0);
             let _ = SendMessageW(self.richedit, EM_SETSEL, usize::MAX, -1);
 
             // COLORREF 는 0x00BBGGRR 순서.
@@ -38,6 +41,25 @@ impl BacklogDialog {
             }
 
             let _ = SendMessageW(self.richedit, EM_SCROLLCARET, 0, 0);
+            let _ = SendMessageW(self.richedit, EM_SETREDRAW, 1, 0);
+            let _ = InvalidateRect(self.richedit, std::ptr::null(), 0);
+        }
+    }
+
+    /// RichEdit 본문의 앞에서 UTF-16 문자 수만큼 제거한다.
+    pub(super) fn remove_prefix_from_richedit(&self, chars: usize) {
+        if chars == 0 {
+            return;
+        }
+        // SAFETY: self.richedit is a valid RichEdit control handle.
+        unsafe {
+            let _ = SendMessageW(self.richedit, EM_SETREDRAW, 0, 0);
+            let _ = SendMessageW(self.richedit, EM_SETSEL, 0, chars as isize);
+            let empty = [0u16];
+            let _ = SendMessageW(self.richedit, EM_REPLACESEL, 0, empty.as_ptr() as isize);
+            let _ = SendMessageW(self.richedit, EM_SETSEL, usize::MAX, -1);
+            let _ = SendMessageW(self.richedit, EM_SETREDRAW, 1, 0);
+            let _ = InvalidateRect(self.richedit, std::ptr::null(), 0);
         }
     }
 
@@ -73,6 +95,7 @@ impl BacklogDialog {
     /// RichEdit 내용 지우기
     pub(super) fn clear_richedit(&mut self) {
         self.store.clear();
+        self.rendered_lengths.clear();
         self.actions.clear_backlog();
         // SAFETY: self.richedit is a valid RichEdit control handle.
         unsafe {
@@ -81,13 +104,30 @@ impl BacklogDialog {
     }
 
     /// RichEdit 다시 그리기 (필터 변경 시)
-    pub(super) fn refresh_richedit(&self) {
+    pub(super) fn refresh_richedit(&mut self) {
         // SAFETY: self.richedit is a valid RichEdit control handle.
         unsafe {
+            let _ = SendMessageW(self.richedit, EM_SETREDRAW, 0, 0);
             let _ = SetWindowTextW(self.richedit, crate::win32::to_wide("").as_ptr());
+            let segments = self.store.render(self.filter, self.add_linefeed);
+            let _ = SendMessageW(self.richedit, EM_SETSEL, usize::MAX, -1);
+            for segment in segments {
+                let (color, bold) = match segment.kind {
+                    TextKind::Name => (0x00A00000, true),
+                    TextKind::Original => (0x00000000, false),
+                    TextKind::Translation => (0x00008000, false),
+                };
+                self.append_styled_text(&segment.text, color, bold);
+            }
+            let _ = SendMessageW(self.richedit, EM_SCROLLCARET, 0, 0);
+            let _ = SendMessageW(self.richedit, EM_SETREDRAW, 1, 0);
+            let _ = InvalidateRect(self.richedit, std::ptr::null(), 0);
         }
-        let segments = self.store.render(self.filter, self.add_linefeed);
-        self.append_styled_texts_to_richedit(segments);
+        self.rendered_lengths = self
+            .store
+            .render_entry_lengths(self.filter, self.add_linefeed)
+            .into_iter()
+            .collect();
     }
 
     pub(super) fn refresh_if_dirty(&mut self) {

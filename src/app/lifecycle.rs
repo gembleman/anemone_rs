@@ -321,6 +321,7 @@ impl App {
             composition: None,
             composition_init_failures: 0,
             composition_retry_scheduled: false,
+            frame_retry_scheduled: false,
             hook_merge_timer_active: false,
             last_render_diagnostic: None,
             hit_region: Vec::new(),

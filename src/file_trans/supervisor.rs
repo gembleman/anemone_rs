@@ -38,8 +38,48 @@ impl FileTranslationTask {
         self.cancel.cancel();
     }
 
+    #[cfg(any(test, feature = "benchmark"))]
     pub fn drain_events(&self) -> Vec<FileTranslationProgress> {
         self.events.try_iter().collect()
+    }
+
+    /// UI가 한 번에 처리할 진행 이벤트 수를 제한하고, 줄 단위 진행률은
+    /// 마지막 값만 남긴다. 파일이 커도 한 번의 타이머 처리 시간이 커지지 않는다.
+    pub fn drain_events_budgeted(&self, budget: usize) -> Vec<FileTranslationProgress> {
+        let mut events = Vec::new();
+        let mut latest_file_progress = None;
+        let mut latest_total_progress = None;
+        for _ in 0..budget.max(1) {
+            let Ok(event) = self.events.try_recv() else {
+                break;
+            };
+            match event {
+                FileTranslationProgress::FileProgress(value) => {
+                    latest_file_progress = Some(value);
+                }
+                FileTranslationProgress::TotalProgress(value) => {
+                    latest_total_progress = Some(value);
+                }
+                FileTranslationProgress::Finished(result) => {
+                    if let Some(value) = latest_file_progress.take() {
+                        events.push(FileTranslationProgress::FileProgress(value));
+                    }
+                    if let Some(value) = latest_total_progress.take() {
+                        events.push(FileTranslationProgress::TotalProgress(value));
+                    }
+                    events.push(FileTranslationProgress::Finished(result));
+                    break;
+                }
+                other => events.push(other),
+            }
+        }
+        if let Some(value) = latest_file_progress {
+            events.push(FileTranslationProgress::FileProgress(value));
+        }
+        if let Some(value) = latest_total_progress {
+            events.push(FileTranslationProgress::TotalProgress(value));
+        }
+        events
     }
 
     /// UI는 메시지 루프에서 `drain_events`로 훑는다. 이벤트가 올 때까지 막고
@@ -228,5 +268,39 @@ impl Drop for FileTranslationSupervisor {
                 "file translation shutdown grace elapsed"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budgeted_drain_coalesces_line_progress() {
+        let (sender, events) = mpsc::channel();
+        sender
+            .send(FileTranslationProgress::FileProgress(1))
+            .unwrap();
+        sender
+            .send(FileTranslationProgress::FileProgress(7))
+            .unwrap();
+        sender
+            .send(FileTranslationProgress::TotalProgress(2))
+            .unwrap();
+        sender
+            .send(FileTranslationProgress::TotalProgress(9))
+            .unwrap();
+        let task = FileTranslationTask {
+            cancel: CancelHandle(Arc::new(AtomicBool::new(false))),
+            events,
+        };
+
+        assert_eq!(
+            task.drain_events_budgeted(16),
+            vec![
+                FileTranslationProgress::FileProgress(7),
+                FileTranslationProgress::TotalProgress(9),
+            ]
+        );
     }
 }

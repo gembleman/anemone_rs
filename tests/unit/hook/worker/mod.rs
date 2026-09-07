@@ -18,7 +18,7 @@ fn null_hwnd() -> HWND {
 }
 
 fn events_slot() -> EventSlot {
-    Arc::new(Mutex::new(Vec::new()))
+    Arc::new(EventQueue::new())
 }
 
 // --- SessionShared: 상태 전이 -----------------------------------------------
@@ -45,8 +45,8 @@ fn server_slot_round_trips_a_stored_server() {
 #[test]
 fn drain_events_preserves_arrival_order_and_empties_the_slot() {
     let events = events_slot();
-    push_event(&events, 0, 0, HookEvent::EngineDetected("A".to_string()));
-    push_event(&events, 0, 0, HookEvent::EngineDetected("B".to_string()));
+    push_event(&events, 1, 0, HookEvent::EngineDetected("A".to_string()));
+    push_event(&events, 1, 0, HookEvent::EngineDetected("B".to_string()));
 
     let worker = HookWorker {
         sender: Mutex::new(None),
@@ -66,6 +66,38 @@ fn drain_events_preserves_arrival_order_and_empties_the_slot() {
         worker.drain_events().is_empty(),
         "drain 이후에는 슬롯이 비어 있어야 한다"
     );
+}
+
+#[test]
+fn drain_events_batch_leaves_remaining_events_in_order() {
+    let events = events_slot();
+    for name in ["A", "B", "C"] {
+        push_event(&events, 0, 0, HookEvent::EngineDetected(name.to_string()));
+    }
+    let worker = HookWorker {
+        sender: Mutex::new(None),
+        handle: Mutex::new(None),
+        events,
+    };
+    let first = worker.drain_events_batch(2);
+    assert_eq!(first.len(), 2);
+    assert!(matches!(&first[0], HookEvent::EngineDetected(name) if name == "A"));
+    assert!(matches!(&first[1], HookEvent::EngineDetected(name) if name == "B"));
+    let second = worker.drain_events_batch(2);
+    assert_eq!(second.len(), 1);
+    assert!(matches!(&second[0], HookEvent::EngineDetected(name) if name == "C"));
+}
+
+#[test]
+fn failed_event_notification_is_rearmed_for_the_next_push() {
+    let events = events_slot();
+    // 잘못된 HWND에서 PostMessageW는 실패한다. 실패 상태를 남기면 다음
+    // 이벤트가 영원히 UI를 깨우지 못하므로 상태가 다시 armed인지 확인한다.
+    push_event(&events, 1, 0, HookEvent::EngineDetected("A".to_string()));
+    assert!(!events.notification_pending.load(Ordering::Acquire));
+    push_event(&events, 1, 0, HookEvent::EngineDetected("B".to_string()));
+    assert!(!events.notification_pending.load(Ordering::Acquire));
+    assert_eq!(events.lock().len(), 2);
 }
 
 // --- HookWorker: 공개 API 수명 관리 -----------------------------------------
@@ -116,7 +148,7 @@ fn run_worker_thread_with(requests: Vec<HookRequest>) -> Vec<HookEvent> {
     drop(tx);
     let events = events_slot();
     HookWorker::worker_thread(rx, events.clone(), 0, 0);
-    std::mem::take(&mut *events.lock().unwrap())
+    std::mem::take(&mut *events.lock())
 }
 
 /// u32::MAX는 유효한 pid일 수 없으므로 `inject::detect_arch`가 즉시 실패해
@@ -187,7 +219,10 @@ fn a_second_attach_replaces_the_first_session() {
 fn hook_commands_with_no_active_session_do_not_panic() {
     let events = run_worker_thread_with(vec![
         HookRequest::RemoveHook(0x1234),
-        HookRequest::FindHook(Box::new(pipe_client::build_general_search_param())),
+        HookRequest::FindHook {
+            search: Box::new(pipe_client::build_general_search_param()),
+            generation: 1,
+        },
     ]);
     assert!(events.is_empty());
 }

@@ -20,13 +20,14 @@ use windows_sys::Win32::{
     },
 };
 
-use crate::app::messages::WM_APP_MAGNETIC_TARGET_SELECTED;
+use crate::app::messages::{WM_APP_MAGNETIC_REPOSITION, WM_APP_MAGNETIC_TARGET_SELECTED};
 
 /// 자석 상태 (thread_local 보관)
 struct MagneticState {
     main_hwnd: HWND,
     target_hwnd: HWND,
     selection_pending: bool,
+    reposition_pending: bool,
     is_minimized: bool,
     offset_x: i32,
     offset_y: i32,
@@ -80,6 +81,7 @@ impl MagneticManager {
                 main_hwnd: self.main_hwnd,
                 target_hwnd: std::ptr::null_mut(),
                 selection_pending: false,
+                reposition_pending: false,
                 is_minimized: false,
                 offset_x: 0,
                 offset_y: 0,
@@ -127,11 +129,26 @@ impl MagneticManager {
                 .ok_or_else(|| io::Error::from_raw_os_error(ERROR_INVALID_WINDOW_HANDLE as i32))?;
             state.target_hwnd = target;
             state.selection_pending = false;
+            state.reposition_pending = false;
             state.is_minimized = false;
             state.offset_x = offset_x;
             state.offset_y = offset_y;
             Ok(())
         })
+    }
+
+    /// WinEvent 폭주 중 합쳐 둔 마지막 위치를 한 번 반영한다.
+    pub fn apply_pending_reposition(&mut self) {
+        MAGNETIC_INSTANCE.with(|cell| {
+            let mut state = cell.borrow_mut();
+            let Some(state) = state.as_mut() else {
+                return;
+            };
+            state.reposition_pending = false;
+            if !state.is_minimized && !state.target_hwnd.is_null() {
+                reposition_main_to_target(state);
+            }
+        });
     }
 
     /// 자석 모드 중지
@@ -233,11 +250,14 @@ fn try_select_foreground_target(state: &mut MagneticState, hwnd: HWND) {
 }
 
 /// 자석 대상이 움직이면 저장해둔 오프셋만큼 주 창을 같이 옮긴다.
-fn on_target_location_changed(state: &MagneticState, hwnd: HWND) {
-    if hwnd != state.target_hwnd || state.is_minimized {
+fn on_target_location_changed(state: &mut MagneticState, hwnd: HWND) {
+    if hwnd != state.target_hwnd || state.is_minimized || state.reposition_pending {
         return;
     }
-    reposition_main_to_target(state);
+    state.reposition_pending = true;
+    if unsafe { PostMessageW(state.main_hwnd, WM_APP_MAGNETIC_REPOSITION, 0, 0) } == 0 {
+        state.reposition_pending = false;
+    }
 }
 
 /// 자석 대상이 최소화되면(정책이 켜져 있을 때) 주 창도 함께 숨긴다.

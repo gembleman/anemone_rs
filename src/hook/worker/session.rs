@@ -278,6 +278,7 @@ fn run_notification_loop(
             pid,
             notification,
             &mut lead_bytes,
+            shared,
             events,
             hwnd_raw,
             message,
@@ -289,6 +290,7 @@ fn handle_notification(
     pid: u32,
     notification: Notification,
     lead_bytes: &mut LeadBytes,
+    shared: &SessionShared,
     events: &EventSlot,
     hwnd_raw: usize,
     message: u32,
@@ -321,7 +323,13 @@ fn handle_notification(
                 found.hook_type_flags,
                 found.text
             );
-            push_event(events, hwnd_raw, message, HookEvent::FoundHook(found));
+            let generation = shared.search_generation.load(Ordering::Acquire);
+            push_event(
+                events,
+                hwnd_raw,
+                message,
+                HookEvent::FoundHook { found, generation },
+            );
         }
         Notification::Info {
             warning,

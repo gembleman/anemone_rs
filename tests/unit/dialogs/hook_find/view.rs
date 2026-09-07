@@ -123,3 +123,46 @@ fn new_streams_are_appended_in_arrival_order() {
     );
     assert_eq!(stream_label(&streams[1]), "EmbedSiglus [2:0:0]");
 }
+
+#[test]
+fn indexed_streams_are_bounded() {
+    let mut streams = Vec::new();
+    let mut indices = std::collections::HashMap::new();
+    for address in 0..MAX_STREAMS as u64 {
+        let text = HookText {
+            source: HookSource {
+                address,
+                context: 0,
+                subcontext: 0,
+            },
+            hook_name: "test".into(),
+            text: "x".into(),
+            full_string: false,
+        };
+        assert!(update_stream_indexed(&mut streams, &mut indices, text).is_some());
+    }
+    assert!(
+        update_stream_indexed(
+            &mut streams,
+            &mut indices,
+            HookText {
+                source: HookSource {
+                    address: MAX_STREAMS as u64,
+                    context: 0,
+                    subcontext: 0,
+                },
+                hook_name: "overflow".into(),
+                text: "x".into(),
+                full_string: false,
+            },
+        )
+        .is_none()
+    );
+    assert_eq!(streams.len(), MAX_STREAMS);
+}
+
+#[test]
+fn append_fit_accounts_for_history_separator() {
+    assert!(append_fits(MAX_HISTORY_CHARS - 3, "x"));
+    assert!(!append_fits(MAX_HISTORY_CHARS - 2, "x"));
+}

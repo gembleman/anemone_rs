@@ -3,8 +3,10 @@
 //! `HookFindDialog`가 들고 있는 스트림 이력·후보 목록의 저장 형태와, 목록
 //! control에 항목을 넣거나 텍스트를 읽고 쓰는 저수준 Win32 호출을 모은다.
 
+use std::collections::HashMap;
 use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::UI::Controls::{EM_SCROLLCARET, EM_SETSEL};
+
+use windows_sys::Win32::UI::Controls::{EM_REPLACESEL, EM_SCROLLCARET, EM_SETSEL};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetDlgItem, GetWindowTextLengthW, GetWindowTextW, LB_ADDSTRING, LB_DELETESTRING, LB_GETCURSEL,
     LB_INSERTSTRING, LB_SETCURSEL, SendMessageW, SetWindowTextW,
@@ -20,6 +22,9 @@ pub(super) struct StreamView {
     pub(super) history: String,
 }
 
+pub(super) const MAX_STREAMS: usize = 256;
+pub(super) const MAX_HISTORY_CHARS: usize = 16_000;
+
 /// [`update_stream`] 뒤에 목록 control에 해야 할 일.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StreamLabel {
@@ -34,6 +39,7 @@ pub(super) enum StreamLabel {
 #[derive(Debug, Default)]
 pub(super) struct SavedView {
     pub(super) streams: Vec<StreamView>,
+    pub(super) stream_indices: HashMap<HookSource, usize>,
     pub(super) candidates: Vec<FoundHook>,
     pub(super) installed_candidate: Option<u64>,
     pub(super) installed_manual: Option<u64>,
@@ -66,19 +72,39 @@ pub(super) fn candidate_label(found: &FoundHook) -> String {
 }
 
 /// 새 문장을 스트림 이력에 적고, 목록 control에 반영할 것이 있는지 돌려준다.
+#[cfg(test)]
 pub(super) fn update_stream(streams: &mut Vec<StreamView>, text: HookText) -> (usize, StreamLabel) {
-    let (index, added) = if let Some(index) = streams
+    let mut indices = streams
         .iter()
-        .position(|stream| stream.source == text.source)
-    {
+        .enumerate()
+        .map(|(index, stream)| (stream.source, index))
+        .collect();
+    update_stream_indexed(streams, &mut indices, text).unwrap_or_else(|| {
+        // 테스트/호출자가 상한에 도달한 경우에도 기존 API의 반환형을
+        // 유지한다. 실제 대화상자 경로는 Option을 검사해 새 스트림을 버린다.
+        (streams.len().saturating_sub(1), StreamLabel::Unchanged)
+    })
+}
+
+pub(super) fn update_stream_indexed(
+    streams: &mut Vec<StreamView>,
+    indices: &mut HashMap<HookSource, usize>,
+    text: HookText,
+) -> Option<(usize, StreamLabel)> {
+    let (index, added) = if let Some(&index) = indices.get(&text.source) {
         (index, false)
     } else {
+        if streams.len() >= MAX_STREAMS {
+            return None;
+        }
         streams.push(StreamView {
             source: text.source,
             hook_name: text.hook_name.clone(),
             history: String::new(),
         });
-        (streams.len() - 1, true)
+        let index = streams.len() - 1;
+        indices.insert(text.source, index);
+        (index, true)
     };
 
     let stream = &mut streams[index];
@@ -91,14 +117,14 @@ pub(super) fn update_stream(streams: &mut Vec<StreamView>, text: HookText) -> (u
         stream.history.push_str("\r\n");
     }
     stream.history.push_str(&text.text.replace('\n', "\r\n"));
-    trim_history(&mut stream.history, 16_000);
+    trim_history(&mut stream.history, MAX_HISTORY_CHARS);
 
     let label = match (added, renamed) {
         (true, _) => StreamLabel::Added,
         (false, true) => StreamLabel::Changed,
         (false, false) => StreamLabel::Unchanged,
     };
-    (index, label)
+    Some((index, label))
 }
 
 pub(super) fn add_list_string(list: HWND, text: &str) {
@@ -162,6 +188,25 @@ pub(super) fn set_log_text(control: HWND, text: &str) {
         let _ = SendMessageW(control, EM_SETSEL, end, end as isize);
         let _ = SendMessageW(control, EM_SCROLLCARET, 0, 0);
     }
+}
+
+/// 이미 표시 중인 이력 뒤에 한 이벤트만 추가한다. 선택 스트림의 전체
+/// 16,000자 이력을 매번 SetWindowTextW로 복사하지 않아 입력/paint 지연을
+/// 줄인다.
+pub(super) fn append_log_text(control: HWND, text: &str) {
+    let mut wide = crate::win32::to_wide(text);
+    unsafe {
+        let _ = SendMessageW(control, EM_SETSEL, 0, -1);
+        let _ = SendMessageW(control, EM_REPLACESEL, 0, wide.as_mut_ptr() as isize);
+        let _ = SendMessageW(control, EM_SCROLLCARET, 0, 0);
+    }
+}
+
+pub(super) fn append_fits(history_chars: usize, text: &str) -> bool {
+    history_chars
+        .saturating_add((history_chars != 0) as usize * 2)
+        .saturating_add(text.chars().count())
+        <= MAX_HISTORY_CHARS
 }
 
 fn one_line_preview(text: &str, max_chars: usize) -> String {

@@ -9,6 +9,17 @@ use super::view::{add_list_string, candidate_label, list_selection, read_control
 use super::{HookFindDialog, PENDING_CANDIDATES, ctrl_id, set_enabled};
 use crate::dialogs::helpers::show_error_message;
 
+pub(super) const MAX_PENDING_CANDIDATES: usize = 512;
+const MAX_CANDIDATES: usize = 512;
+// lunahook의 SearchParam.search_time_ms(30초)가 끝난 뒤 pipe에 남은 결과가
+// 정리될 시간을 둔다. 이 기간에는 새 검색을 보내지 않아 이전 결과가 새
+// 세대로 잘못 붙는 경합을 막는다.
+const SEARCH_IN_FLIGHT_GRACE_MS: u64 = 1_000;
+
+pub(super) fn candidate_generation_matches(active: u64, incoming: u64) -> bool {
+    active == incoming
+}
+
 impl HookFindDialog {
     pub(super) fn install_manual_hook(&mut self) {
         let code = read_control_text(self.hwnd, ctrl_id::MANUAL_CODE);
@@ -49,7 +60,20 @@ impl HookFindDialog {
 
     pub(super) fn drain_candidates(&mut self) {
         let incoming = PENDING_CANDIDATES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
-        for found in incoming {
+        for (generation, found) in incoming {
+            if !candidate_generation_matches(self.search_generation, generation) {
+                continue;
+            }
+            if self.candidates.len() >= MAX_CANDIDATES {
+                break;
+            }
+            if self
+                .candidates
+                .iter()
+                .any(|old| old.hook_address == found.hook_address)
+            {
+                continue;
+            }
             add_list_string(self.candidates_list, &candidate_label(&found));
             self.candidates.push(found);
         }
@@ -74,19 +98,52 @@ impl HookFindDialog {
             self.start_auto_search();
             return;
         }
+        let Some(generation) = self.next_search_generation() else {
+            return;
+        };
         self.clear_candidates();
-        self.send_search(crate::hook::pipe_client::build_text_search_param(&text));
+        self.send_search(
+            crate::hook::pipe_client::build_text_search_param(&text),
+            generation,
+        );
     }
 
     pub(super) fn start_auto_search(&mut self) {
+        let Some(generation) = self.next_search_generation() else {
+            return;
+        };
         self.clear_candidates();
-        self.send_search(crate::hook::pipe_client::build_general_search_param());
+        self.send_search(
+            crate::hook::pipe_client::build_general_search_param(),
+            generation,
+        );
     }
 
-    fn send_search(&self, search: lunahook_rs::protocol::SearchParam) {
+    fn next_search_generation(&mut self) -> Option<u64> {
+        if self
+            .search_in_flight_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+        {
+            tracing::debug!("후크 검색이 진행 중이어서 중복 검색을 무시합니다");
+            return None;
+        }
+        self.search_generation = self.search_generation.wrapping_add(1);
+        // 새 검색이 시작되면 이전 세대의 대기 결과도 즉시 비운다.
+        PENDING_CANDIDATES.with(|slot| slot.borrow_mut().clear());
+        self.search_in_flight_until = Some(
+            std::time::Instant::now()
+                + std::time::Duration::from_millis(30_000 + SEARCH_IN_FLIGHT_GRACE_MS),
+        );
+        Some(self.search_generation)
+    }
+
+    fn send_search(&self, search: lunahook_rs::protocol::SearchParam, generation: u64) {
         if self
             .hook
-            .request(HookRequest::FindHook(Box::new(search)))
+            .request(HookRequest::FindHook {
+                search: Box::new(search),
+                generation,
+            })
             .is_err()
         {
             show_error_message(

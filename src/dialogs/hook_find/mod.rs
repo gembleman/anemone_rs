@@ -13,6 +13,7 @@ mod view;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 use windows_core::{Error, HRESULT};
 use windows_sys::Win32::{
@@ -32,7 +33,7 @@ use crate::hook::process_list::ProcessEntry;
 use crate::hook::text_bridge::{HookSource, HookText};
 use view::{
     SavedView, StreamView, add_list_string, candidate_label, list_selection, read_control_text,
-    set_control_text, set_log_text, stream_label, update_stream,
+    set_control_text, set_log_text, stream_label, update_stream_indexed,
 };
 type Result<T> = windows_core::Result<T>;
 
@@ -83,7 +84,7 @@ const CONNECTING_TEXT: &str = "후킹 중....";
 const DETACHING_TEXT: &str = "후킹 중지 중....";
 
 thread_local! {
-    static PENDING_CANDIDATES: RefCell<Vec<FoundHook>> = const { RefCell::new(Vec::new()) };
+    static PENDING_CANDIDATES: RefCell<Vec<(u64, FoundHook)>> = const { RefCell::new(Vec::new()) };
     static SELECTED_SOURCE: Cell<Option<HookSource>> = const { Cell::new(None) };
     static AUTO_SELECT_HOOK_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
     static INSTALLED_HOOK_CODES: RefCell<HashMap<u64, String>> = RefCell::new(HashMap::new());
@@ -147,14 +148,26 @@ pub(crate) fn observe_text(text: &HookText) {
         SAVED_VIEW.with(|slot| {
             let mut slot = slot.borrow_mut();
             let view = slot.get_or_insert_with(SavedView::default);
-            update_stream(&mut view.streams, text.clone());
+            let _ =
+                update_stream_indexed(&mut view.streams, &mut view.stream_indices, text.clone());
         });
     }
 }
 
 /// 발견된 후보를 적립하고, 창이 열려 있으면 즉시 표시한다.
-pub(crate) fn add_candidate(found: FoundHook) {
-    PENDING_CANDIDATES.with(|slot| slot.borrow_mut().push(found));
+pub(crate) fn add_candidate(generation: u64, found: FoundHook) {
+    PENDING_CANDIDATES.with(|slot| {
+        let mut pending = slot.borrow_mut();
+        // 같은 주소의 중복 결과와 무제한 결과 누적을 막는다.
+        if pending
+            .iter()
+            .any(|(_, old)| old.hook_address == found.hook_address)
+            || pending.len() >= search::MAX_PENDING_CANDIDATES
+        {
+            return;
+        }
+        pending.push((generation, found));
+    });
     DialogHost::<HookFindDialog>::with_state_mut(HookFindDialog::drain_candidates);
 }
 
@@ -171,6 +184,7 @@ pub struct HookFindDialog {
     candidates_list: HWND,
     candidate_install_btn: HWND,
     streams: Vec<StreamView>,
+    stream_indices: HashMap<HookSource, usize>,
     candidates: Vec<FoundHook>,
     targets: Vec<ProcessEntry>,
     hook: Rc<HookWorker>,
@@ -179,6 +193,8 @@ pub struct HookFindDialog {
     target_label: Option<String>,
     actions: AppActionSender,
     merge_window_ms: u32,
+    search_generation: u64,
+    search_in_flight_until: Option<Instant>,
 }
 
 pub(crate) struct HookFindInit {
@@ -218,6 +234,7 @@ impl HostedDialog for HookFindDialog {
             candidates_list: dlg_item(hwnd, ctrl_id::CANDIDATES as i32)?,
             candidate_install_btn: dlg_item(hwnd, ctrl_id::BTN_CANDIDATE_INSTALL as i32)?,
             streams: saved.streams,
+            stream_indices: saved.stream_indices,
             candidates: saved.candidates,
             targets: Vec::new(),
             hook: init.hook,
@@ -226,6 +243,8 @@ impl HostedDialog for HookFindDialog {
             target_label: init.target_label,
             actions: init.actions,
             merge_window_ms: init.merge_window_ms,
+            search_generation: 0,
+            search_in_flight_until: None,
         };
         set_control_text(
             hwnd,
@@ -290,6 +309,7 @@ impl HostedDialog for HookFindDialog {
         let saved = SavedView {
             streams: std::mem::take(&mut self.streams),
             candidates: std::mem::take(&mut self.candidates),
+            stream_indices: std::mem::take(&mut self.stream_indices),
             installed_candidate: self.installed_candidate,
             installed_manual: self.installed_manual,
             manual_code: read_control_text(self.hwnd, ctrl_id::MANUAL_CODE),

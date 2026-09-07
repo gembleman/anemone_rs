@@ -12,6 +12,8 @@ use super::{App, state::AppAction, state::DialogKind, state::Effect};
 use crate::dialogs::models::SettingsDraft;
 use crate::window;
 
+const ACTION_BATCH_SIZE: usize = 32;
+
 /// 다이얼로그가 App의 소유 상태를 직접 공유하지 않고 action을 전달하는 UI-thread 채널.
 #[derive(Clone)]
 pub(crate) struct AppActionSender {
@@ -38,13 +40,14 @@ impl AppActionSender {
 
     pub(crate) fn preview_settings(&self, draft: SettingsDraft) {
         let mut queue = self.queue.borrow_mut();
+        let notify = !matches!(queue.back(), Some(AppAction::PreviewSettings(_)));
         if let Some(AppAction::PreviewSettings(pending)) = queue.back_mut() {
             *pending = draft;
         } else {
             queue.push_back(AppAction::PreviewSettings(draft));
         }
         drop(queue);
-        if unsafe { PostMessageW(self.hwnd, WM_APP_ACTION, 0, 0) } == 0 {
+        if notify && unsafe { PostMessageW(self.hwnd, WM_APP_ACTION, 0, 0) } == 0 {
             tracing::error!("AppAction 알림을 게시하지 못했습니다");
         }
     }
@@ -103,13 +106,36 @@ impl App {
     }
 
     pub(super) fn process_actions(&mut self) {
-        loop {
+        for _ in 0..ACTION_BATCH_SIZE {
             let action = { self.action_queue.borrow_mut().pop_front() };
             let Some(action) = action else {
                 break;
             };
+            // 슬라이더를 끌 때 같은 message turn에 쌓인 preview는 마지막
+            // 스냅숏만 적용한다. 중간 스냅숏마다 전체 paint를 하지 않는다.
+            let action = if let AppAction::PreviewSettings(mut draft) = action {
+                loop {
+                    let next = { self.action_queue.borrow_mut().pop_front() };
+                    match next {
+                        Some(AppAction::PreviewSettings(next_draft)) => draft = next_draft,
+                        Some(other) => {
+                            self.action_queue.borrow_mut().push_front(other);
+                            break;
+                        }
+                        None => break,
+                    }
+                }
+                AppAction::PreviewSettings(draft)
+            } else {
+                action
+            };
             let effects = self.model.update(action);
             self.run_effects(effects);
+        }
+        if !self.action_queue.borrow().is_empty()
+            && unsafe { PostMessageW(self.hwnd, WM_APP_ACTION, 0, 0) } == 0
+        {
+            tracing::error!("남은 AppAction 알림을 게시하지 못했습니다");
         }
     }
 

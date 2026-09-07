@@ -217,7 +217,8 @@ impl FileTransProgressDialog {
     }
 
     fn drain_progress_events(&mut self) {
-        let events = self.task.drain_events();
+        const EVENT_BUDGET: usize = 128;
+        let events = self.task.drain_events_budgeted(EVENT_BUDGET);
         for event in events {
             self.handle_progress_event(event);
         }

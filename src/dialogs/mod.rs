@@ -8,6 +8,7 @@ pub mod backlog;
 pub mod color;
 pub mod file_dialog;
 pub mod file_trans;
+mod file_trans_preview;
 pub mod file_trans_progress;
 pub mod font;
 pub mod glossary;

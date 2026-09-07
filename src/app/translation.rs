@@ -240,12 +240,6 @@ impl App {
             return;
         }
 
-        if let Err(error) = job.prepare() {
-            tracing::warn!("자동 번역 엔진을 준비할 수 없습니다: {error}");
-            self.capture_without_translation(text);
-            return;
-        }
-
         let original: Arc<str> = Arc::from(text);
 
         // 디스패치에 번역 요청 (워커는 프로세스 전역)

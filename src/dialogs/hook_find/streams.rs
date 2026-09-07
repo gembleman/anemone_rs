@@ -14,8 +14,8 @@ use crate::hook::text_bridge::HookText;
 use crate::menu::{ContextMenu, enabled_flag};
 
 use super::view::{
-    StreamLabel, add_list_string, list_selection, replace_list_string, set_log_text, stream_label,
-    update_stream,
+    StreamLabel, add_list_string, append_fits, append_log_text, list_selection,
+    replace_list_string, set_log_text, stream_label, update_stream_indexed,
 };
 use super::{
     AUTO_SELECT_HOOK_NAME, HookFindDialog, INSTALLED_HOOK_CODES, SELECTED_SOURCE, set_enabled,
@@ -30,7 +30,17 @@ impl HookFindDialog {
     pub(super) fn observe_text(&mut self, text: HookText) {
         // 스트림은 나타난 순서대로 뒤에만 붙는다. 항목 인덱스가
         // `self.streams`의 인덱스와 계속 1:1이라 선택이 어긋나지 않는다.
-        let (index, label) = update_stream(&mut self.streams, text);
+        let source = text.source;
+        let previous_chars = self
+            .stream_indices
+            .get(&source)
+            .and_then(|&index| self.streams.get(index))
+            .map(|stream| stream.history.chars().count());
+        let Some((index, label)) =
+            update_stream_indexed(&mut self.streams, &mut self.stream_indices, text.clone())
+        else {
+            return;
+        };
         let stream = &self.streams[index];
         match label {
             StreamLabel::Added => add_list_string(self.streams_list, &stream_label(stream)),
@@ -40,7 +50,18 @@ impl HookFindDialog {
             StreamLabel::Unchanged => {}
         }
         if SELECTED_SOURCE.with(Cell::get) == Some(stream.source) {
-            set_log_text(self.preview, &stream.history);
+            if let Some(previous_chars) = previous_chars
+                && append_fits(previous_chars, &text.text.replace('\n', "\r\n"))
+            {
+                let mut delta = String::new();
+                if previous_chars != 0 {
+                    delta.push_str("\r\n");
+                }
+                delta.push_str(&text.text.replace('\n', "\r\n"));
+                append_log_text(self.preview, &delta);
+            } else {
+                set_log_text(self.preview, &stream.history);
+            }
         }
     }
 

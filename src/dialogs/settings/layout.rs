@@ -381,7 +381,6 @@ impl SettingsDialog {
             };
             SetScrollInfo(self.hwnd, SB_VERT, &scroll_info, 1);
             let _ = InvalidateRect(self.hwnd, std::ptr::null(), 1);
-            let _ = UpdateWindow(self.hwnd);
         }
     }
 

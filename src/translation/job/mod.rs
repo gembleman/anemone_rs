@@ -223,22 +223,40 @@ impl PreparedJob {
     pub fn from_config_cached(
         config: &TranslationConfig,
     ) -> Result<Arc<PreparedJob>, TranslationConfigError> {
-        let fingerprint = fingerprint::config_fingerprint(config)?;
+        let config_ptr = std::ptr::from_ref(config) as usize;
+        let stamp = fingerprint::config_stamp(config)?;
         // 캐시는 성능 최적화일 뿐이라 poison되어도 치명적이지 않다 — 다른 스레드가
         // 락을 쥔 채 패닉해도 내용물을 그대로 복구해 계속 쓴다. `expect`로 패닉시키면
         // 이후 모든 클립보드 번역이 이 함수 호출마다 패닉하게 된다.
         let mut cache = PREPARED_JOB_CACHE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((_, job)) = cache.iter().find(|(key, _)| *key == fingerprint) {
+        if let Some((_, job)) = cache
+            .iter()
+            .find(|(key, _)| key.config_ptr == config_ptr && key.stamp == stamp)
+        {
+            return Ok(job.clone());
+        }
+        let fingerprint = fingerprint::config_fingerprint(config)?;
+        if let Some((_, job)) = cache.iter().find(|(key, _)| key.fingerprint == fingerprint) {
             return Ok(job.clone());
         }
         // 락을 잡은 채 from_config를 호출한다 (EzTrans 사전이 크면 aho-corasick
         // automaton 빌드에 수십 ms). 현재 호출자가 UI 스레드 하나뿐이라 당장은
-        // 문제가 없지만, 훗날 다른 스레드(예: 파일 번역)에서도 이 함수를 호출하게
-        // 되면 그 스레드가 여기서 오래 대기하게 된다는 점을 유의할 것.
+        // 설정 변경 때만 실행되므로 큰 후처리 사전의 해시/automaton 빌드 비용은
+        // 반복되는 클립보드 요청에 전파되지 않는다.
         let job = Arc::new(Self::from_config(config)?);
-        cache.insert(0, (fingerprint, job.clone()));
+        cache.insert(
+            0,
+            (
+                PreparedJobCacheKey {
+                    config_ptr,
+                    stamp,
+                    fingerprint,
+                },
+                job.clone(),
+            ),
+        );
         cache.truncate(PREPARED_JOB_CACHE_MAX);
         Ok(job)
     }
@@ -301,7 +319,15 @@ impl PreparedJob {
 
 /// 설정 fingerprint → 준비된 작업 전역 캐시. 설정 변경은 드물어 소형이면
 /// 충분하고, 같은 키 재요청 시 사전 clone/automaton 재빌드를 건너뛴다.
-static PREPARED_JOB_CACHE: Mutex<Vec<(u64, Arc<PreparedJob>)>> = Mutex::new(Vec::new());
+#[derive(Clone, Copy)]
+struct PreparedJobCacheKey {
+    config_ptr: usize,
+    stamp: u64,
+    fingerprint: u64,
+}
+
+static PREPARED_JOB_CACHE: Mutex<Vec<(PreparedJobCacheKey, Arc<PreparedJob>)>> =
+    Mutex::new(Vec::new());
 const PREPARED_JOB_CACHE_MAX: usize = 4;
 
 /// 설정의 상대 EzTrans 경로는 프로세스의 현재 작업 폴더가 아니라 실행 파일과
