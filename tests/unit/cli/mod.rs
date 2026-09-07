@@ -68,10 +68,6 @@ fn every_cli_engine_variant_maps_to_the_matching_translation_engine() {
         (super::Engine::DeepL, TranslationEngine::DeepL),
         (super::Engine::Papago, TranslationEngine::Papago),
         (super::Engine::Llm, TranslationEngine::Llm),
-        (
-            super::Engine::MysTranslater,
-            TranslationEngine::MysTranslater,
-        ),
         (super::Engine::Custom, TranslationEngine::Custom),
     ];
     for (cli_engine, expected) in cases {
@@ -146,6 +142,23 @@ fn rejects_extra_arguments_and_invalid_engine() {
 fn accepts_custom_engine() {
     assert!(
         Cli::try_parse_from(["anemone_rs", "translate", "테스트", "--engine", "custom"]).is_ok()
+    );
+}
+
+#[test]
+fn rejects_mys_translater_engine() {
+    assert!(
+        Cli::try_parse_from([
+            "anemone_rs",
+            "translate",
+            "테스트",
+            "--engine",
+            "mys_translater",
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from(["anemone_rs", "list-langs", "--engine", "mys_translater",]).is_err()
     );
 }
 

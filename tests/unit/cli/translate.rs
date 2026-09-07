@@ -76,6 +76,16 @@ fn resolve_engine_reports_a_corrupted_config_engine() {
     assert!(resolve_engine(None, &config).is_err());
 }
 
+#[test]
+fn resolve_engine_rejects_mys_translater_from_config() {
+    let mut config = Config::default();
+    config.translation.engine = "mys_translater".to_string();
+    assert_eq!(
+        resolve_engine(None, &config),
+        Err("MyS Translater는 CLI에서 선택할 수 없습니다.".to_string())
+    );
+}
+
 // ---- resolve_languages ----
 
 #[test]

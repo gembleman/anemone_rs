@@ -2,19 +2,35 @@
 2017년 프로그램 아네모네를 개선하고자 완전히 새롭게 만들었습니다.
 
 ### 다운로드  
-최신버전 v0.1.1  
-[extrans가 필요한 경우](https://github.com/gembleman/anemone_rs/releases/tag/starter_kit)  
-
-[extrans가 필요 없는 경우](https://github.com/gembleman/anemone_rs/releases/tag/v0.1.1)
+최신버전 v0.2.1  
+[다운로드 페이지](https://github.com/gembleman/anemone_rs/releases/tag/v0.2.1)
 
 ## 개선사항
 1. 그래픽 프레임워크를 GDI에서 다이렉트X로 전환. GPU를 쓰는 덕분에 CPU 사용률 저하.
 2. LLM API, 구글, 로컬 LLM 등 번역 API 추가.
 3. 캐시 기능 추가. 과거에 번역했던 문장을 다시 번역할 필요 없음.
-4. 이지트랜스로 번역할 때, 파일 번역 성능 개선. 5배 정도 빨라짐.
-5. 64비트로 전환. 이지트랜스도 32비트 DLL 없이 동작합니다. 32비트 빌드는 더 이상 지원하지 않습니다.
+4. 이지트랜스 번역 성능 개선. 5배 정도 빨라짐.
 
-## 커스텀 API 추가하기 (v0.1.1 기준)
+### 0.2 버전의 개선사항
+5. 완전한 64비트 전환 완료.
+6. 후킹 기능 추가.  
+(BGI, 기리기리Z, 기리기리2, Willplus, Entis GLS / Cotopha, catsystem2 엔진만 테스트.  
+다른 엔진도 지원하나, 실제로 되는지는 모름.)
+7. eztrans64 이름으로 이지트랜스 자체 구현. 별도로 설치할 필요 없음.
+8. MYS translator 이름으로 자체 게임 번역 서비스 추가.
+ 
+## 추후에 개선할 부분
+1. 이지트랜스를 완전히 대체할 수 있는 자체 로컬 번역 엔진 개발.
+2. 후킹 기능 테스트 및 버그 수정. 아직 테스트 안 한 게임이 많음.
+
+## 관련 문의나 버그 제보
+오류나 버그가 생기면 이슈를 열거나,  
+[개인 사이트](https://doujinkorea.com/)에 글 써주시면 됩니다.
+
+## AI 사용 여부
+초기 설계를 제외한 대부분의 코드는 AI가 생성했습니다.
+
+## 커스텀 API 추가하기 (v0.2 기준)
 
 내장 엔진(EzTrans, Google, DeepL, Papago, LLM) 외에 임의의 JSON REST API를 번역 엔진으로 등록할 수 있습니다.
 Ollama, llama.cpp, LM Studio 같은 로컬 LLM 서버를 붙일 때 사용합니다.
@@ -109,30 +125,3 @@ response_path = "/choices/0/message/content"
 ```
 
 `model`에는 LM Studio에 표시된 모델 식별자를 넣습니다.
-
-### 사용법
-
-설정을 저장하고 프로그램을 켜면 설정 창의 번역 엔진에서 `Custom API`를 고를 수 있고,
-그 아래 목록에서 등록한 이름을 선택합니다.
-
-명령줄에서도 쓸 수 있습니다.
-
-```
-anemone_rs.exe translate --engine custom --source ja --target ko "テキスト"
-anemone_rs.exe file-trans --engine custom -i input.txt -o output.txt
-```
-
-## 추후에 개선할 부분
-1. 후킹 기능 추가.
-2. 자체 번역 엔진 탑재.
-3. 추후에 로컬 LLM도 간단하게 선택 가능하도록 설정에 통합하는 게 나을 듯.
-
-## 주의
-윈도우 10에서만 테스트했습니다. 그 이하 버전에서는 작동이 안 될 겁니다.
-
-### 관련 문의나 버그 제보
-오류나 버그가 생기면 이슈를 열거나,  
-[개인 사이트](https://doujinkorea.com/)에 글 써주시면 됩니다.
-
-## AI 사용 여부
-초기 설계를 제외한 대부분의 코드는 AI가 생성했습니다.

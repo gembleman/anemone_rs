@@ -12,7 +12,7 @@ use crate::translation::TranslationEngine;
 
 const AFTER_HELP: &str = r#"인자 없이 실행하면 GUI 모드로 시작합니다.
 
-ENGINE: eztrans | google | deepl | papago | llm | mys_translater | custom
+ENGINE: eztrans | google | deepl | papago | llm | custom
 LANG:   ISO 639-1 (예: ja, ko, en, zh)"#;
 
 #[derive(Parser)]
@@ -58,8 +58,6 @@ pub(super) enum Engine {
     Papago,
     #[value(name = "llm")]
     Llm,
-    #[value(name = "mys_translater")]
-    MysTranslater,
     #[value(name = "custom")]
     Custom,
 }
@@ -72,7 +70,6 @@ impl From<Engine> for TranslationEngine {
             Engine::DeepL => Self::DeepL,
             Engine::Papago => Self::Papago,
             Engine::Llm => Self::Llm,
-            Engine::MysTranslater => Self::MysTranslater,
             Engine::Custom => Self::Custom,
         }
     }

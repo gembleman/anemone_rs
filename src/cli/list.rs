@@ -1,3 +1,5 @@
+use clap::ValueEnum;
+
 use crate::translation::{TranslationEngine, lang_utils};
 
 #[derive(clap::Args)]
@@ -8,17 +10,8 @@ pub(super) struct LanguagesArgs {
 }
 
 pub(super) fn engines() -> Result<(), String> {
-    const ENGINES: &[TranslationEngine] = &[
-        TranslationEngine::EzTrans,
-        TranslationEngine::Google,
-        TranslationEngine::DeepL,
-        TranslationEngine::Papago,
-        TranslationEngine::Llm,
-        TranslationEngine::MysTranslater,
-        TranslationEngine::Custom,
-    ];
-    for e in ENGINES {
-        println!("{}", e.to_str());
+    for engine in super::Engine::value_variants() {
+        println!("{}", TranslationEngine::from(*engine).to_str());
     }
     Ok(())
 }

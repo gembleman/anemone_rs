@@ -88,13 +88,17 @@ pub(super) fn resolve_engine(
     override_value: Option<super::Engine>,
     config: &Config,
 ) -> Result<TranslationEngine, String> {
-    match override_value {
+    let engine = match override_value {
         Some(engine) => Ok(engine.into()),
         None => config
             .translation
             .get_engine()
             .map_err(|error| error.to_string()),
+    }?;
+    if engine.requires_hook_session() {
+        return Err("MyS Translater는 CLI에서 선택할 수 없습니다.".to_string());
     }
+    Ok(engine)
 }
 
 pub(super) fn resolve_languages(
